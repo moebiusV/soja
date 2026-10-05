@@ -83,11 +83,14 @@ soju's SASL support is `PLAIN` (base64 of `\0user\0pass`) and `EXTERNAL`
 
 ### bcrypt `$2a$` vs `$2b$`
 
-`CryptoLib.Bcrypt` emits and verifies only `$2b$`, but Go's bcrypt (which soju
-uses) emits `$2a$`. Add a `$2a$` → `$2b$` prefix rewrite when verifying stored
-soju hashes. This is exact — Go's `$2a$` uses the same (corrected) key schedule
-as `$2b$`, so the hash bytes match. (Alternatively, patch `bracke/cryptolib` to
-accept `$2a$` too.)
+Go's bcrypt (which soju uses) emits `$2a$`; bracke's `CryptoLib.Bcrypt` natively
+emits and verifies `$2b$`. `bracke-cryptolib` is now patched (the
+`bcrypt-prefixes` patch in the ada-on-alpine aport, shipped in
+`ada-toolchain:edge`) so `Verify` also accepts `$2a$` and `$2y$` for passwords
+under 72 bytes, where the three prefixes are byte-identical. soja calls `Verify`
+directly — no shim needed. bcrypt is internal-only (the hash is stored in the DB
+and compared in-process, never on the wire), so this is purely for reading
+existing soju databases.
 
 ## Behavioural requirements (must preserve / encode)
 
@@ -110,7 +113,6 @@ this rule is written explicitly, not assumed. Reference anchors:
 
 - **v1 scope**: webpush, PAM, and PostgreSQL are the heavy items; ship
   SQLite-only + internal auth first (soju's default build), then add the rest.
-- **`$2a$` shim vs upstream patch** for bracke's bcrypt (see above).
 
 [soju]: https://soju.im
 [ada-on-alpine]: https://github.com/moebiusV/ada-on-alpine
