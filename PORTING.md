@@ -12,16 +12,16 @@ same logic, same quirks — including observable bugs.
 | `rate.go` (backoffer)      | `Soja.Backoff`    | — (pure Ada)                     |
 | `irc.go` + `xirc/`         | `Soja.Irc`        | — (pure Ada)                     |
 | `config/config.go`         | `Soja.Config`     | `hbnf` or hand-written (scfg is tiny) |
-| `conn.go` (TLS, buffering) | `Soja.Conn`       | `aws` (GNUTLS) — see TLS below   |
-| `certfp.go`                | `Soja.Certfp`     | `aws` + `bracke-cryptolib`       |
+| `conn.go` (TLS, buffering) | `Soja.Conn`       | `aws` (`AWS.Net.SSL`, OpenSSL 3) |
+| `certfp.go`                | `Soja.Certfp`     | `bracke-cryptolib` (SHA-256)     |
 | `downstream.go`            | `Soja.Downstream` | —                                |
 | `upstream.go`              | `Soja.Upstream`   | —                                |
 | `server.go`                | `Soja.Server`     | — (Ada tasking)                  |
-| `user.go`                  | `Soja.User`       | `libsodium-ada` (scrypt)         |
+| `user.go`                  | `Soja.User`       | `bracke-cryptolib` (SHA-256)     |
 | `service.go`               | `Soja.Service`    | —                                |
-| `database/`                | `Soja.Database`   | `gnatcoll-db` (SQLite + Postgres) |
-| `auth/`                    | `Soja.Auth`       | `libsodium-ada`, `aws` (oauth2)  |
-| `msgstore/`                | `Soja.Msgstore`   | `gnatcoll-db`, `bracke-cryptolib` (sha, BARE) |
+| `database/`                | `Soja.Database`   | `gnatcoll-db` + `bracke-cryptolib` (bcrypt) |
+| `auth/`                    | `Soja.Auth`       | `bracke-cryptolib`, `aws` (oauth2) |
+| `msgstore/`                | `Soja.Msgstore`   | `gnatcoll-db`                    |
 | `fileupload/`              | `Soja.Fileupload` | `aws`                            |
 | `identd/`                  | `Soja.Identd`     | `GNAT.Sockets`                   |
 | `cmd/soju`                 | `soju` (main)     | —                                |
@@ -43,22 +43,51 @@ Map concurrency to Ada tasking:
 
 ## Go dependency → Ada
 
+**No new Ada repos are required for v1.** bcrypt, SHA-256, HMAC, base64, and a
+CSPRNG are all already in `bracke-cryptolib`; TLS is already in `aws`.
+
 | Go module | Use in soju | Ada replacement |
 | --- | --- | --- |
-| `gopkg.in/irc.v4` + `xirc/` | IRC parse/format, caps | `Soja.Irc` (translate `xirc/`) |
+| `crypto/tls` (stdlib) | every TLS socket | `AWS.Net.SSL` (OpenSSL 3, in `aws`) |
+| `golang.org/x/crypto/bcrypt` | `internal` auth password hash | `CryptoLib.Bcrypt` (`bracke-cryptolib`) — see `$2a$` note |
+| `crypto/sha256` (stdlib) | cert fingerprints (certfp) | `CryptoLib.Hashes` |
+| `encoding/base64` (stdlib) | SASL PLAIN payload | `CryptoLib.Base64` |
+| `crypto/rand` (stdlib) | bcrypt salt, SASL nonces | `CryptoLib.OS_Random` |
+| `github.com/emersion/go-sasl` | SASL PLAIN / EXTERNAL | hand-written (both trivial) |
+| `github.com/pires/go-proxyproto` | PROXY protocol | hand-written (small) |
 | `modernc.org/sqlite` / `go-sqlite3` | SQLite store | `gnatcoll-db` (SQLite) |
 | `github.com/lib/pq` | Postgres store | `gnatcoll-db` (Postgres) |
-| `golang.org/x/crypto/bcrypt` | password hash | **binding needed** (libxcrypt) or port |
-| `golang.org/x/crypto/scrypt` | internal auth | `libsodium-ada` (`crypto_pwhash_scryptsalsa208sha256`) |
-| `github.com/emersion/go-sasl` | SASL PLAIN/EXTERNAL/SCRAM | `libsodium-ada` (HMAC) + hand-written |
-| `github.com/pires/go-proxyproto` | PROXY protocol | hand-written (small) |
-| `github.com/SherClockHolmes/webpush-go` | push | `libsodium-ada` (X25519 + AES-GCM) + `aws` + JWT |
-| `github.com/prometheus/client_golang` | metrics | `aws` + hand-written text format |
-| `nhooyr.io/websocket` | WebSocket transport | hand-written RFC6455 + `aws`/`GNAT.Sockets` |
+| `gopkg.in/irc.v4` + `xirc/` | IRC parse/format, caps | `Soja.Irc` (translate `xirc/`) |
 | `git.sr.ht/~emersion/go-scfg` | config | `hbnf` or hand-written |
+| `nhooyr.io/websocket` | WebSocket transport | hand-written RFC6455 (SHA-1 + base64) |
 | `git.sr.ht/~sircmpwn/go-bare` | msgstore fs encoding | hand-written (small) |
-| `github.com/msteinert/pam/v2` | PAM auth | libpam binding, or drop |
-| `golang.org/x/time` | rate limiting | hand-written token bucket |
+| `github.com/prometheus/client_golang` | metrics | `aws` + hand-written text format |
+| `github.com/SherClockHolmes/webpush-go` | push | `bracke-cryptolib` + `aws` — defer |
+| `github.com/msteinert/pam/v2` | PAM auth | libpam binding — defer |
+| `golang.org/x/crypto/ssh/terminal` | sojudb password entry | termios — minor |
+
+### TLS: OpenSSL via `aws`, not GNUTLS/libressl
+
+The ada-on-alpine `aws` package is built `SOCKET=openssl` against **OpenSSL 3**
+(`libssl3` / `libcrypto3`, present in the image), so its `AWS.Net.SSL` layer is
+the TLS we get for free — for upstream (client) and downstream (server) IRC
+sockets alike. LibreSSL/libTLS and GNUTLS are not in the image and would each
+mean a new binding + aport; OpenSSL 3 is already there and already wired in, so
+it is the ockham choice. Verify `AWS.Net.SSL` handles raw sockets (not just
+HTTP) during the `conn.go` translation.
+
+### SASL is PLAIN + EXTERNAL only
+
+soju's SASL support is `PLAIN` (base64 of `\0user\0pass`) and `EXTERNAL`
+(client certificate). There is no SCRAM, so no HMAC/PBKDF2 is needed.
+
+### bcrypt `$2a$` vs `$2b$`
+
+`CryptoLib.Bcrypt` emits and verifies only `$2b$`, but Go's bcrypt (which soju
+uses) emits `$2a$`. Add a `$2a$` → `$2b$` prefix rewrite when verifying stored
+soju hashes. This is exact — Go's `$2a$` uses the same (corrected) key schedule
+as `$2b$`, so the hash bytes match. (Alternatively, patch `bracke/cryptolib` to
+accept `$2a$` too.)
 
 ## Behavioural requirements (must preserve / encode)
 
@@ -77,14 +106,11 @@ this rule is written explicitly, not assumed. Reference anchors:
 `upstream/soju/upstream.go` (KICK ~1255) and `downstream.go` (JOIN ~1867);
 `rate.go` is the backoff primitive.
 
-## Open decisions (flag, do not silently pick)
+## Open decisions
 
-- **TLS**: soju uses Go `crypto/tls` everywhere; Ada has no stdlib TLS. Likely
-  path is `aws`'s GNUTLS socket layer (`AWS.Net.SSL`). Confirm the
-  ada-on-alpine `aws` package ships GNUTLS, or add a libssl/gnutls binding.
-- **bcrypt**: not in libsodium. Decide port vs. bind to libxcrypt.
-- **v1 scope**: webpush, PAM, and PostgreSQL are the heavy items; likely ship
+- **v1 scope**: webpush, PAM, and PostgreSQL are the heavy items; ship
   SQLite-only + internal auth first (soju's default build), then add the rest.
+- **`$2a$` shim vs upstream patch** for bracke's bcrypt (see above).
 
 [soju]: https://soju.im
 [ada-on-alpine]: https://github.com/moebiusV/ada-on-alpine
