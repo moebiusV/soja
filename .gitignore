@@ -1,0 +1,14 @@
+# Build artefacts (GPR outputs; see soja.gpr)
+obj/
+lib/
+bin/
+
+# GNAT artefacts
+*.o
+*.ali
+*.a
+*.so
+*.so.*
+
+# Editor / OS
+*~
