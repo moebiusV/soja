@@ -30,6 +30,10 @@ package Soja.Irc.Numerics is
    ERR_SASLTOOLONG       : constant String := "905";
    ERR_SASLABORTED       : constant String := "906";
 
+   --  soju-specific numerics (upstream/soju/xirc/xirc.go), not in irc.v4.
+   ERR_UNKNOWNERROR      : constant String := "400";
+   ERR_INVALIDCAPCMD     : constant String := "410";
+
    --  Replies
    RPL_WELCOME         : constant String := "001";
    RPL_YOURHOST        : constant String := "002";

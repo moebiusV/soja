@@ -20,6 +20,7 @@ tests/tls_check
 tests/db_check
 tests/sqlite_check
 tests/cm_map_check
+tests/downstream_check
 
 # Test build artefacts
 tests/obj-s/
