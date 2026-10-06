@@ -19,7 +19,7 @@ same logic, same quirks — including observable bugs.
 | `server.go`                | `Soja.Server`     | — (Ada tasking)                  |
 | `user.go`                  | `Soja.User`       | `bracke-cryptolib` (SHA-256)     |
 | `service.go`               | `Soja.Service`    | —                                |
-| `database/`                | `Soja.Database`   | `gnatcoll-db` (SQLite) + `bracke-cryptolib` (bcrypt) |
+| `database/`                | `Soja.Database` + `.Sqlite` | `gnatcoll-db` (SQLite) + `bracke-cryptolib` (bcrypt) |
 | `auth/`                    | `Soja.Auth`       | `bracke-cryptolib`, `aws` (oauth2) |
 | `msgstore/`                | `Soja.Msgstore`   | `gnatcoll-db`                    |
 | `fileupload/`              | `Soja.Fileupload` | `aws`                            |
@@ -91,6 +91,34 @@ prefixes are byte-identical. soja calls `Verify` directly — no shim. soja writ
 `$2b$` only (the default is unchanged); the other prefixes are accepted, never
 produced. bcrypt is internal-only — the hash is stored in the DB and compared
 in-process, never on the wire.
+
+### SQLite binding: `gnatcoll-db` (gnatcoll-sqlite), and its FTS5 gap
+
+The sqlite3 binding is **gnatcoll-sqlite**, shipped in the `gnatcoll-db` aport
+and already installed in the image.  It has two layers: `GNATCOLL.SQL.Sqlite`
+(the high-level driver over `gnatcoll-sql`'s `Execute`/`Fetch`) and
+`GNATCOLL.SQL.Sqlite.Gnade` (a thin binding to the raw sqlite3 C API, with the
+sqlite3 amalgamation bundled into the library).  No new binding or aport is
+needed.
+
+Two deviations from Go's `modernc.org/sqlite` store, both forced by
+gnatcoll-sqlite:
+
+- **No multi-statement `Execute`.**  gnatcoll prepares one statement per
+  `Execute`; Go's driver runs the whole schema/migration blob.  The schema and
+  the migrations are therefore split into individual statements (same on-disk
+  result).
+- **FTS5 is missing.**  The bundled amalgamation is built without FTS5
+  (`CREATE VIRTUAL TABLE ... USING fts5` fails with "no such module: fts5").
+  soju's `MessageFTS` table + triggers serve only the message store
+  (`StoreMessages`/`ListMessages` search), so they are deferred along with
+  those methods.  When the message store is ported, FTS5 needs either a rebuilt
+  `gnatcoll-db` (`-DSQLITE_ENABLE_FTS5`) or a thin aport against Alpine's
+  FTS5-enabled `libsqlite3`.
+
+The message-store methods (`GetMessageLastID`, `StoreMessages`,
+`ListMessageLastPerTarget`, `ListMessages`) are deferred until `Soja.Irc`
+(`irc.go`) is ported, since they operate on `irc.Message`.
 
 ## IRC wire-format quirks (irc.v4 vs RFC 2812 / IRCv3)
 

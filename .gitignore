@@ -18,6 +18,7 @@ tests/net_check
 tests/server_check
 tests/tls_check
 tests/db_check
+tests/sqlite_check
 
 # Test build artefacts
 tests/obj-s/

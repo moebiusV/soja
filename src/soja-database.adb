@@ -12,9 +12,6 @@ package body Soja.Database is
 
    Default_Cost : constant := 10;   -- bcrypt.DefaultCost
 
-   --  The "zero" time, Go's time.Time{}: means "never"/"unset".
-   Null_Time : constant Time := Ada.Calendar.Time_Of (1901, 1, 1, 0.0);
-
    function To_Bytes (S : String) return Stream_Element_Array is
       R : Stream_Element_Array (1 .. S'Length);
    begin

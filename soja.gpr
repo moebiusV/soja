@@ -8,6 +8,7 @@
 
 with "aws.gpr";
 with "cryptolib.gpr";
+with "gnatcoll_sqlite.gpr";
 
 library project Soja is
 

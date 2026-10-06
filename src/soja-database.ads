@@ -7,6 +7,7 @@ pragma Ada_2022;
 
 with Ada.Calendar;
 with Ada.Containers.Indefinite_Vectors;
+with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded;
 
 package Soja.Database is
@@ -165,5 +166,96 @@ package Soja.Database is
       Text       : Unbounded_String;
       Take_Last  : Boolean := False;
    end record;
+
+   --  Result containers (Go's []T slices).
+   package User_Lists is new Ada.Containers.Vectors (Positive, User);
+   package Network_Lists is new Ada.Containers.Vectors (Positive, Network);
+   package Channel_Lists is new Ada.Containers.Vectors (Positive, Channel);
+   package Delivery_Receipt_Lists is
+     new Ada.Containers.Vectors (Positive, Delivery_Receipt);
+   package WebPush_Config_Lists is
+     new Ada.Containers.Vectors (Positive, WebPush_Config);
+   package WebPush_Subscription_Lists is
+     new Ada.Containers.Vectors (Positive, WebPush_Subscription);
+   package Username_Lists is
+     new Ada.Containers.Indefinite_Vectors (Positive, Unbounded_String);
+
+   Not_Found : exception;   --  a lookup returned no row (sql.ErrNoRows)
+
+   type Read_Receipt_Access is access all Read_Receipt;
+
+   type Database_Stats is record
+      Users    : Long_Long_Integer := 0;
+      Networks : Long_Long_Integer := 0;
+      Channels : Long_Long_Integer := 0;
+   end record;
+
+   --  The Database interface (database/database.go).  The implementation is
+   --  SQLite-only (PostgreSQL is dropped); the message-store methods
+   --  (StoreMessages, ListMessages, ListMessageLastPerTarget,
+   --  GetMessageLastID) are deferred until Soja.Irc.Message is ported.
+   type Database_Interface is abstract tagged null record;
+   type Database_Access is access all Database_Interface'Class;
+
+   procedure Close (DB : in out Database_Interface) is abstract;
+
+   function Stats (DB : in out Database_Interface) return Database_Stats
+     is abstract;
+
+   function List_Users (DB : in out Database_Interface)
+      return User_Lists.Vector is abstract;
+   function Get_User (DB : in out Database_Interface; Username : String)
+      return User is abstract;
+   procedure Store_User (DB : in out Database_Interface; U : in out User)
+     is abstract;
+   procedure Delete_User (DB : in out Database_Interface;
+      ID : Long_Long_Integer) is abstract;
+   function List_Inactive_Usernames
+     (DB : in out Database_Interface; Limit : Time)
+      return Username_Lists.Vector is abstract;
+
+   function List_Networks (DB : in out Database_Interface;
+      User_ID : Long_Long_Integer) return Network_Lists.Vector is abstract;
+   procedure Store_Network (DB : in out Database_Interface;
+      User_ID : Long_Long_Integer; Net : in out Network) is abstract;
+   procedure Delete_Network (DB : in out Database_Interface;
+      ID : Long_Long_Integer) is abstract;
+   function List_Channels (DB : in out Database_Interface;
+      Network_ID : Long_Long_Integer) return Channel_Lists.Vector is abstract;
+   procedure Store_Channel (DB : in out Database_Interface;
+      Network_ID : Long_Long_Integer; Ch : in out Channel) is abstract;
+   procedure Delete_Channel (DB : in out Database_Interface;
+      ID : Long_Long_Integer) is abstract;
+
+   function List_Delivery_Receipts (DB : in out Database_Interface;
+      Network_ID : Long_Long_Integer)
+      return Delivery_Receipt_Lists.Vector is abstract;
+   procedure Store_Client_Delivery_Receipts (DB : in out Database_Interface;
+      Network_ID : Long_Long_Integer; Client : String;
+      Receipts : in out Delivery_Receipt_Lists.Vector) is abstract;
+
+   function Get_Read_Receipt (DB : in out Database_Interface;
+      Network_ID : Long_Long_Integer; Name : String)
+      return Read_Receipt_Access is abstract;
+   procedure Store_Read_Receipt (DB : in out Database_Interface;
+      Network_ID : Long_Long_Integer; Receipt : in out Read_Receipt)
+     is abstract;
+
+   function List_WebPush_Configs (DB : in out Database_Interface)
+      return WebPush_Config_Lists.Vector is abstract;
+   procedure Store_WebPush_Config (DB : in out Database_Interface;
+      Config : in out WebPush_Config) is abstract;
+
+   function List_WebPush_Subscriptions (DB : in out Database_Interface;
+      User_ID : Long_Long_Integer; Network_ID : Long_Long_Integer)
+      return WebPush_Subscription_Lists.Vector is abstract;
+   procedure Store_WebPush_Subscription (DB : in out Database_Interface;
+      User_ID : Long_Long_Integer; Network_ID : Long_Long_Integer;
+      Sub : in out WebPush_Subscription) is abstract;
+   procedure Delete_WebPush_Subscription (DB : in out Database_Interface;
+      ID : Long_Long_Integer) is abstract;
+
+   --  Go's time.Time{} zero value: means "never"/"unset".
+   Null_Time : constant Time := Ada.Calendar.Time_Of (1901, 1, 1, 0.0);
 
 end Soja.Database;
