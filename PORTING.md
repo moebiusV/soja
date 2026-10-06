@@ -13,7 +13,7 @@ same logic, same quirks — including observable bugs.
 | `irc.go` + `xirc/`         | `Soja.Irc`        | — (pure Ada)                     |
 | `config/config.go`         | `Soja.Config`     | `hbnf` (scfg grammar)             |
 | `conn.go` (TLS, buffering) | `Soja.Conn`       | `aws` (`AWS.Net.SSL`, OpenSSL 3) |
-| `certfp.go`                | `Soja.Certfp`     | `bracke-cryptolib` (SHA-256)     |
+| `certfp.go` (generateCertFP) | `Soja.Certfp`   | **deferred** — X.509 cert creation (see below) |
 | `downstream.go`            | `Soja.Downstream` | —                                |
 | `upstream.go`              | `Soja.Upstream`   | —                                |
 | `server.go`                | `Soja.Server`     | — (Ada tasking)                  |
@@ -190,6 +190,18 @@ this rule is written explicitly, not assumed. Reference anchors:
   SQLite-only + internal auth first (soju's default build), then add the rest.
   Decided (2026-10-06): **PostgreSQL is dropped** — the database layer is
   SQLite-only (`gnatcoll-db` SQLite); `database/postgres.go` is not ported.
+
+- **`certfp.go` (`generateCertFP`) is deferred**: it generates a self-signed
+  X.509 client certificate for SASL EXTERNAL.  bracke-cryptolib only decodes
+  X.509 (no certificate creation), so this needs either a thin aport against
+  OpenSSL's X509 API (AWS already ships a partial `ssl-thin__openssl` binding)
+  or a pure-Ada X.509 encoder.  Not on the connect-to-IRC critical path.
+
+- **Ordering**: `downstream.go`, `upstream.go`, `user.go` and `service.go`
+  form one mutually-dependent core (the `network` type in `user.go` holds both
+  an `upstreamConn` and downstream connections), so they are ported together,
+  not one file at a time.  `msgstore` (message history) and `certfp.go` are
+  supporting, and are not needed for a basic connect-to-IRC build.
 
 [soju]: https://soju.im
 [ada-on-alpine]: https://github.com/moebiusV/ada-on-alpine
