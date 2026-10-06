@@ -19,7 +19,7 @@ same logic, same quirks — including observable bugs.
 | `server.go`                | `Soja.Server`     | — (Ada tasking)                  |
 | `user.go`                  | `Soja.User`       | `bracke-cryptolib` (SHA-256)     |
 | `service.go`               | `Soja.Service`    | —                                |
-| `database/`                | `Soja.Database`   | `gnatcoll-db` + `bracke-cryptolib` (bcrypt) |
+| `database/`                | `Soja.Database`   | `gnatcoll-db` (SQLite) + `bracke-cryptolib` (bcrypt) |
 | `auth/`                    | `Soja.Auth`       | `bracke-cryptolib`, `aws` (oauth2) |
 | `msgstore/`                | `Soja.Msgstore`   | `gnatcoll-db`                    |
 | `fileupload/`              | `Soja.Fileupload` | `aws`                            |
@@ -160,6 +160,8 @@ this rule is written explicitly, not assumed. Reference anchors:
 
 - **v1 scope**: webpush, PAM, and PostgreSQL are the heavy items; ship
   SQLite-only + internal auth first (soju's default build), then add the rest.
+  Decided (2026-10-06): **PostgreSQL is dropped** — the database layer is
+  SQLite-only (`gnatcoll-db` SQLite); `database/postgres.go` is not ported.
 
 [soju]: https://soju.im
 [ada-on-alpine]: https://github.com/moebiusV/ada-on-alpine

@@ -7,6 +7,7 @@
 --  soju's cmd/ split.
 
 with "aws.gpr";
+with "cryptolib.gpr";
 
 library project Soja is
 
