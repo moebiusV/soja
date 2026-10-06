@@ -21,6 +21,7 @@ tests/db_check
 tests/sqlite_check
 tests/cm_map_check
 tests/downstream_check
+tests/core_check
 
 # Test build artefacts
 tests/obj-s/
