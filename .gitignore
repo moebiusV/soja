@@ -13,6 +13,7 @@ bin/
 # Test executables
 tests/irc_check
 tests/scfg_check
+tests/conn_check
 
 # Test build artefacts
 tests/obj-s/
