@@ -12,6 +12,11 @@ bin/
 
 # Test executables
 tests/irc_check
+tests/scfg_check
+
+# Test build artefacts
+tests/obj-s/
+tests/dbg/
 
 # Editor / OS
 *~
