@@ -6,6 +6,8 @@
 --  sojudb) are separate main projects that import this library, mirroring
 --  soju's cmd/ split.
 
+with "aws.gpr";
+
 library project Soja is
 
    for Languages use ("Ada");

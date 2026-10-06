@@ -1,9 +1,9 @@
 --  Soja.Server — server.go's Server skeleton: the accept loop, the per-
---  connection handler tasks, and shutdown.  The user/downstream/database/
---  auth spine and metrics are ported separately, so this is the bare shape.
+--  connection handler tasks, TLS, and shutdown.  The user/downstream/
+--  database/auth spine and metrics are ported separately.
 pragma Ada_2022;
 
-with GNAT.Sockets;
+with AWS.Net;
 with Soja.Conn;
 with Soja.Logging;
 
@@ -37,8 +37,14 @@ package Soja.Server is
    procedure Set_Handler (S : in out Server; H : Handler);
 
    --  The accept loop: blocks the caller, spawning one task per connection
-   --  that runs the handler.  Returns when Shutdown is requested.
-   procedure Serve (S : in out Server; Listener : GNAT.Sockets.Socket_Type);
+   --  that runs the handler.  When TLS_Cert/TLS_Key are non-empty, each
+   --  accepted socket is wrapped in TLS.  Returns when Shutdown is requested
+   --  (which closes the listener).
+   procedure Serve
+     (S        : in out Server;
+      Listener : not null AWS.Net.Socket_Access;
+      TLS_Cert : String := "";
+      TLS_Key  : String := "");
 
    procedure Shutdown (S : in out Server);
 
@@ -52,9 +58,10 @@ private
    end Shutdown_Flag;
 
    type Server is tagged limited record
-      Logger : Soja.Logging.Logger_Access;
-      H      : Handler;
-      Flag   : Shutdown_Flag;
+      Logger   : Soja.Logging.Logger_Access;
+      H        : Handler;
+      Listener : AWS.Net.Socket_Access;
+      Flag     : Shutdown_Flag;
    end record;
 
 end Soja.Server;

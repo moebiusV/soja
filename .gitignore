@@ -16,6 +16,7 @@ tests/scfg_check
 tests/conn_check
 tests/net_check
 tests/server_check
+tests/tls_check
 
 # Test build artefacts
 tests/obj-s/

@@ -3,54 +3,58 @@ pragma Ada_2022;
 with Ada.Text_IO;
 with Ada.Streams;
 with Ada.Strings.Unbounded;
-with GNAT.Sockets;
+with AWS.Net;
+with AWS.Net.Std;
 with Soja.Irc.Messages;
 with Soja.Conn.Net;
 
 procedure Net_Check is
    use Ada.Strings.Unbounded;
-   use GNAT.Sockets;
    use Soja.Irc.Messages;
-   use Soja.Conn.Net;
 
-   Left, Right : Socket_Type;
+   Listener : AWS.Net.Socket_Access := AWS.Net.Socket (False);
+   Client   : AWS.Net.Socket_Access := AWS.Net.Socket (False);
+   Server   : AWS.Net.Socket_Access := AWS.Net.Socket (False);
+   Port     : Positive;
 
-   procedure Send_Str (S : Socket_Type; Text : String) is
-      Buf  : Ada.Streams.Stream_Element_Array (1 .. Text'Length);
-      Last : Ada.Streams.Stream_Element_Offset;
+   procedure Send_Str (S : AWS.Net.Socket_Access; Text : String) is
+      Buf : Ada.Streams.Stream_Element_Array (1 .. Text'Length);
    begin
       for I in Text'Range loop
          Buf (Ada.Streams.Stream_Element_Offset (I - Text'First + 1)) :=
            Ada.Streams.Stream_Element (Character'Pos (Text (I)));
       end loop;
-      Send_Socket (S, Buf, Last);
+      S.all.Send (Buf);
    end Send_Str;
 
-   function Recv_Str (S : Socket_Type) return String is
-      Buf  : Ada.Streams.Stream_Element_Array (1 .. 1024);
-      Last : Ada.Streams.Stream_Element_Offset;
-      R    : Unbounded_String;
+   function Recv_Str (S : AWS.Net.Socket_Access) return String is
+      Chunk : constant Ada.Streams.Stream_Element_Array := S.all.Receive;
+      R     : Unbounded_String;
    begin
-      Receive_Socket (S, Buf, Last);
-      for I in Buf'First .. Last loop
-         Append (R, Character'Val (Ada.Streams.Stream_Element'Pos (Buf (I))));
+      for I in Chunk'Range loop
+         Append (R, Character'Val (Ada.Streams.Stream_Element'Pos (Chunk (I))));
       end loop;
       return To_String (R);
    end Recv_Str;
 
 begin
-   Create_Socket_Pair (Left, Right);
+   AWS.Net.Std.Socket_Type (Listener.all).Bind (0, "127.0.0.1");
+   AWS.Net.Std.Socket_Type (Listener.all).Listen (5);
+   Port := AWS.Net.Std.Socket_Type (Listener.all).Get_Port;
+
+   AWS.Net.Std.Socket_Type (Client.all).Connect ("127.0.0.1", Port);
+   AWS.Net.Accept_Socket (Listener.all, Server.all);
 
    declare
-      C : Net_IRC_Conn := Create (Left);
+      C : Soja.Conn.Net.Net_IRC_Conn := Soja.Conn.Net.Create (Client);
    begin
-      --  Read: two lines in one receive must be framed correctly.
-      Send_Str (Right, "PING :hi" & ASCII.CR & ASCII.LF
+      --  Two messages in one receive must frame correctly.
+      Send_Str (Server, "PING :hi" & ASCII.CR & ASCII.LF
                & "PRIVMSG #chan :hello world" & ASCII.CR & ASCII.LF);
 
       declare
-         M1 : Message := Read_Message (C);
-         M2 : Message := Read_Message (C);
+         M1 : Message := Soja.Conn.Net.Read_Message (C);
+         M2 : Message := Soja.Conn.Net.Read_Message (C);
       begin
          if To_String (M1.Command) /= "PING" then
             raise Program_Error with "message 1 not PING";
@@ -67,9 +71,9 @@ begin
       end;
 
       --  Write: a message is serialized with CRLF.
-      Write_Message (C, Parse_Message ("NOTICE AUTH :*** hello"));
+      Soja.Conn.Net.Write_Message (C, Parse_Message ("NOTICE AUTH :*** hello"));
       declare
-         Got : constant String := Recv_Str (Right);
+         Got : constant String := Recv_Str (Server);
       begin
          if Got /= "NOTICE AUTH :*** hello" & ASCII.CR & ASCII.LF then
             raise Program_Error with "write round-trip wrong: [" & Got & "]";
@@ -77,6 +81,7 @@ begin
       end;
    end;
 
-   Close_Socket (Right);
+   AWS.Net.Free (Server);
+   AWS.Net.Free (Listener);
    Ada.Text_IO.Put_Line ("ALL PASS");
 end Net_Check;

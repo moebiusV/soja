@@ -2,26 +2,25 @@ pragma Ada_2022;
 
 with Ada.IO_Exceptions;
 with Ada.Streams;
-with GNAT.Sockets;
+with AWS.Net;
 with Soja.Irc.Hbnf;
 
 package body Soja.Conn.Net is
 
    use Ada.Strings.Unbounded;
-   use GNAT.Sockets;
    use Soja.Irc.Messages;
    use type Ada.Streams.Stream_Element_Offset;
 
    LF : constant Character := ASCII.LF;
    CR : constant Character := ASCII.CR;
 
-   function Create (Socket : GNAT.Sockets.Socket_Type) return Net_IRC_Conn is
+   function Create (Sock : not null AWS.Net.Socket_Access) return Net_IRC_Conn is
    begin
       return Net_IRC_Conn'
-        (IRC_Conn with Sock => Socket, Buffer => Null_Unbounded_String);
+        (IRC_Conn with Sock => Sock, Buffer => Null_Unbounded_String);
    end Create;
 
-   function Socket (C : Net_IRC_Conn) return GNAT.Sockets.Socket_Type is
+   function Socket (C : Net_IRC_Conn) return AWS.Net.Socket_Access is
      (C.Sock);
 
    procedure Append_Chunk
@@ -57,7 +56,7 @@ package body Soja.Conn.Net is
             end;
          end if;
 
-         Receive_Socket (C.Sock, Chunk, Last);
+         C.Sock.Receive (Chunk, Last);
          if Last < Chunk'First then
             --  Peer closed the connection.
             if Length (C.Buffer) = 0 then
@@ -93,7 +92,7 @@ package body Soja.Conn.Net is
             Slice : Ada.Streams.Stream_Element_Array renames
               Out_Buf (Out_Buf'First + Sent .. Out_Buf'Last);
          begin
-            Send_Socket (C.Sock, Slice, Last);
+            C.Sock.Send (Slice, Last);
             exit when Last < Slice'First;
             Sent := Sent + (Last - Slice'First + 1);
          end;
@@ -102,12 +101,13 @@ package body Soja.Conn.Net is
 
    overriding procedure Close (C : in out Net_IRC_Conn) is
    begin
-      GNAT.Sockets.Close_Socket (C.Sock);
+      C.Sock.Shutdown (AWS.Net.Shut_Read_Write);
    end Close;
 
    overriding function Remote_Addr (C : Net_IRC_Conn) return String is
+      Port : constant Positive := C.Sock.Peer_Port;
    begin
-      return GNAT.Sockets.Image (GNAT.Sockets.Get_Peer_Name (C.Sock));
+      return C.Sock.Peer_Addr & ":" & Positive'Image (Port);
    end Remote_Addr;
 
 end Soja.Conn.Net;
