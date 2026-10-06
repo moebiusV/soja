@@ -258,6 +258,8 @@ package body Soja.Irc.Messages is
       end if;
 
       Msg.Command := Param_Vectors.First_Element (Msg.Params);
+      --  Quirk: irc.v4 stores the command upper-cased (strings.ToUpper);
+      --  RFC 2812 only requires commands be case-insensitive.  See PORTING.md.
       Msg.Command := To_Unbounded_String
         (Ada.Characters.Handling.To_Upper (To_String (Msg.Command)));
       Param_Vectors.Delete_First (Msg.Params);
