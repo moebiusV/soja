@@ -14,10 +14,10 @@ same logic, same quirks — including observable bugs.
 | `config/config.go`         | `Soja.Config`     | `hbnf` (scfg grammar)             |
 | `conn.go` (TLS, buffering) | `Soja.Conn`       | `aws` (`AWS.Net.SSL`, OpenSSL 3) |
 | `certfp.go` (generateCertFP) | `Soja.Certfp`   | **deferred** — X.509 cert creation (see below) |
-| `downstream.go`            | `Soja.Downstream` | —                                |
-| `upstream.go`              | `Soja.Upstream`   | —                                |
+| `downstream.go`            | `Soja.Downstream` (leaves) + `Soja.Core` (downstreamConn) | — |
+| `upstream.go`              | `Soja.Upstream` (leaves) + `Soja.Core` (upstreamConn) | — |
 | `server.go`                | `Soja.Server`     | — (Ada tasking)                  |
-| `user.go`                  | `Soja.User`       | `bracke-cryptolib` (SHA-256)     |
+| `user.go`                  | `Soja.User` (deliveredStore) + `Soja.Core` (user/network) | `bracke-cryptolib` (SHA-256) |
 | `service.go`               | `Soja.Service`    | —                                |
 | `database/`                | `Soja.Database` + `.Sqlite` | `gnatcoll-db` (SQLite) + `bracke-cryptolib` (bcrypt) |
 | `auth/`                    | `Soja.Auth`       | `bracke-cryptolib`, `aws` (oauth2) |
@@ -200,8 +200,12 @@ this rule is written explicitly, not assumed. Reference anchors:
 - **Ordering**: `downstream.go`, `upstream.go`, `user.go` and `service.go`
   form one mutually-dependent core (the `network` type in `user.go` holds both
   an `upstreamConn` and downstream connections), so they are ported together,
-  not one file at a time.  `msgstore` (message history) and `certfp.go` are
-  supporting, and are not needed for a basic connect-to-IRC build.
+  not one file at a time.  The connection structs (`user`, `network`,
+  `downstreamConn`, `upstreamConn`, `upstreamChannel`) and the event types are
+  consolidated in **`Soja.Core`** (Go's single `package soju`), since Ada
+  packages cannot be mutually `with`ed the way Go files share one package.
+  `msgstore` (message history) and `certfp.go` are supporting, and are not
+  needed for a basic connect-to-IRC build.
 
 [soju]: https://soju.im
 [ada-on-alpine]: https://github.com/moebiusV/ada-on-alpine

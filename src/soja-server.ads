@@ -30,6 +30,7 @@ package Soja.Server is
    type Handler is access procedure (IC : not null Soja.Conn.IRC_Conn_Access);
 
    type Server is tagged limited private;
+   type Server_Access is access all Server;
 
    procedure Initialize
      (S : in out Server; Logger : Soja.Logging.Logger_Access := null);

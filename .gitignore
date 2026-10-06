@@ -23,6 +23,7 @@ tests/cm_map_check
 tests/downstream_check
 tests/core_check
 tests/members_check
+tests/core_struct_check
 
 # Test build artefacts
 tests/obj-s/
