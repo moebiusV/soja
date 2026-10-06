@@ -1,12 +1,16 @@
 pragma Ada_2022;
 
 with Ada.Command_Line;
+with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 with Soja.Irc.Cap_Registry;
 with Soja.Irc.Case_Mapping;
+with Soja.Irc.Messages;
 
 procedure Irc_Check is
+   use Ada.Strings.Unbounded;
    use Soja.Irc.Case_Mapping;
+   use Soja.Irc.Messages;
 
    Fails : Natural := 0;
 
@@ -74,6 +78,54 @@ begin
    Soja.Irc.Cap_Registry.Delete (R, "sasl");
    Check_Bool ("deleted",
                Soja.Irc.Cap_Registry.Is_Available (R, "sasl"), False);
+
+   --  Tag value escape / unescape (parser.go).
+   Check ("encode tag value", Encode_Tag_Value ("a b;c"), "a\sb\:c");
+   Check ("decode tag value", Parse_Tag_Value ("a\sb\:c"), "a b;c");
+   Check ("encode backslash", Encode_Tag_Value ("x\y"), "x\\y");
+   Check ("decode backslash", Parse_Tag_Value ("x\\y"), "x\y");
+
+   --  Prefix.
+   Check ("prefix full", Image (Parse_Prefix ("nick!user@host")),
+          "nick!user@host");
+   Check ("prefix nick only", Image (Parse_Prefix ("nick")), "nick");
+   Check ("prefix nick@host", Image (Parse_Prefix ("nick@host")),
+          "nick@host");
+
+   --  Message parse / serialize round-trips.
+   Check ("msg privmsg",
+          Image (Parse_Message ("PRIVMSG #chan :hello world")),
+          "PRIVMSG #chan :hello world");
+   --  irc.v4 loses the " :" marker for a plain-word trailing param, so
+   --  ":nick!... :hi" re-emits as "#chan hi" (single space).  Documented in
+   --  PORTING.md ("Trailing/middle param loss").
+   Check ("msg prefix",
+          Image (Parse_Message (":nick!user@host PRIVMSG #chan :hi")),
+          ":nick!user@host PRIVMSG #chan hi");
+   Check ("msg tags",
+          Image (Parse_Message ("@tag1=val1;tag2 PRIVMSG #chan")),
+          "@tag1=val1;tag2 PRIVMSG #chan");
+   Check ("msg numeric",
+          Image (Parse_Message ("332 nick #chan :No topic here")),
+          "332 nick #chan :No topic here");
+   Check ("msg no params", Image (Parse_Message ("PING")), "PING");
+   Check ("msg empty trailing", Image (Parse_Message ("PING :")), "PING :");
+   Check ("msg trailing starts colon",
+          Image (Parse_Message ("NOTICE AUTH :*** hello")),
+          "NOTICE AUTH :*** hello");
+
+   --  Message component access.
+   declare
+      M : constant Message :=
+        Parse_Message (":nick!user@host PRIVMSG #chan :hello");
+   begin
+      Check ("component command", To_String (M.Command), "PRIVMSG");
+      Check ("component prefix", Image (M.Prefix.all), "nick!user@host");
+      Check ("component param0", Param (M, 0), "#chan");
+      Check ("component param1", Param (M, 1), "hello");
+      Check ("component param oob", Param (M, 2), "");
+      Check ("component trailing", Trailing (M), "hello");
+   end;
 
    if Fails = 0 then
       Ada.Text_IO.Put_Line ("ALL PASS");

@@ -92,6 +92,30 @@ prefixes are byte-identical. soja calls `Verify` directly — no shim. soja writ
 produced. bcrypt is internal-only — the hash is stored in the DB and compared
 in-process, never on the wire.
 
+## IRC wire-format quirks (irc.v4 vs RFC 2812 / IRCv3)
+
+soja reproduces `gopkg.in/irc.v4`'s parser/serializer exactly, including where
+it deviates from RFC 2812 §2.3 and the IRCv3 specs. These are behaviour to
+preserve, not bugs to fix:
+
+- **Command uppercasing** — `ParseMessage` stores the command upper-cased
+  (`strings.ToUpper`); RFC 2812 only requires commands be case-insensitive.
+- **Trailing/middle param loss** — `String()` emits `" :"` only when the
+  trailing param is empty, contains a space, or starts with `:`. A plain-word
+  trailing re-emits as a middle param (single space), so the round-trip is not
+  byte-exact: `:nick!u@h PRIVMSG #c :hi` → params `["#c","hi"]` →
+  `:nick!u@h PRIVMSG #c hi`.
+- **Space collapsing** — `ParseMessage` splits middle params with
+  `strings.FieldsFunc` on spaces, so runs of spaces collapse; RFC 2812 mandates
+  a single SPACE between params.
+- **Trailing split** — the trailing param is found by the first `" :"`
+  substring, not the RFC's `[ ":" trailing ]` production.
+- **Tag order** — Go's `Tags.String()` iterates a map (random order). soja
+  emits tags sorted by name instead (deterministic; wire-equivalent).
+- **Errors** — four parse errors (zero-length, missing-data-after-tags,
+  missing-data-after-prefix, missing-command). Go panics on some malformed
+  inputs; soja raises `Parse_Error`.
+
 ## Behavioural requirements (must preserve / encode)
 
 ### Upstream channel (re)join — user-specified (2026-10-05)
