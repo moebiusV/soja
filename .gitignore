@@ -14,6 +14,8 @@ bin/
 tests/irc_check
 tests/scfg_check
 tests/conn_check
+tests/net_check
+tests/server_check
 
 # Test build artefacts
 tests/obj-s/
