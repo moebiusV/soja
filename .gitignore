@@ -10,5 +10,8 @@ bin/
 *.so
 *.so.*
 
+# Test executables
+tests/irc_check
+
 # Editor / OS
 *~

@@ -84,13 +84,13 @@ soju's SASL support is `PLAIN` (base64 of `\0user\0pass`) and `EXTERNAL`
 ### bcrypt `$2a$` vs `$2b$`
 
 Go's bcrypt (which soju uses) emits `$2a$`; bracke's `CryptoLib.Bcrypt` natively
-emits and verifies `$2b$`. `bracke-cryptolib` is now patched (the
-`bcrypt-prefixes` patch in the ada-on-alpine aport, shipped in
-`ada-toolchain:edge`) so `Verify` also accepts `$2a$` and `$2y$` for passwords
-under 72 bytes, where the three prefixes are byte-identical. soja calls `Verify`
-directly — no shim needed. bcrypt is internal-only (the hash is stored in the DB
-and compared in-process, never on the wire), so this is purely for reading
-existing soju databases.
+emits and verifies `$2b$`. `bracke-cryptolib` is patched (the `bcrypt-prefixes`
+patch in the ada-on-alpine aport, shipped in `ada-toolchain:edge`) so `Verify`
+also accepts `$2a$` and `$2y$` for passwords under 72 bytes, where the three
+prefixes are byte-identical. soja calls `Verify` directly — no shim. soja writes
+`$2b$` only (the default is unchanged); the other prefixes are accepted, never
+produced. bcrypt is internal-only — the hash is stored in the DB and compared
+in-process, never on the wire.
 
 ## Behavioural requirements (must preserve / encode)
 
