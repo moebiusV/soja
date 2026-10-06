@@ -5,6 +5,7 @@ with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 with Soja.Irc.Cap_Registry;
 with Soja.Irc.Case_Mapping;
+with Soja.Irc.Hbnf;
 with Soja.Irc.Messages;
 
 procedure Irc_Check is
@@ -125,6 +126,26 @@ begin
       Check ("component param1", Param (M, 1), "hello");
       Check ("component param oob", Param (M, 2), "");
       Check ("component trailing", Trailing (M), "hello");
+   end;
+
+   --  The hbnf-generated parser (walked) must match the hand-written
+   --  reference byte-for-byte on the golden lines.
+   declare
+      procedure Check_Hbnf (L : String) is
+      begin
+         Check ("hbnf " & L,
+                Image (Soja.Irc.Hbnf.Parse (L)),
+                Image (Parse_Message (L)));
+      end Check_Hbnf;
+   begin
+      Check_Hbnf ("PRIVMSG #chan :hello world");
+      Check_Hbnf (":nick!user@host PRIVMSG #chan :hi");
+      Check_Hbnf ("@tag1=val1;tag2 PRIVMSG #chan");
+      Check_Hbnf ("332 nick #chan :No topic here");
+      Check_Hbnf ("PING");
+      Check_Hbnf ("PING :");
+      Check_Hbnf ("NOTICE AUTH :*** hello");
+      Check_Hbnf ("@a=b;c :nick!u@h PRIVMSG #chan :hello world");
    end;
 
    if Fails = 0 then

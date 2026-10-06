@@ -11,7 +11,7 @@ same logic, same quirks — including observable bugs.
 | -------------------------- | ----------------- | -------------------------------- |
 | `rate.go` (backoffer)      | `Soja.Backoff`    | — (pure Ada)                     |
 | `irc.go` + `xirc/`         | `Soja.Irc`        | — (pure Ada)                     |
-| `config/config.go`         | `Soja.Config`     | `hbnf` or hand-written (scfg is tiny) |
+| `config/config.go`         | `Soja.Config`     | `hbnf` (scfg grammar)             |
 | `conn.go` (TLS, buffering) | `Soja.Conn`       | `aws` (`AWS.Net.SSL`, OpenSSL 3) |
 | `certfp.go`                | `Soja.Certfp`     | `bracke-cryptolib` (SHA-256)     |
 | `downstream.go`            | `Soja.Downstream` | —                                |
@@ -57,8 +57,8 @@ CSPRNG are all already in `bracke-cryptolib`; TLS is already in `aws`.
 | `github.com/pires/go-proxyproto` | PROXY protocol | hand-written (small) |
 | `modernc.org/sqlite` / `go-sqlite3` | SQLite store | `gnatcoll-db` (SQLite) |
 | `github.com/lib/pq` | Postgres store | `gnatcoll-db` (Postgres) |
-| `gopkg.in/irc.v4` + `xirc/` | IRC parse/format, caps | `Soja.Irc` (translate `xirc/`) |
-| `git.sr.ht/~emersion/go-scfg` | config | `hbnf` or hand-written |
+| `gopkg.in/irc.v4` + `xirc/` | IRC parse/format, caps | `Soja.Irc` (message grammar via `hbnf`, caps/casemapping hand-written) |
+| `git.sr.ht/~emersion/go-scfg` | config | `hbnf` (scfg grammar) |
 | `nhooyr.io/websocket` | WebSocket transport | hand-written RFC6455 (SHA-1 + base64) |
 | `git.sr.ht/~sircmpwn/go-bare` | msgstore fs encoding | hand-written (small) |
 | `github.com/prometheus/client_golang` | metrics | `aws` + hand-written text format |
@@ -115,6 +115,29 @@ preserve, not bugs to fix:
 - **Errors** — four parse errors (zero-length, missing-data-after-tags,
   missing-data-after-prefix, missing-command). Go panics on some malformed
   inputs; soja raises `Parse_Error`.
+
+### IRC message grammar (`hbnf`, jet-free)
+
+The wire message is expressed as an `hbnf` grammar at
+`grammars/irc-message.hbnf`; `soja-irc-hbnf.{ads,adb}` walks the generated
+parse tree into a `Message`. It is jet-free: the lexer's character classes are
+disjoint because each word's class is keyed on its **first byte** — `@`
+(message tags), `:` (prefix or trailing start), or anything else (command /
+middle param) — so the maximal-munch scanner emits exactly one token per word.
+
+The grammar captures only the structure; the walker applies irc.v4's semantics:
+it strips the `@`/`:` markers, splits tags on `;`/`=` and the prefix on
+`!`/`@`, upper-cases the command, and re-assembles the trailing param from its
+words and their space separators (so interior spaces in the trailing survive).
+
+Deviations (both from keying a word's class on its first byte):
+
+- **`@`- or `:`-leading command / middle param** — irc.v4 treats `@` and `:`
+  as markers only at fixed positions, so `PRIVMSG @foo` keeps `@foo` as a
+  middle param; the grammar lexes `@foo` as a tags word and rejects it. Rare,
+  and arguably malformed.
+- **Space only, not whitespace** — faithful, not a deviation: irc.v4 splits on
+  `' '` (and `" :"`), never on tabs, so the grammar's `gap` is `1*%x20`.
 
 ## Behavioural requirements (must preserve / encode)
 
