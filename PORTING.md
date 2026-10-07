@@ -197,13 +197,12 @@ this rule is written explicitly, not assumed. Reference anchors:
   OpenSSL's X509 API (AWS already ships a partial `ssl-thin__openssl` binding)
   or a pure-Ada X.509 encoder.  Not on the connect-to-IRC critical path.
 
-- **`connectToUpstream` is deferred**: dialing the upstream socket (TCP, then
-  TLS via `AWS.Net.SSL` in client mode), the SASL EXTERNAL certificate/key
-  handling, the certfp (`sha-256`/`sha-512`) peer verification, and
-  `newNetIRCConn` (wrapping the socket as an `ircConn`) all live here.  This
-  *is* on the connect-to-IRC critical path.  The surrounding loops are ported
-  and call it through a stub (`Connect_To_Upstream`) that reports a temporary
-  failure, keeping `network.run`'s backoff shape.
+- **`connectToUpstream` is ported** for `ircs` (TLS via `AWS.Net.SSL` in client
+  mode, with `sha-256`/`sha-512` certfp verification of the leaf certificate)
+  and `irc+insecure` (plain TCP).  Still deferred within it: **SASL EXTERNAL**
+  (client certificate/key — AWS takes cert *file paths*, so the DB blobs need
+  a temp-file shim or a low-level `ssl-thin__openssl` binding) and the
+  `irc+unix`/`unix` schemes (Unix-domain sockets, needs `GNAT.Sockets`).
 
 - **Ordering**: `downstream.go`, `upstream.go`, `user.go` and `service.go`
   form one mutually-dependent core (the `network` type in `user.go` holds both

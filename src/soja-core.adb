@@ -1,16 +1,20 @@
 pragma Ada_2022;
 
+with Ada.Streams;
 with Ada.Strings.Fixed;
 with AWS.Default;
 with AWS.Net;
 with AWS.Net.SSL;
+with AWS.Net.SSL.Certificate;
 with AWS.Net.Std;
+with CryptoLib.Hashes;
 with Soja.Backoff;
 with Soja.Conn.Net;
 
 package body Soja.Core is
 
    use Soja.Logging;
+   use type AWS.Net.Socket_Access;
 
    ------------
    -- Signal --
@@ -316,11 +320,75 @@ package body Soja.Core is
       return Sock;
    end Dial_TCP;
 
-   --  A TLS connection to the URL's host:port (ircs scheme), verifying the
-   --  peer against the system CA bundle.  certfp and SASL EXTERNAL are
-   --  deferred (they need Check_Certificate => False plus manual fingerprint
-   --  or a client certificate).
-   function Dial_TLS (U : Soja.Database.Network_URL)
+   --  Hex-encode one byte (lowercase, two characters).
+   Hex_Digits : constant String := "0123456789abcdef";
+
+   function Hex (B : Ada.Streams.Stream_Element) return String is
+      V : constant Natural := Natural (B);
+   begin
+      return Hex_Digits (V / 16 + 1) & Hex_Digits (V mod 16 + 1);
+   end Hex;
+
+   function Hex_SHA256 (D : CryptoLib.Hashes.SHA256_Digest) return String is
+      R : String (1 .. 64);
+      J : Positive := 1;
+   begin
+      for I in D'Range loop
+         R (J .. J + 1) := Hex (D (I));
+         J := J + 2;
+      end loop;
+      return R;
+   end Hex_SHA256;
+
+   function Hex_SHA512 (D : CryptoLib.Hashes.SHA512_Digest) return String is
+      R : String (1 .. 128);
+      J : Positive := 1;
+   begin
+      for I in D'Range loop
+         R (J .. J + 1) := Hex (D (I));
+         J := J + 2;
+      end loop;
+      return R;
+   end Hex_SHA512;
+
+   --  certfp: verify the peer's certificate fingerprint against the configured
+   --  "sha-256:..." / "sha-512:..." value.  Only the leaf certificate is
+   --  checked (Go iterates the whole presented chain).
+   function Verify_CertFP
+     (Sock : in out AWS.Net.SSL.Socket_Type; CertFP : String) return Boolean
+   is
+      Col : constant Natural := Ada.Strings.Fixed.Index (CertFP, ":");
+   begin
+      if Col = 0 then
+         return False;
+      end if;
+
+      AWS.Net.SSL.Do_Handshake (Sock);
+
+      declare
+         Cert      : constant AWS.Net.SSL.Certificate.Object :=
+           AWS.Net.SSL.Certificate.Get (Sock);
+         DER_Bytes : constant Ada.Streams.Stream_Element_Array :=
+           AWS.Net.SSL.Certificate.DER (Cert);
+         Algo      : constant String := CertFP (CertFP'First .. Col - 1);
+         Want      : constant String := CertFP (Col + 1 .. CertFP'Last);
+      begin
+         if Algo = "sha-256" then
+            return Hex_SHA256 (CryptoLib.Hashes.SHA256 (DER_Bytes)) = Want;
+         elsif Algo = "sha-512" then
+            return Hex_SHA512 (CryptoLib.Hashes.SHA512 (DER_Bytes)) = Want;
+         else
+            return False;
+         end if;
+      end;
+   end Verify_CertFP;
+
+   --  A TLS connection to the URL's host:port (ircs scheme).  With a certfp
+   --  configured, peer verification is done manually against the fingerprint;
+   --  otherwise the peer is verified against the system CA bundle.  SASL
+   --  EXTERNAL (client certificate) is deferred.
+   function Dial_TLS
+     (Net : not null Network_Access; U : Soja.Database.Network_URL)
       return AWS.Net.Socket_Access
    is
       Host     : Unbounded_String;
@@ -328,23 +396,45 @@ package body Soja.Core is
       Plain    : AWS.Net.Socket_Access := AWS.Net.Socket (False);
       Config   : AWS.Net.SSL.Config := AWS.Net.SSL.Null_Config;
       SSL_Sock : AWS.Net.SSL.Socket_Type;
+      CertFP   : constant String := To_String (Net.Network_Record.Cert_FP);
    begin
       Split_Host_Port (To_String (U.Host), 6697, Host, Port);
       AWS.Net.Std.Socket_Type (Plain.all).Connect (To_String (Host), Port);
-      AWS.Net.SSL.Initialize
-        (Config,
-         Security_Mode       => AWS.Net.SSL.TLS_Client,
-         Check_Certificate   => True,
-         Trusted_CA_Filename => AWS.Default.Trusted_CA);
-      SSL_Sock := AWS.Net.SSL.Secure_Client
-        (Plain.all, Config, To_String (Host));
-      AWS.Net.Free (Plain);
+
+      if CertFP /= "" then
+         AWS.Net.SSL.Initialize
+           (Config,
+            Security_Mode     => AWS.Net.SSL.TLS_Client,
+            Check_Certificate => False);
+         SSL_Sock := AWS.Net.SSL.Secure_Client
+           (Plain.all, Config, To_String (Host));
+         AWS.Net.Free (Plain);
+         if not Verify_CertFP (SSL_Sock, CertFP) then
+            Net.Logger.Print
+              ("TLS certificate fingerprint doesn't match for "
+               & To_String (Host));
+            --  One-way close_notify, matching Go's tls.Client teardown on
+            --  error (a bidirectional shutdown would wait for the peer).
+            SSL_Sock.Shutdown (AWS.Net.Shut_Write);
+            return null;
+         end if;
+      else
+         AWS.Net.SSL.Initialize
+           (Config,
+            Security_Mode       => AWS.Net.SSL.TLS_Client,
+            Check_Certificate   => True,
+            Trusted_CA_Filename => AWS.Default.Trusted_CA);
+         SSL_Sock := AWS.Net.SSL.Secure_Client
+           (Plain.all, Config, To_String (Host));
+         AWS.Net.Free (Plain);
+      end if;
+
       return new AWS.Net.SSL.Socket_Type'(SSL_Sock);
    end Dial_TLS;
 
    --  connectToUpstream: dial the upstream, wrap it as an ircConn + conn, and
-   --  build the upstreamConn.  SASL EXTERNAL certificate handling, certfp
-   --  verification, and the unix-socket schemes are deferred.
+   --  build the upstreamConn.  SASL EXTERNAL certificate handling and the
+   --  unix-socket schemes are deferred.
    function Connect_To_Upstream (Net : not null Network_Access)
       return Upstream_Conn_Access
    is
@@ -358,7 +448,7 @@ package body Soja.Core is
       IC     : Soja.Conn.IRC_Conn_Access;
    begin
       if Scheme = "ircs" then
-         Sock := Dial_TLS (U);
+         Sock := Dial_TLS (Net, U);
       elsif Scheme = "irc+insecure" then
          Sock := Dial_TCP (U, 6667);
       elsif Scheme = "irc+unix" or else Scheme = "unix" then
@@ -368,6 +458,10 @@ package body Soja.Core is
       else
          Net.Logger.Print
            ("failed to dial: unknown scheme " & Scheme);
+         return null;
+      end if;
+
+      if Sock = null then
          return null;
       end if;
 
