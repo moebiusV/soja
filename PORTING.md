@@ -213,6 +213,13 @@ this rule is written explicitly, not assumed. Reference anchors:
   post-registration dispatch (JOIN/PRIVMSG/NICK/QUIT/MODE/numerics, caps,
   batches, SASL).
 
+- **The downstream registration is ported**: `dc.handleMessageUnregistered`
+  (NICK/USER/PASS/AWAY), `dc.register` (internal auth — `GetUser` +
+  `CheckPassword`), and `dc.runUntilRegistered`.  Deferred: CAP/SASL/BOUNCER
+  negotiation, `dc.welcome` (the welcome burst + network joins + backlog), the
+  ~1700-line `dc.handleMessageRegistered` command dispatch, and the
+  `server.Handle` glue (`getOrCreateUser`, the connected/disconnected events).
+
 - **Ordering**: `downstream.go`, `upstream.go`, `user.go` and `service.go`
   form one mutually-dependent core (the `network` type in `user.go` holds both
   an `upstreamConn` and downstream connections), so they are ported together,

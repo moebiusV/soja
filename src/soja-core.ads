@@ -6,6 +6,7 @@ with Ada.Strings.Unbounded;
 
 with Soja.Conn;
 with Soja.Database;
+with Soja.Downstream;
 with Soja.Irc.Cap_Registry;
 with Soja.Irc.Case_Mapping;
 with Soja.Irc.Case_Mapping_Maps;
@@ -393,5 +394,38 @@ package Soja.Core is
    --  network.runConn: connect, register, then forward upstream messages to
    --  the user's event queue until the connection closes.
    function Run_Conn (Net : not null Network_Access) return Run_Conn_Error;
+
+   -------------------------
+   --  Downstream connection --
+   -------------------------
+
+   --  A client-facing reply (an ircError to send) or success.
+   type Irc_Error_Result (Failed : Boolean := False) is record
+      case Failed is
+         when True  => Err : Soja.Downstream.Irc_Error;
+         when False => null;
+      end case;
+   end record;
+
+   --  dc.SendMessage: drop message tags when the message-tags cap is disabled,
+   --  then send.
+   procedure Send_Message (DC : not null Downstream_Conn_Access;
+      M : Soja.Irc.Messages.Message);
+
+   --  dc.handleMessageUnregistered: NICK/USER/PASS/AWAY.  CAP, AUTHENTICATE
+   --  and BOUNCER are deferred (treated as unknown commands).
+   function Handle_Message_Unregistered
+     (DC : not null Downstream_Conn_Access; M : Soja.Irc.Messages.Message)
+      return Irc_Error_Result;
+
+   --  dc.register: authenticate via PASS against the DB (soju's internal
+   --  auth) and mark the connection registered.
+   function Register_Downstream (DC : not null Downstream_Conn_Access)
+      return Irc_Error_Result;
+
+   --  dc.runUntilRegistered: read NICK/USER/PASS, replying to client errors,
+   --  until the connection registers.  Returns False when the peer closed.
+   function Run_Until_Registered_Downstream
+     (DC : not null Downstream_Conn_Access) return Boolean;
 
 end Soja.Core;
