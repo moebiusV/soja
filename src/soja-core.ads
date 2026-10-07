@@ -310,9 +310,44 @@ package Soja.Core is
       IC  : not null Soja.Conn.IRC_Conn_Access;
       ID  : Long_Long_Integer) return Downstream_Conn_Access;
 
-   --  user.run(): drain the event queue, dispatching each event to its handler.
-   --  The per-event handlers are stubs (they call the not-yet-ported connection
-   --  methods); network loading and network.run() task spawning are deferred.
+   --  user.run(): load the user's networks from the DB, spawn each network's
+   --  run task, then drain the event queue, dispatching each event to its
+   --  handler.  The per-event handlers are stubs (they call the not-yet-ported
+   --  connection methods).
    procedure Run (U : not null User_Access);
+
+   --  The network-loading half of run(): list the user's networks (sorted by
+   --  ID), build each network (with its channels), append it, and spawn its
+   --  run task.  Factored out so it can be exercised without running the
+   --  blocking event-dispatch loop.
+   procedure Load_Networks (U : not null User_Access);
+
+   --------------------------
+   --  network/user helpers --
+   --------------------------
+
+   --  Callback for For_Each_Downstream.
+   type Downstream_Process is access procedure (DC : Downstream_Conn_Access);
+
+   --  forEachDownstream: apply Process to each downstream conn on Net's user.
+   procedure For_Each_Downstream
+     (Net : not null Network_Access; Process : not null Downstream_Process);
+
+   function Is_Stopped (Net : not null Network_Access) return Boolean;
+
+   procedure Stop_Network (Net : not null Network_Access);
+
+   function Equal_Casemap (Net : not null Network_Access; A, B : String)
+      return Boolean;
+
+   function Get_Network (U : not null User_Access; Name : String)
+      return Network_Access;
+
+   function Get_Network_By_ID (U : not null User_Access; ID : Long_Long_Integer)
+      return Network_Access;
+
+   --  network.run(): the reconnect loop, spawned as a task by user.run().  It
+   --  retries (via backoff) until the network is stopped.
+   procedure Run_Network (Net : not null Network_Access);
 
 end Soja.Core;

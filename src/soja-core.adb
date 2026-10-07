@@ -1,5 +1,7 @@
 pragma Ada_2022;
 
+with Soja.Backoff;
+
 package body Soja.Core is
 
    use Soja.Logging;
@@ -199,10 +201,180 @@ package body Soja.Core is
       end if;
    end Handle;
 
+   -----------------------------
+   --  network/user helpers  --
+   -----------------------------
+
+   procedure For_Each_Downstream
+     (Net : not null Network_Access; Process : not null Downstream_Process) is
+   begin
+      for DC of Net.User.Downstream_Conns loop
+         if DC.Network = Net then
+            Process (DC);
+         end if;
+      end loop;
+   end For_Each_Downstream;
+
+   function Is_Stopped (Net : not null Network_Access) return Boolean is
+   begin
+      return Net.Stopped.Is_Set;
+   end Is_Stopped;
+
+   procedure Stop_Network (Net : not null Network_Access) is
+   begin
+      if not Is_Stopped (Net) then
+         Net.Stopped.Set;
+      end if;
+   end Stop_Network;
+
+   function Equal_Casemap (Net : not null Network_Access; A, B : String)
+      return Boolean
+   is
+   begin
+      return Soja.Irc.Case_Mapping.Fold (Net.Casemap, A) =
+             Soja.Irc.Case_Mapping.Fold (Net.Casemap, B);
+   end Equal_Casemap;
+
+   function Get_Network (U : not null User_Access; Name : String)
+      return Network_Access
+   is
+   begin
+      for Net of U.Networks loop
+         if To_String (Net.Network_Record.Addr) = Name then
+            return Net;
+         end if;
+         if Net.Network_Record.Name /= Null_Unbounded_String
+           and then To_String (Net.Network_Record.Name) = Name
+         then
+            return Net;
+         end if;
+      end loop;
+      return null;
+   end Get_Network;
+
+   function Get_Network_By_ID (U : not null User_Access; ID : Long_Long_Integer)
+      return Network_Access
+   is
+   begin
+      for Net of U.Networks loop
+         if Net.Network_Record.ID = ID then
+            return Net;
+         end if;
+      end loop;
+      return null;
+   end Get_Network_By_ID;
+
+   --  connectToUpstream is deferred (network.URL, dialTCP, TLS, SASL EXTERNAL
+   --  certificate parsing, certfp verification).  The stub reports a temporary
+   --  failure so the reconnect loop keeps its shape.
+   function Connect_To_Upstream (Net : not null Network_Access)
+      return Upstream_Conn_Access
+   is
+      pragma Unreferenced (Net);
+   begin
+      return null;
+   end Connect_To_Upstream;
+
+   --  One task per network (Go's `go network.run()`).
+   task type Network_Task (Net : not null Network_Access);
+   task body Network_Task is
+   begin
+      Run_Network (Net);
+   end Network_Task;
+   type Network_Task_Access is access Network_Task;
+
+   procedure Spawn_Network (Net : not null Network_Access) is
+      T : Network_Task_Access := new Network_Task (Net);
+      pragma Unreferenced (T);
+   begin
+      null;
+   end Spawn_Network;
+
+   --  Sort a network slice by ID (Go's sort.Slice over u.srv.db.ListNetworks).
+   procedure Sort_By_ID (V : in out Soja.Database.Network_Lists.Vector) is
+   begin
+      for I in 1 .. Natural (V.Length) loop
+         for J in reverse 2 .. I loop
+            if V.Element (J - 1).ID > V.Element (J).ID then
+               declare
+                  Tmp : constant Soja.Database.Network := V.Element (J - 1);
+               begin
+                  V.Replace_Element (J - 1, V.Element (J));
+                  V.Replace_Element (J, Tmp);
+               end;
+            end if;
+         end loop;
+      end loop;
+   end Sort_By_ID;
+
+   procedure Run_Network (Net : not null Network_Access) is
+      use type Ada.Calendar.Time;
+      Backoff : Soja.Backoff.Backoffer := Soja.Backoff.New_Backoffer
+        (Soja.Server.Retry_Connect_Min_Delay,
+         Soja.Server.Retry_Connect_Max_Delay,
+         Soja.Server.Retry_Connect_Jitter);
+      Last_Try : Ada.Calendar.Time := Ada.Calendar.Clock;
+      Delay_Needed : Duration;
+   begin
+      if not Net.User.User_Record.Enabled
+        or else not Net.Network_Record.Enabled
+      then
+         return;
+      end if;
+
+      loop
+         exit when Is_Stopped (Net);
+
+         Delay_Needed := Soja.Backoff.Next (Backoff)
+           - (Ada.Calendar.Clock - Last_Try);
+         if Delay_Needed > 0.0 then
+            Net.Logger.Print
+              ("waiting " & Duration'Image (Delay_Needed)
+               & " before trying to reconnect to "
+               & To_String (Net.Network_Record.Addr));
+            delay Delay_Needed;
+         end if;
+         Last_Try := Ada.Calendar.Clock;
+
+         if Connect_To_Upstream (Net) = null then
+            Net.Logger.Print
+              ("connection error to " & To_String (Net.Network_Record.Addr)
+               & ": connectToUpstream not yet ported");
+            Net.User.Events.Enqueue
+              (new Upstream_Connection_Error_Event'
+                 (Net   => Net,
+                  Error => To_Unbounded_String
+                    ("connection error: connectToUpstream not yet ported")));
+         else
+            Soja.Backoff.Reset (Backoff);
+         end if;
+      end loop;
+   end Run_Network;
+
+   procedure Load_Networks (U : not null User_Access) is
+      DB  : constant Soja.Database.Database_Access :=
+        Soja.Server.DB (U.Srv.all);
+      Nets : Soja.Database.Network_Lists.Vector;
+   begin
+      --  Deferred: the user's message store (newUser's msgStore) and the
+      --  delivery-receipt loading (needs msgStore).
+      Nets := Soja.Database.List_Networks (DB.all, U.User_Record.ID);
+      Sort_By_ID (Nets);
+      for Rec of Nets loop
+         declare
+            Chs : constant Soja.Database.Channel_Lists.Vector :=
+              Soja.Database.List_Channels (DB.all, Rec.ID);
+            Net : constant Network_Access := New_Network (U, Rec, Chs);
+         begin
+            U.Networks.Append (Net);
+            Spawn_Network (Net);
+         end;
+      end loop;
+   end Load_Networks;
+
    procedure Run (U : not null User_Access) is
    begin
-      --  Deferred: load U's networks from the DB and spawn their run tasks
-      --  (needs srv.db).  The loop itself mirrors Go's select over events/done.
+      Load_Networks (U);
       loop
          declare
             E    : Event_Access;

@@ -42,6 +42,16 @@ package body Soja.Server is
       return S.Logger;
    end Logger;
 
+   function DB (S : Server) return Soja.Database.Database_Access is
+   begin
+      return S.DB;
+   end DB;
+
+   procedure Set_DB (S : in out Server; DB : Soja.Database.Database_Access) is
+   begin
+      S.DB := DB;
+   end Set_DB;
+
    procedure Initialize
      (S : in out Server; Logger : Soja.Logging.Logger_Access := null)
    is

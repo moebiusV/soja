@@ -5,6 +5,7 @@ pragma Ada_2022;
 
 with AWS.Net;
 with Soja.Conn;
+with Soja.Database;
 with Soja.Logging;
 
 package Soja.Server is
@@ -34,6 +35,10 @@ package Soja.Server is
 
    function Logger (S : Server) return Soja.Logging.Logger_Access;
 
+   function DB (S : Server) return Soja.Database.Database_Access;
+
+   procedure Set_DB (S : in out Server; DB : Soja.Database.Database_Access);
+
    procedure Initialize
      (S : in out Server; Logger : Soja.Logging.Logger_Access := null);
 
@@ -62,6 +67,7 @@ private
 
    type Server is tagged limited record
       Logger   : Soja.Logging.Logger_Access;
+      DB       : Soja.Database.Database_Access;
       H        : Handler;
       Listener : AWS.Net.Socket_Access;
       Flag     : Shutdown_Flag;

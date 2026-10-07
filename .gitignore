@@ -25,6 +25,7 @@ tests/core_check
 tests/members_check
 tests/core_struct_check
 tests/core_ctor_check
+tests/core_run_check
 
 # Test build artefacts
 tests/obj-s/
