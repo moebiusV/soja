@@ -350,4 +350,11 @@ package Soja.Core is
    --  retries (via backoff) until the network is stopped.
    procedure Run_Network (Net : not null Network_Access);
 
+   --  connectToUpstream (upstream.go): dial the upstream, wrap it in an
+   --  ircConn + conn, and build the upstreamConn.  Returns null on failure.
+   --  SASL EXTERNAL certificate handling, certfp verification, and the
+   --  unix-socket schemes are deferred.
+   function Connect_To_Upstream (Net : not null Network_Access)
+      return Upstream_Conn_Access;
+
 end Soja.Core;

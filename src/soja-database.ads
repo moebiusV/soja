@@ -94,6 +94,18 @@ package Soja.Database is
    function Get_Username (U : User; Net : Network) return String;
    function Get_Realname (U : User; Net : Network) return String;
 
+   --  network.URL(): the parsed upstream address.  Host is the "host:port"
+   --  authority (empty for unix sockets), Path the socket path (for unix).
+   type Network_URL is record
+      Scheme : Unbounded_String;
+      Host   : Unbounded_String;
+      Path   : Unbounded_String;
+   end record;
+
+   --  Parse Net.Addr into a URL, defaulting to the "ircs" scheme when no
+   --  "://" is present (database.go's Network.URL).
+   function URL (Net : Network) return Network_URL;
+
    -----------
    -- Channel --
    -----------

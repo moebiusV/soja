@@ -173,4 +173,43 @@ package body Soja.Database is
       return Get_Nick (U, Net);
    end Get_Realname;
 
+   ---------
+   -- URL --
+   ---------
+
+   function URL (Net : Network) return Network_URL is
+      Addr   : Unbounded_String := Net.Addr;
+      Scheme : Unbounded_String;
+      Host   : Unbounded_String;
+      Path   : Unbounded_String;
+      Sep    : Natural;
+      Slash  : Natural;
+      Rest   : Unbounded_String;
+   begin
+      if Index (Addr, "://") = 0 then
+         Addr := "ircs://" & Addr;
+      end if;
+
+      Sep := Index (Addr, "://");
+      Scheme := Head (Addr, Sep - 1);
+      Rest := Tail (Addr, Length (Addr) - (Sep + 2));
+
+      if Length (Rest) > 0 and then Element (Rest, 1) = '/' then
+         --  No host (e.g. "irc+unix:///path").
+         Host := Null_Unbounded_String;
+         Path := Rest;
+      else
+         Slash := Index (Rest, "/");
+         if Slash = 0 then
+            Host := Rest;
+            Path := Null_Unbounded_String;
+         else
+            Host := Head (Rest, Slash - 1);
+            Path := Tail (Rest, Length (Rest) - (Slash - 1));
+         end if;
+      end if;
+
+      return (Scheme => Scheme, Host => Host, Path => Path);
+   end URL;
+
 end Soja.Database;

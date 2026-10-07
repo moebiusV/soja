@@ -1,6 +1,12 @@
 pragma Ada_2022;
 
+with Ada.Strings.Fixed;
+with AWS.Default;
+with AWS.Net;
+with AWS.Net.SSL;
+with AWS.Net.Std;
 with Soja.Backoff;
+with Soja.Conn.Net;
 
 package body Soja.Core is
 
@@ -264,15 +270,132 @@ package body Soja.Core is
       return null;
    end Get_Network_By_ID;
 
-   --  connectToUpstream is deferred (network.URL, dialTCP, TLS, SASL EXTERNAL
-   --  certificate parsing, certfp verification).  The stub reports a temporary
-   --  failure so the reconnect loop keeps its shape.
+   --  Split "host:port" (or "[ipv6]:port") into Host and Port, defaulting the
+   --  port when absent (Go's net.SplitHostPort plus each scheme's default).
+   procedure Split_Host_Port
+     (Addr : String; Default_Port : Positive;
+      Host : out Unbounded_String; Port : out Positive)
+   is
+      Close : Natural;
+      Colon : Natural;
+   begin
+      if Addr'Length > 0 and then Addr (Addr'First) = '[' then
+         Close := Ada.Strings.Fixed.Index (Addr, "]");
+         if Close > 0 then
+            Host := To_Unbounded_String
+              (Addr (Addr'First + 1 .. Close - 1));
+            if Close + 2 <= Addr'Last then
+               Port := Positive'Value (Addr (Close + 2 .. Addr'Last));
+            else
+               Port := Default_Port;
+            end if;
+            return;
+         end if;
+      end if;
+
+      Colon := Ada.Strings.Fixed.Index (Addr, ":");
+      if Colon = 0 then
+         Host := To_Unbounded_String (Addr);
+         Port := Default_Port;
+      else
+         Host := To_Unbounded_String (Addr (Addr'First .. Colon - 1));
+         Port := Positive'Value (Addr (Colon + 1 .. Addr'Last));
+      end if;
+   end Split_Host_Port;
+
+   --  dialTCP: a plain TCP connection to the URL's host:port.
+   function Dial_TCP (U : Soja.Database.Network_URL; Default_Port : Positive)
+      return AWS.Net.Socket_Access
+   is
+      Host : Unbounded_String;
+      Port : Positive;
+      Sock : constant AWS.Net.Socket_Access := AWS.Net.Socket (False);
+   begin
+      Split_Host_Port (To_String (U.Host), Default_Port, Host, Port);
+      AWS.Net.Std.Socket_Type (Sock.all).Connect (To_String (Host), Port);
+      return Sock;
+   end Dial_TCP;
+
+   --  A TLS connection to the URL's host:port (ircs scheme), verifying the
+   --  peer against the system CA bundle.  certfp and SASL EXTERNAL are
+   --  deferred (they need Check_Certificate => False plus manual fingerprint
+   --  or a client certificate).
+   function Dial_TLS (U : Soja.Database.Network_URL)
+      return AWS.Net.Socket_Access
+   is
+      Host     : Unbounded_String;
+      Port     : Positive;
+      Plain    : AWS.Net.Socket_Access := AWS.Net.Socket (False);
+      Config   : AWS.Net.SSL.Config := AWS.Net.SSL.Null_Config;
+      SSL_Sock : AWS.Net.SSL.Socket_Type;
+   begin
+      Split_Host_Port (To_String (U.Host), 6697, Host, Port);
+      AWS.Net.Std.Socket_Type (Plain.all).Connect (To_String (Host), Port);
+      AWS.Net.SSL.Initialize
+        (Config,
+         Security_Mode       => AWS.Net.SSL.TLS_Client,
+         Check_Certificate   => True,
+         Trusted_CA_Filename => AWS.Default.Trusted_CA);
+      SSL_Sock := AWS.Net.SSL.Secure_Client
+        (Plain.all, Config, To_String (Host));
+      AWS.Net.Free (Plain);
+      return new AWS.Net.SSL.Socket_Type'(SSL_Sock);
+   end Dial_TLS;
+
+   --  connectToUpstream: dial the upstream, wrap it as an ircConn + conn, and
+   --  build the upstreamConn.  SASL EXTERNAL certificate handling, certfp
+   --  verification, and the unix-socket schemes are deferred.
    function Connect_To_Upstream (Net : not null Network_Access)
       return Upstream_Conn_Access
    is
-      pragma Unreferenced (Net);
+      U      : constant Soja.Database.Network_URL :=
+        Soja.Database.URL (Net.Network_Record);
+      Scheme : constant String := To_String (U.Scheme);
+      Logger : constant Logger_Access := Prefixed
+        (Net.User.Logger,
+         "upstream " & Soja.Database.Get_Name (Net.Network_Record) & ": ");
+      Sock   : AWS.Net.Socket_Access;
+      IC     : Soja.Conn.IRC_Conn_Access;
    begin
-      return null;
+      if Scheme = "ircs" then
+         Sock := Dial_TLS (U);
+      elsif Scheme = "irc+insecure" then
+         Sock := Dial_TCP (U, 6667);
+      elsif Scheme = "irc+unix" or else Scheme = "unix" then
+         Net.Logger.Print
+           ("upstream unix-socket scheme not yet ported: " & Scheme);
+         return null;
+      else
+         Net.Logger.Print
+           ("failed to dial: unknown scheme " & Scheme);
+         return null;
+      end if;
+
+      IC := new Soja.Conn.Net.Net_IRC_Conn'(Soja.Conn.Net.Create (Sock));
+
+      return Upc : constant Upstream_Conn_Access := new Upstream_Conn do
+         Upc.Conn := Soja.Conn.New_Conn
+           (IC, (Logger           => Logger,
+                 Rate_Limit_Delay => Soja.Server.Upstream_Message_Delay,
+                 Rate_Limit_Burst => Soja.Server.Upstream_Message_Burst));
+         Upc.Srv := Net.User.Srv;
+         Upc.Logger := Logger;
+         Upc.Network := Net;
+         Upc.User := Net.User;
+         Upc.Channels := Upstream_Channel_Maps.New_Map (Case_RFC1459);
+         Upc.Users := Upstream_User_Maps.New_Map (Case_RFC1459);
+         Upc.Caps := Soja.Irc.Cap_Registry.New_Registry;
+         Upc.Server_Prefix := new Soja.Irc.Messages.Prefix'
+           (Name => To_Unbounded_String ("*"), others => <>);
+         Upc.Available_Channel_Types :=
+           To_Unbounded_String (Soja.Irc.Members.Std_Channel_Types);
+         Upc.Available_Memberships :=
+           Soja.Irc.Members.Membership_Vectors.Empty_Vector;
+         for M of Soja.Irc.Members.Std_Memberships loop
+            Upc.Available_Memberships.Append (M);
+         end loop;
+         Upc.Has_Desired_Nick := True;
+      end return;
    end Connect_To_Upstream;
 
    --  One task per network (Go's `go network.run()`).
