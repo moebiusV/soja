@@ -37,6 +37,11 @@ package body Soja.Server is
    --  package (not the accept loop's block) and it outlives the block.
    type Conn_Task_Access is access Conn_Task;
 
+   function Logger (S : Server) return Soja.Logging.Logger_Access is
+   begin
+      return S.Logger;
+   end Logger;
+
    procedure Initialize
      (S : in out Server; Logger : Soja.Logging.Logger_Access := null)
    is

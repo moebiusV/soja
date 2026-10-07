@@ -32,6 +32,8 @@ package Soja.Server is
    type Server is tagged limited private;
    type Server_Access is access all Server;
 
+   function Logger (S : Server) return Soja.Logging.Logger_Access;
+
    procedure Initialize
      (S : in out Server; Logger : Soja.Logging.Logger_Access := null);
 

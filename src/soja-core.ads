@@ -153,6 +153,31 @@ package Soja.Core is
    --  eventUserUpdate and eventUserRun (synchronous request events, with their
    --  done/print/ret channels) are deferred to the event-loop slice.
 
+   -------------------
+   --  Event queue --
+   -------------------
+
+   --  user.go's `events chan event` (buffered 64) merged with `done chan
+   --  struct{}`: the run loop selects on both, which Ada expresses as one
+   --  protected object.  Enqueue blocks when full; Dequeue blocks when empty
+   --  and returns Done once Close was called and the queue drains.
+   Event_Capacity : constant := 64;
+   type Event_Array is array (1 .. Event_Capacity) of Event_Access;
+
+   protected type Event_Queue is
+      entry Enqueue (E : Event_Access);
+      entry Dequeue (E : out Event_Access; Done : out Boolean);
+      procedure Close;
+      function Is_Closed return Boolean;
+   private
+      Buf    : Event_Array;
+      Head   : Positive := 1;
+      Count  : Natural := 0;
+      Closed : Boolean := False;
+   end Event_Queue;
+
+   type Event_Queue_Access is access all Event_Queue;
+
    -------------
    --  Structs --
    -------------
@@ -166,7 +191,10 @@ package Soja.Core is
       Downstream_Conns : Downstream_Conn_Vectors.Vector;
       Num_Downstream_Conns : Long_Long_Integer := 0;
 
-      --  Deferred: events (bounded queue), done (Signal), msgStore.
+      Events : Event_Queue_Access;
+      Done   : Signal_Access;
+
+      --  Deferred: msgStore.
    end record;
 
    type Network is tagged record
@@ -259,5 +287,32 @@ package Soja.Core is
 
       --  Deferred: modes (channelModes), Members, detachTimer.
    end record;
+
+   ------------------
+   --  Constructors --
+   ------------------
+
+   --  newUser: allocates a user and its event queue / done signal.
+   function New_User
+     (Srv : Soja.Server.Server_Access; Rec : Soja.Database.User)
+      return User_Access;
+
+   --  newNetwork: builds a network around a user, seeding the channel map from
+   --  Channels (database.ListChannels; empty for a freshly-created network).
+   function New_Network
+     (U : User_Access; Rec : Soja.Database.Network;
+      Channels : Soja.Database.Channel_Lists.Vector) return Network_Access;
+
+   --  newDownstreamConn: wraps a freshly-accepted transport in a downstream
+   --  connection, advertising the always-available capabilities.
+   function New_Downstream_Conn
+     (Srv : Soja.Server.Server_Access;
+      IC  : not null Soja.Conn.IRC_Conn_Access;
+      ID  : Long_Long_Integer) return Downstream_Conn_Access;
+
+   --  user.run(): drain the event queue, dispatching each event to its handler.
+   --  The per-event handlers are stubs (they call the not-yet-ported connection
+   --  methods); network loading and network.run() task spawning are deferred.
+   procedure Run (U : not null User_Access);
 
 end Soja.Core;
