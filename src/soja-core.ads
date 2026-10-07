@@ -357,4 +357,41 @@ package Soja.Core is
    function Connect_To_Upstream (Net : not null Network_Access)
       return Upstream_Conn_Access;
 
+   ------------------------
+   --  Upstream connection --
+   ------------------------
+
+   --  registrationError's carry: whether registration failed, why, and whether
+   --  the failure is temporary (reconnect will retry) or a configuration error.
+   type Registration_Result is record
+      Success   : Boolean;
+      Reason    : Unbounded_String;
+      Temporary : Boolean;
+   end record;
+
+   --  network.runConn's outcome: Text is empty on a clean (closed) run;
+   --  otherwise it holds the failure text and whether to retry.
+   type Run_Conn_Error is record
+      Text      : Unbounded_String;
+      Temporary : Boolean;
+   end record;
+
+   --  uc.register: set nick/username/realname and send the CAP/NICK/USER
+   --  (+PASS) burst.
+   procedure Register (UC : not null Upstream_Conn_Access);
+
+   --  uc.SendMessage: drop message tags when the message-tags cap is disabled,
+   --  then send.
+   procedure Send_Message (UC : not null Upstream_Conn_Access;
+      M : Soja.Irc.Messages.Message);
+
+   --  uc.runUntilRegistered: read and handle messages until the connection
+   --  registers (001) or registration fails.
+   function Run_Until_Registered (UC : not null Upstream_Conn_Access)
+      return Registration_Result;
+
+   --  network.runConn: connect, register, then forward upstream messages to
+   --  the user's event queue until the connection closes.
+   function Run_Conn (Net : not null Network_Access) return Run_Conn_Error;
+
 end Soja.Core;

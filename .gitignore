@@ -27,6 +27,7 @@ tests/core_struct_check
 tests/core_ctor_check
 tests/core_run_check
 tests/upstream_connect_check
+tests/upstream_register_check
 tests/certfp_check
 
 # Test fixtures (regenerate with the openssl commands in certfp_check.adb)

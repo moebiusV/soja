@@ -204,6 +204,15 @@ this rule is written explicitly, not assumed. Reference anchors:
   a temp-file shim or a low-level `ssl-thin__openssl` binding) and the
   `irc+unix`/`unix` schemes (Unix-domain sockets, needs `GNAT.Sockets`).
 
+- **The upstream connection lifecycle is ported**: `uc.register` (CAP/NICK/
+  USER burst), `runUntilRegistered`, `readMessages` (forwarding to the user's
+  event queue), and `network.runConn` are wired into `network.run`'s reconnect
+  loop.  `uc.handleMessage` is **minimal** — it handles the registration-phase
+  messages (PING, CAP LS → CAP END with no caps requested, 001, nick-in-use
+  fallback, the registration-error numerics) and defers the ~1400-line
+  post-registration dispatch (JOIN/PRIVMSG/NICK/QUIT/MODE/numerics, caps,
+  batches, SASL).
+
 - **Ordering**: `downstream.go`, `upstream.go`, `user.go` and `service.go`
   form one mutually-dependent core (the `network` type in `user.go` holds both
   an `upstreamConn` and downstream connections), so they are ported together,

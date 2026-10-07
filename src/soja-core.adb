@@ -1,5 +1,6 @@
 pragma Ada_2022;
 
+with Ada.IO_Exceptions;
 with Ada.Streams;
 with Ada.Strings.Fixed;
 with AWS.Default;
@@ -10,10 +11,12 @@ with AWS.Net.Std;
 with CryptoLib.Hashes;
 with Soja.Backoff;
 with Soja.Conn.Net;
+with Soja.Irc.Numerics;
 
 package body Soja.Core is
 
    use Soja.Logging;
+   use Soja.Irc.Messages;
    use type AWS.Net.Socket_Access;
 
    ------------
@@ -492,6 +495,220 @@ package body Soja.Core is
       end return;
    end Connect_To_Upstream;
 
+   ---------------------------
+   --  Upstream connection --
+   ---------------------------
+
+   --  A bare message with a command and params (no prefix/tags).
+   function Make_Message (Command : String; P : Param_Vectors.Vector)
+      return Soja.Irc.Messages.Message
+   is
+      M : Soja.Irc.Messages.Message := (others => <>);
+   begin
+      M.Command := To_Unbounded_String (Command);
+      M.Params := P;
+      return M;
+   end Make_Message;
+
+   function Read_Message (UC : not null Upstream_Conn_Access)
+      return Soja.Irc.Messages.Message is
+   begin
+      return Soja.Conn.Read_Message (UC.Conn);
+   end Read_Message;
+
+   procedure Send_Message (UC : not null Upstream_Conn_Access;
+      M : Soja.Irc.Messages.Message)
+   is
+      Msg : Soja.Irc.Messages.Message := M;
+   begin
+      if not Soja.Irc.Cap_Registry.Is_Enabled (UC.Caps, "message-tags") then
+         Msg.Tags := (others => <>);
+      end if;
+      Soja.Conn.Send_Message (UC.Conn, Msg);
+   end Send_Message;
+
+   procedure Register (UC : not null Upstream_Conn_Access) is
+      P : Param_Vectors.Vector;
+   begin
+      UC.Nick := To_Unbounded_String
+        (Soja.Database.Get_Nick
+           (UC.User.User_Record, UC.Network.Network_Record));
+      UC.Username := To_Unbounded_String
+        (Soja.Database.Get_Username
+           (UC.User.User_Record, UC.Network.Network_Record));
+      UC.Realname := To_Unbounded_String
+        (Soja.Database.Get_Realname
+           (UC.User.User_Record, UC.Network.Network_Record));
+
+      P.Append (To_Unbounded_String ("LS"));
+      P.Append (To_Unbounded_String ("302"));
+      Send_Message (UC, Make_Message ("CAP", P));
+
+      if UC.Network.Network_Record.Pass /= Null_Unbounded_String then
+         P.Clear;
+         P.Append (UC.Network.Network_Record.Pass);
+         Send_Message (UC, Make_Message ("PASS", P));
+      end if;
+
+      P.Clear;
+      P.Append (UC.Nick);
+      Send_Message (UC, Make_Message ("NICK", P));
+
+      P.Clear;
+      P.Append (UC.Username);
+      P.Append (To_Unbounded_String ("0"));
+      P.Append (To_Unbounded_String ("*"));
+      P.Append (UC.Realname);
+      Send_Message (UC, Make_Message ("USER", P));
+   end Register;
+
+   --  The outcome of handling one message during registration.
+   type Handle_Result is record
+      Failed    : Boolean := False;
+      Reason    : Unbounded_String;
+      Temporary : Boolean := True;
+   end record;
+
+   --  Minimal handleMessage for the registration phase: PING/PONG, CAP LS ->
+   --  CAP END (requesting no caps), 001 -> registered, nick-in-use fallback,
+   --  and the registration-error numerics.  The full post-registration message
+   --  dispatch (JOIN/PRIVMSG/NICK/...) is deferred.
+   function Handle_Message (UC : not null Upstream_Conn_Access;
+      M : Soja.Irc.Messages.Message) return Handle_Result
+   is
+      use Soja.Irc.Numerics;
+      Cmd : constant String := To_String (M.Command);
+      R   : Handle_Result := (Failed => False, others => <>);
+      P   : Param_Vectors.Vector;
+   begin
+      if Cmd = "PING" then
+         Send_Message (UC, Make_Message ("PONG", M.Params));
+      elsif Cmd = "CAP" then
+         if Natural (M.Params.Length) >= 2
+           and then To_String (M.Params (2)) = "LS"
+         then
+            P.Append (To_Unbounded_String ("END"));
+            Send_Message (UC, Make_Message ("CAP", P));
+         end if;
+      elsif Cmd = "ERROR" then
+         R := (Failed => True,
+               Reason => To_Unbounded_String ("fatal server error"),
+               Temporary => False);
+      elsif Cmd = RPL_WELCOME then
+         UC.Nick := M.Params (1);
+         UC.Registered := True;
+         UC.Server_Prefix := M.Prefix;
+         UC.Logger.Print
+           ("connection registered with nick " & To_String (UC.Nick));
+      elsif Cmd = ERR_NICKNAMEINUSE then
+         if not UC.Registered and then Length (UC.Nick) + 1 < 30 then
+            Append (UC.Nick, "_");
+            UC.Has_Desired_Nick := False;
+            P.Append (UC.Nick);
+            Send_Message (UC, Make_Message ("NICK", P));
+         else
+            R := (Failed => True,
+                  Reason => To_Unbounded_String ("nickname in use"),
+                  Temporary => True);
+         end if;
+      elsif Cmd = ERR_ERRONEUSNICKNAME or else Cmd = ERR_PASSWDMISMATCH then
+         R := (Failed => True,
+               Reason => M.Params (Natural (M.Params.Length)),
+               Temporary => False);
+      elsif Cmd = ERR_NICKCOLLISION or else Cmd = ERR_UNAVAILRESOURCE
+        or else Cmd = ERR_NOPERMFORHOST or else Cmd = ERR_YOUREBANNEDCREEP
+      then
+         R := (Failed => True,
+               Reason => M.Params (Natural (M.Params.Length)),
+               Temporary => True);
+      elsif Cmd = "FAIL" then
+         if Natural (M.Params.Length) >= 2
+           and then To_String (M.Params (1)) = "*"
+           and then To_String (M.Params (2)) = "ACCOUNT_REQUIRED"
+         then
+            R := (Failed => True,
+                  Reason => To_Unbounded_String ("account required"),
+                  Temporary => False);
+         end if;
+      else
+         null;   --  deferred: the full message dispatch
+      end if;
+      return R;
+   end Handle_Message;
+
+   function Run_Until_Registered (UC : not null Upstream_Conn_Access)
+      return Registration_Result
+   is
+      M : Message;
+      R : Handle_Result;
+   begin
+      loop
+         exit when UC.Registered;
+         begin
+            M := Read_Message (UC);
+         exception
+            when Ada.IO_Exceptions.End_Error | AWS.Net.Socket_Error =>
+               return (Success   => False,
+                       Reason    => To_Unbounded_String
+                         ("failed to read message"),
+                       Temporary => True);
+         end;
+         R := Handle_Message (UC, M);
+         if R.Failed then
+            return (Success => False, Reason => R.Reason,
+                    Temporary => R.Temporary);
+         end if;
+      end loop;
+      return (Success => True, Reason => Null_Unbounded_String,
+              Temporary => True);
+   end Run_Until_Registered;
+
+   --  uc.readMessages: forward each upstream message to the user's event queue.
+   procedure Read_Messages (UC : not null Upstream_Conn_Access;
+      Events : not null Event_Queue_Access)
+   is
+      M : Message;
+   begin
+      loop
+         begin
+            M := Read_Message (UC);
+         exception
+            when Ada.IO_Exceptions.End_Error | AWS.Net.Socket_Error =>
+               exit;
+         end;
+         Events.Enqueue (new Upstream_Message_Event'(Msg => M, UC => UC));
+      end loop;
+   end Read_Messages;
+
+   function Run_Conn (Net : not null Network_Access) return Run_Conn_Error is
+      UC : constant Upstream_Conn_Access := Connect_To_Upstream (Net);
+      RR : Registration_Result;
+   begin
+      if UC = null then
+         return (Text => To_Unbounded_String ("failed to connect"),
+                 Temporary => True);
+      end if;
+
+      Register (UC);
+
+      RR := Run_Until_Registered (UC);
+      if not RR.Success then
+         Soja.Conn.Close (UC.Conn);
+         return (Text => To_Unbounded_String
+                   ("failed to register: " & To_String (RR.Reason)),
+                 Temporary => RR.Temporary);
+      end if;
+
+      Net.Conn := UC;
+      Net.User.Events.Enqueue (new Upstream_Connected_Event'(UC => UC));
+
+      Read_Messages (UC, Net.User.Events);
+
+      Net.User.Events.Enqueue (new Upstream_Disconnected_Event'(UC => UC));
+      Soja.Conn.Close (UC.Conn);
+      return (Text => Null_Unbounded_String, Temporary => True);
+   end Run_Conn;
+
    --  One task per network (Go's `go network.run()`).
    task type Network_Task (Net : not null Network_Access);
    task body Network_Task is
@@ -532,6 +749,7 @@ package body Soja.Core is
          Soja.Server.Retry_Connect_Jitter);
       Last_Try : Ada.Calendar.Time := Ada.Calendar.Clock;
       Delay_Needed : Duration;
+      Err : Run_Conn_Error;
    begin
       if not Net.User.User_Record.Enabled
         or else not Net.Network_Record.Enabled
@@ -553,15 +771,15 @@ package body Soja.Core is
          end if;
          Last_Try := Ada.Calendar.Clock;
 
-         if Connect_To_Upstream (Net) = null then
+         Err := Run_Conn (Net);
+         if Err.Text /= Null_Unbounded_String then
             Net.Logger.Print
               ("connection error to " & To_String (Net.Network_Record.Addr)
-               & ": connectToUpstream not yet ported");
+               & ": " & To_String (Err.Text));
             Net.User.Events.Enqueue
               (new Upstream_Connection_Error_Event'
-                 (Net   => Net,
-                  Error => To_Unbounded_String
-                    ("connection error: connectToUpstream not yet ported")));
+                 (Net => Net, Error => Err.Text));
+            exit when not Err.Temporary;
          else
             Soja.Backoff.Reset (Backoff);
          end if;
