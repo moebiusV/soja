@@ -1,6 +1,6 @@
 # soja
 
-[github.com/moebiusV/soja](https://github.com/moebiusV/soja) | `git clone https://github.com/moebiusV/soja`
+[up](https://moebiusv.github.io/) | [github.com/moebiusV/soja](https://github.com/moebiusV/soja) | `git clone https://github.com/moebiusV/soja`
 
 soja is a drop-in replacement for [soju](https://soju.im), the user-friendly
 IRC bouncer, written from scratch in Ada 2022. The name is a pun:
