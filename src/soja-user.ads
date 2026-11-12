@@ -27,6 +27,9 @@ package Soja.User is
    procedure Store_ID (DS : in out Delivered_Store;
       Target, Client_Name, Msg_ID : String);
 
+   procedure Set_Case_Mapping
+     (DS : in out Delivered_Store; CM : Soja.Irc.Case_Mapping.Kind);
+
    procedure For_Each_Target
      (DS : Delivered_Store;
       Process : not null access procedure (Target : String));

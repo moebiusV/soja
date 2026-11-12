@@ -1,5 +1,6 @@
 pragma Ada_2022;
 
+with Ada.Containers;
 with Ada.Exceptions;
 with Ada.IO_Exceptions;
 with Ada.Streams;
@@ -12,6 +13,10 @@ with AWS.Net.Std;
 with CryptoLib.Hashes;
 with Soja.Backoff;
 with Soja.Conn.Net;
+with Soja.Core.Upstream_Dispatch;
+with Soja.Irc.Cap_Registry;
+with Soja.Irc.Genmsg;
+with Soja.Irc.Helpers;
 with Soja.Irc.Numerics;
 with Soja.Msgstore.Memory;
 
@@ -22,6 +27,8 @@ package body Soja.Core is
    use type AWS.Net.Socket_Access;
    use type Soja.Timers.Timer_Access;
    use type Soja.Msgstore.Store_Access;
+   use type Ada.Containers.Count_Type;
+   use type Soja.Database.Database_Access;
 
    ------------
    -- Signal --
@@ -633,79 +640,6 @@ package body Soja.Core is
    end Register;
 
    --  The outcome of handling one message during registration.
-   type Handle_Result is record
-      Failed    : Boolean := False;
-      Reason    : Unbounded_String;
-      Temporary : Boolean := True;
-   end record;
-
-   --  Minimal handleMessage for the registration phase: PING/PONG, CAP LS ->
-   --  CAP END (requesting no caps), 001 -> registered, nick-in-use fallback,
-   --  and the registration-error numerics.  The full post-registration message
-   --  dispatch (JOIN/PRIVMSG/NICK/...) is deferred.
-   function Handle_Message (UC : not null Upstream_Conn_Access;
-      M : Soja.Irc.Messages.Message) return Handle_Result
-   is
-      use Soja.Irc.Numerics;
-      Cmd : constant String := To_String (M.Command);
-      R   : Handle_Result := (Failed => False, others => <>);
-      P   : Param_Vectors.Vector;
-   begin
-      if Cmd = "PING" then
-         Send_Message (UC, Make_Message ("PONG", M.Params));
-      elsif Cmd = "CAP" then
-         if Natural (M.Params.Length) >= 2
-           and then To_String (M.Params (2)) = "LS"
-         then
-            P.Append (To_Unbounded_String ("END"));
-            Send_Message (UC, Make_Message ("CAP", P));
-         end if;
-      elsif Cmd = "ERROR" then
-         R := (Failed => True,
-               Reason => To_Unbounded_String ("fatal server error"),
-               Temporary => False);
-      elsif Cmd = RPL_WELCOME then
-         UC.Nick := M.Params (1);
-         UC.Registered := True;
-         UC.Server_Prefix := M.Prefix;
-         UC.Logger.Print
-           ("connection registered with nick " & To_String (UC.Nick));
-      elsif Cmd = ERR_NICKNAMEINUSE then
-         if not UC.Registered and then Length (UC.Nick) + 1 < 30 then
-            Append (UC.Nick, "_");
-            UC.Has_Desired_Nick := False;
-            P.Append (UC.Nick);
-            Send_Message (UC, Make_Message ("NICK", P));
-         else
-            R := (Failed => True,
-                  Reason => To_Unbounded_String ("nickname in use"),
-                  Temporary => True);
-         end if;
-      elsif Cmd = ERR_ERRONEUSNICKNAME or else Cmd = ERR_PASSWDMISMATCH then
-         R := (Failed => True,
-               Reason => M.Params (Natural (M.Params.Length)),
-               Temporary => False);
-      elsif Cmd = ERR_NICKCOLLISION or else Cmd = ERR_UNAVAILRESOURCE
-        or else Cmd = ERR_NOPERMFORHOST or else Cmd = ERR_YOUREBANNEDCREEP
-      then
-         R := (Failed => True,
-               Reason => M.Params (Natural (M.Params.Length)),
-               Temporary => True);
-      elsif Cmd = "FAIL" then
-         if Natural (M.Params.Length) >= 2
-           and then To_String (M.Params (1)) = "*"
-           and then To_String (M.Params (2)) = "ACCOUNT_REQUIRED"
-         then
-            R := (Failed => True,
-                  Reason => To_Unbounded_String ("account required"),
-                  Temporary => False);
-         end if;
-      else
-         null;   --  deferred: the full message dispatch
-      end if;
-      return R;
-   end Handle_Message;
-
    function Run_Until_Registered (UC : not null Upstream_Conn_Access)
       return Registration_Result
    is
@@ -723,12 +657,35 @@ package body Soja.Core is
                          ("failed to read message"),
                        Temporary => True);
          end;
-         R := Handle_Message (UC, M);
+         R := Soja.Core.Upstream_Dispatch.Handle_Message (UC, M);
          if R.Failed then
-            return (Success => False, Reason => R.Reason,
-                    Temporary => R.Temporary);
+            if R.Is_Registration_Error then
+               return (Success => False, Reason => R.Reason,
+                       Temporary => R.Temporary);
+            end if;
+            --  Message tags are dropped so they don't clutter the log.
+            M.Tags := (others => <>);
+            return (Success   => False,
+                    Reason    => To_Unbounded_String
+                      ("failed to handle message "
+                       & Soja.Irc.Helpers.Quote (Image (M)) & ": "
+                       & To_String (R.Reason)),
+                    Temporary => True);
          end if;
       end loop;
+
+      for Command of UC.Network.Network_Record.Connect_Commands loop
+         begin
+            Send_Message (UC, Parse_Message (To_String (Command)));
+         exception
+            when E : Parse_Error =>
+               UC.Logger.Print
+                 ("failed to parse connect command "
+                  & Soja.Irc.Helpers.Quote (To_String (Command)) & ": "
+                  & Ada.Exceptions.Exception_Message (E));
+         end;
+      end loop;
+
       return (Success => True, Reason => Null_Unbounded_String,
               Temporary => True);
    end Run_Until_Registered;
@@ -786,11 +743,73 @@ package body Soja.Core is
    procedure Send_Message (DC : not null Downstream_Conn_Access;
       M : Message)
    is
-      Msg : Message := M;
+      use Soja.Irc.Cap_Registry;
+
+      Msg : Message := Copy (M);
+      Cmd : constant String := To_String (M.Command);
    begin
-      if not Soja.Irc.Cap_Registry.Is_Enabled (DC.Caps, "message-tags") then
-         Msg.Tags := (others => <>);
+      if not Is_Enabled (DC.Caps, "message-tags") then
+         if Cmd = "TAGMSG" then
+            return;
+         end if;
+
+         --  Without message-tags, only the tags backed by an enabled
+         --  capability survive.
+         declare
+            Names : Soja.Irc.Genmsg.String_Vectors.Vector;
+         begin
+            for C in Msg.Tags.Data.Iterate loop
+               Names.Append (Tag_Maps.Key (C));
+            end loop;
+            for Name of Names loop
+               if not ((Name = "time"
+                        and then Is_Enabled (DC.Caps, "server-time"))
+                       or else (Name = "account"
+                                and then Is_Enabled (DC.Caps, "account-tag"))
+                       or else (Name = "batch"
+                                and then Is_Enabled (DC.Caps, "batch")))
+               then
+                  Msg.Tags.Data.Exclude (Name);
+               end if;
+            end loop;
+         end;
       end if;
+
+      if not Is_Enabled (DC.Caps, "batch")
+        and then Get_Tag (Msg.Tags, "batch") /= ""
+      then
+         Msg.Tags.Data.Exclude ("batch");
+      end if;
+
+      if Cmd = "JOIN" and then not Is_Enabled (DC.Caps, "extended-join")
+        and then Msg.Params.Length > 1
+      then
+         Msg.Params.Set_Length (1);
+      end if;
+
+      if (Cmd = "SETNAME" and then not Is_Enabled (DC.Caps, "setname"))
+        or else (Cmd = "CHGHOST" and then not Is_Enabled (DC.Caps, "chghost"))
+        or else (Cmd = "AWAY" and then not Is_Enabled (DC.Caps, "away-notify"))
+        or else (Cmd = "ACCOUNT"
+                 and then not Is_Enabled (DC.Caps, "account-notify"))
+        or else (Cmd = "MARKREAD"
+                 and then not Is_Enabled (DC.Caps, "draft/read-marker"))
+        or else (Cmd = "READ"
+                 and then not Is_Enabled (DC.Caps, "soju.im/read"))
+      then
+         return;
+      end if;
+
+      if Msg.Prefix /= null and then To_String (Msg.Prefix.Name) = "*" then
+         --  "*" is a sentinel value used to simplify upstream message
+         --  handling.
+         Msg.Prefix := null;
+      end if;
+      if Msg.Prefix = null and then Soja.Irc.Helpers.Is_Numeric (Cmd) then
+         --  Numerics must always carry a source.
+         Msg.Prefix := Server_Prefix (DC.Srv);
+      end if;
+
       Soja.Conn.Send_Message (DC.Conn, Msg);
    end Send_Message;
 
@@ -973,6 +992,106 @@ package body Soja.Core is
    ----------------------------------------
    -- upstreamChannel and its timers --
    ----------------------------------------
+
+   ----------------------------------------------------------------------
+   -- Server prefix, downstream snapshots, casemapping, SASL auto-save --
+   ----------------------------------------------------------------------
+
+   function Server_Prefix (Srv : Soja.Server.Server_Access)
+      return Soja.Irc.Messages.Prefix_Access
+   is
+   begin
+      return new Soja.Irc.Messages.Prefix'
+        (Name => Soja.Server.Config (Srv.all).Hostname, others => <>);
+   end Server_Prefix;
+
+   function Downstreams (Net : not null Network_Access)
+      return Downstream_Conn_Vectors.Vector
+   is
+      Result : Downstream_Conn_Vectors.Vector;
+   begin
+      for DC of Net.User.Downstream_Conns loop
+         if DC.Network = Net then
+            Result.Append (DC);
+         end if;
+      end loop;
+      return Result;
+   end Downstreams;
+
+   procedure Update_Casemapping (DC : not null Downstream_Conn_Access) is
+      CM : Kind := Case_ASCII;
+   begin
+      if DC.Network /= null then
+         CM := DC.Network.Casemap;
+      end if;
+      DC.Casemap := CM;
+      DC.Nick_CM := To_Unbounded_String (Fold (CM, To_String (DC.Nick)));
+      DC.Monitored.Set_Case_Mapping (CM);
+   end Update_Casemapping;
+
+   procedure Update_Casemapping
+     (Net : not null Network_Access; CM : Soja.Irc.Case_Mapping.Kind)
+   is
+   begin
+      Net.Casemap := CM;
+      Net.Channels.Set_Case_Mapping (CM);
+      Soja.User.Set_Case_Mapping (Net.Delivered, CM);
+      Net.Push_Targets.Set_Case_Mapping (CM);
+
+      if Net.Conn /= null then
+         declare
+            UC : constant Upstream_Conn_Access := Net.Conn;
+
+            procedure Set_Members
+              (Name : String; Ch : Upstream_Channel_Access)
+            is
+               pragma Unreferenced (Name);
+            begin
+               Ch.Members.Set_Case_Mapping (CM);
+            end Set_Members;
+         begin
+            UC.Channels.Set_Case_Mapping (CM);
+            UC.Channels.For_Each (Set_Members'Access);
+            UC.Users.Set_Case_Mapping (CM);
+            UC.Monitored.Set_Case_Mapping (CM);
+         end;
+      end if;
+
+      for DC of Downstreams (Net) loop
+         Update_Casemapping (DC);
+      end loop;
+   end Update_Casemapping;
+
+   procedure Auto_Save_SASL_Plain
+     (Net : not null Network_Access; Username, Password : String)
+   is
+      Mech : constant String :=
+        To_String (Net.Network_Record.SASL.Mechanism);
+      DB   : constant Soja.Database.Database_Access :=
+        Soja.Server.DB (Net.User.Srv.all);
+   begin
+      --  The user may have e.g. the EXTERNAL mechanism configured: do not
+      --  automatically erase the key pair or any other credentials.
+      if Mech /= "" and then Mech /= "PLAIN" then
+         return;
+      end if;
+
+      Net.Logger.Print
+        ("auto-saving SASL PLAIN credentials with username "
+         & Soja.Irc.Helpers.Quote (Username));
+      Net.Network_Record.SASL.Mechanism := To_Unbounded_String ("PLAIN");
+      Net.Network_Record.SASL.Plain_Username := To_Unbounded_String (Username);
+      Net.Network_Record.SASL.Plain_Password := To_Unbounded_String (Password);
+      if DB /= null then
+         Soja.Database.Store_Network
+           (DB.all, Net.User.User_Record.ID, Net.Network_Record);
+      end if;
+   exception
+      when E : others =>
+         Net.Logger.Print
+           ("failed to save SASL PLAIN credentials: "
+            & Ada.Exceptions.Exception_Message (E));
+   end Auto_Save_SASL_Plain;
 
    ----------------
    -- Append_Log --

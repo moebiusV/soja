@@ -321,19 +321,14 @@ package body Soja.Irc.Helpers is
    --  second, a 1- or 2-digit hour, a '.' or ',' and exactly three digits,
    --  a literal 'Z'.  Out-of-range fields are errors.  Years outside
    --  Ada.Calendar's 1901 .. 2399 are also rejected (Go accepts 0 .. 9999).
-   function Parse_Chat_History_Bound
-     (Param : String; Valid : out Boolean) return Ada.Calendar.Time
+   function Parse_Server_Time
+     (S : String; Valid : out Boolean) return Ada.Calendar.Time
    is
       Zero : constant Ada.Calendar.Time := Ada.Calendar.Time_Of (1901, 1, 1);
-      Eq   : constant Natural := Ada.Strings.Fixed.Index (Param, "=");
    begin
       Valid := False;
-      if Eq = 0 or else Param (Param'First .. Eq - 1) /= "timestamp" then
-         return Zero;
-      end if;
 
       declare
-         S : constant String := Param (Eq + 1 .. Param'Last);
          P : Positive := S'First;
 
          Bad : exception;
@@ -416,7 +411,48 @@ package body Soja.Irc.Helpers is
          when Bad =>
             return Zero;
       end;
+   end Parse_Server_Time;
+
+   function Parse_Chat_History_Bound
+     (Param : String; Valid : out Boolean) return Ada.Calendar.Time
+   is
+      Eq : constant Natural := Ada.Strings.Fixed.Index (Param, "=");
+   begin
+      if Eq = 0 or else Param (Param'First .. Eq - 1) /= "timestamp" then
+         Valid := False;
+         return Ada.Calendar.Time_Of (1901, 1, 1);
+      end if;
+      return Parse_Server_Time (Param (Eq + 1 .. Param'Last), Valid);
    end Parse_Chat_History_Bound;
+
+   -----------
+   -- Quote --
+   -----------
+
+   function Quote (S : String) return String is
+      Hex : constant String := "0123456789abcdef";
+      R   : Unbounded_String := To_Unbounded_String ("""");
+   begin
+      for C of S loop
+         case C is
+            when '"'      => Append (R, "\""");
+            when '\'      => Append (R, "\\");
+            when ASCII.LF => Append (R, "\n");
+            when ASCII.CR => Append (R, "\r");
+            when ASCII.HT => Append (R, "\t");
+            when others   =>
+               if Character'Pos (C) < 32 or else Character'Pos (C) = 127 then
+                  Append (R, "\x");
+                  Append (R, Hex (Character'Pos (C) / 16 + 1));
+                  Append (R, Hex (Character'Pos (C) mod 16 + 1));
+               else
+                  Append (R, C);
+               end if;
+         end case;
+      end loop;
+      Append (R, '"');
+      return To_String (R);
+   end Quote;
 
    ----------------
    -- Is_Numeric --

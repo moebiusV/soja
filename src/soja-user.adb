@@ -108,4 +108,10 @@ package body Soja.User is
       end;
    end For_Each_Client;
 
+   procedure Set_Case_Mapping
+     (DS : in out Delivered_Store; CM : Soja.Irc.Case_Mapping.Kind) is
+   begin
+      DS.M.Set_Case_Mapping (CM);
+   end Set_Case_Mapping;
+
 end Soja.User;

@@ -61,8 +61,18 @@ begin
          Expect ("NICK");
          Expect ("USER");
 
-         IC.Write_Message (Parse_Message (":irc CAP * LS"));
-         Expect ("CAP");
+         IC.Write_Message
+           (Parse_Message (":irc CAP * LS :multi-prefix server-time other"));
+         Expect ("CAP");   --  CAP REQ for the capabilities soja wants
+         if Param (M, 0) /= "REQ"
+           or else Param (M, 1) /= "multi-prefix server-time"
+         then
+            raise Program_Error with "unexpected CAP REQ: " & Image (M);
+         end if;
+         Expect ("CAP");   --  CAP END (no SASL configured)
+         if Param (M, 0) /= "END" then
+            raise Program_Error with "expected CAP END: " & Image (M);
+         end if;
 
          IC.Write_Message (Parse_Message (":irc 001 alice :welcome"));
       end Server_Task;

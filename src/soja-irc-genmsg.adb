@@ -20,6 +20,20 @@ package body Soja.Irc.Genmsg is
       return M;
    end Make;
 
+   function Make
+     (Command : String;
+      Params  : String_Vectors.Vector := String_Vectors.Empty_Vector)
+      return Message
+   is
+      M : Message := (others => <>);
+   begin
+      M.Command := To_Unbounded_String (Command);
+      for P of Params loop
+         M.Params.Append (To_Unbounded_String (P));
+      end loop;
+      return M;
+   end Make;
+
    function PV (A : String) return Param_Vectors.Vector is
       V : Param_Vectors.Vector;
    begin

@@ -420,6 +420,32 @@ package Soja.Core is
    function Server_SASL_Mechanisms (Srv : Soja.Server.Server_Access)
       return String;
 
+   --  service.go's BouncerServ identity.
+   Service_Nick    : constant String := "BouncerServ";
+   Service_Nick_CM : constant String := "bouncerserv";
+
+   --  srv.prefix(): the server's prefix (its hostname).
+   function Server_Prefix (Srv : Soja.Server.Server_Access)
+      return Soja.Irc.Messages.Prefix_Access;
+
+   --  net.forEachDownstream, as a snapshot of the downstream connections
+   --  attached to Net.
+   function Downstreams (Net : not null Network_Access)
+      return Downstream_Conn_Vectors.Vector;
+
+   --  network.updateCasemapping: switch the network's case-mapping and
+   --  re-key everything that is keyed by it.
+   procedure Update_Casemapping
+     (Net : not null Network_Access; CM : Soja.Irc.Case_Mapping.Kind);
+
+   --  downstreamConn.updateCasemapping.
+   procedure Update_Casemapping (DC : not null Downstream_Conn_Access);
+
+   --  network.autoSaveSASLPlain: remember PLAIN credentials that just worked,
+   --  unless another mechanism (e.g. EXTERNAL) is configured.
+   procedure Auto_Save_SASL_Plain
+     (Net : not null Network_Access; Username, Password : String);
+
    --  uc.appendLog: store a message sent to or received from Entity and
    --  return its ID ("" when it is not stored: no store, a TAGMSG without a
    --  storable tag, a server-mask target, or NickServ).  The first message
@@ -504,6 +530,16 @@ package Soja.Core is
    --  Upstream connection --
    ------------------------
 
+   --  The outcome of handling one upstream message (Go's `error` return of
+   --  uc.handleMessage).  A registration error (Go's registrationError) says
+   --  whether retrying can help; any other error is temporary.
+   type Handle_Result is record
+      Failed                : Boolean := False;
+      Is_Registration_Error : Boolean := False;
+      Reason                : Unbounded_String;
+      Temporary             : Boolean := True;
+   end record;
+
    --  registrationError's carry: whether registration failed, why, and whether
    --  the failure is temporary (reconnect will retry) or a configuration error.
    type Registration_Result is record
@@ -549,8 +585,9 @@ package Soja.Core is
       end case;
    end record;
 
-   --  dc.SendMessage: drop message tags when the message-tags cap is disabled,
-   --  then send.
+   --  dc.SendMessage: adapt the message to the client's enabled capabilities
+   --  (tags, extended-join, ...) or drop it, add the server prefix to
+   --  numerics, then send.
    procedure Send_Message (DC : not null Downstream_Conn_Access;
       M : Soja.Irc.Messages.Message);
 

@@ -54,6 +54,16 @@ package Soja.Irc.Helpers is
    function Is_URI_Prefix (Text : String) return Boolean;
    function Is_Highlight (Text, Nick : String) return Boolean;
 
+   --  Parse the server-time layout ("2006-01-02T15:04:05.000Z"), as Go's
+   --  time.Parse does (see Parse_Chat_History_Bound for the details);
+   --  Valid is False on any error.
+   function Parse_Server_Time
+     (S : String; Valid : out Boolean) return Ada.Calendar.Time;
+
+   --  Go's %q for strings: double-quoted, with quote, backslash and control
+   --  characters escaped.  Used in error messages.
+   function Quote (S : String) return String;
+
    --  parseChatHistoryBound: parse "timestamp=<server-time>"; Valid is False
    --  (Go returns the zero time) on any error.
    function Parse_Chat_History_Bound

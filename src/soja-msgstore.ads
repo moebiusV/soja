@@ -30,6 +30,10 @@ package Soja.Msgstore is
 
    procedure Close (S : in out Store) is abstract;
 
+   --  Whether the store implements Go's ChatHistoryStore (a type assertion in
+   --  Go).  None of the stores ported so far does.
+   function Supports_Chat_History (S : Store) return Boolean is (False);
+
    --  LastMsgID: the last message ID for the given network, entity and date.
    --  It may not refer to a valid message, but can be used in history
    --  queries.

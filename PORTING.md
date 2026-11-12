@@ -289,6 +289,50 @@ this rule is written explicitly, not assumed. Reference anchors:
   and returns *copies* of messages (Go shares pointers); a negative load limit
   raises (Go would panic in `make`).
 
+- **Upstream message handling, slice 4a** (`Soja.Core.Upstream_Dispatch`,
+  `Soja.Core.Downstream_Helpers`; children of `Soja.Core`): `uc.handleMessage`'s
+  preamble (label, batch, prefix, server-time tag), PING, CAP (LS/ACK/NAK/NEW/
+  DEL), upstream SASL PLAIN/EXTERNAL (`AUTHENTICATE`, the 900-series
+  numerics), registration (001 with the autojoin of the network's saved
+  channels, 004, 005 with the CASEMAPPING/CHANMODES/CHANTYPES/STATUSMSG/PREFIX
+  handling and the passthrough to downstreams, end of MOTD, nick-in-use
+  fallback, registration errors), and the forwarding/pending-command helpers
+  and MONITOR sync those use.  The `downstreamConn` methods it calls
+  (`updateSupportedCaps`, `updateNick/Host/Realname/Account`, `endSASL`,
+  `setSupportedCap`) were pulled forward from the downstream step, and
+  `dc.SendMessage` now does Go's full per-capability filtering.  Commands not
+  handled yet (JOIN/PART/KICK/QUIT/NICK/MODE/TOPIC, PRIVMSG/NOTICE/TAGMSG,
+  WHO/WHOIS/LIST/NAMES replies, ...) take the default branch, which forwards
+  them to the downstream connections unchanged, as Go's default does; 4b - 4d
+  replace that.  `Run_Until_Registered` also sends the network's connect
+  commands once registered.
+
+  *Auto-join (user rules, 2026-10-05).*  Soja joins on its own only in the
+  001 handler, once per (re)connection, from the saved channel list.  Go has
+  no rejoin-after-kick or retry code, so "no rejoin after kick / ban / bad
+  key" needs nothing beyond not adding any: the KICK handler (4b) must keep
+  the channel in the DB but not rejoin, and the join-failure numerics are
+  merely forwarded (4d).  The one new behaviour is the **channel-full
+  (`ERR_CHANNELISFULL`) retry with `Soja.Backoff`**, which Go does not have
+  and which lands with the numerics in 4d.
+
+  *Quirks of soju kept as-is (they look like bugs; your call):*
+  - ISUPPORT negation (`-TOKEN`) never takes effect: `parameter` keeps its
+    leading `-`, so none of the `CASEMAPPING`/`CHANMODES`/`CHANTYPES`/
+    `STATUSMSG`/`PREFIX` reset branches can match, and the token is deleted
+    from the table under the wrong name.
+  - `uc.supportsSASL(mech)` compares the mechanism with itself (the loop
+    variable shadows the parameter), so it is true whenever the server
+    advertises `sasl` at all.
+  - `enqueueCommand`'s "give up after 30 s" is `copy(l, l[1:])`, which shifts
+    the queue but keeps its length, duplicating the last entry; the following
+    `len == 1` test then never sends the new command.
+  - `handleCapAck`'s "unsupported SASL mechanism" error formats the
+    capability name, not the mechanism.
+  - `CAP LS`'s "more lines follow" test indexes `msg.Params` with
+    `len(subParams)-2` (not offset by two), which only works for the usual
+    `CAP * LS * :caps` form.
+
 - **Ordering**: `downstream.go`, `upstream.go`, `user.go` and `service.go`
   form one mutually-dependent core (the `network` type in `user.go` holds both
   an `upstreamConn` and downstream connections), so they are ported together,

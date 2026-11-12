@@ -14,6 +14,12 @@ package Soja.Irc.Genmsg is
 
    subtype Message_Vector is Soja.Irc.Messages.Message_Vectors.Vector;
 
+   --  A bare message (no prefix, no tags): Make ("CAP", ["REQ", Caps]).
+   function Make
+     (Command : String;
+      Params  : String_Vectors.Vector := String_Vectors.Empty_Vector)
+      return Soja.Irc.Messages.Message;
+
    --  GenerateJoin: Channels and Keys are parallel (Keys (I) is "" for no
    --  key).  Channels with a key come first, then by name.  (Go sorts the
    --  caller's slices in place; here the inputs are left untouched.)
