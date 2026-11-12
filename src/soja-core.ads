@@ -1,8 +1,11 @@
 pragma Ada_2022;
 
 with Ada.Calendar;
+with Ada.Containers.Indefinite_Ordered_Maps;
 with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded;
+
+with Soja.Backoff;
 
 with Soja.Conn;
 with Soja.Database;
@@ -12,9 +15,11 @@ with Soja.Irc.Case_Mapping;
 with Soja.Irc.Case_Mapping_Maps;
 with Soja.Irc.Members;
 with Soja.Irc.Messages;
+with Soja.Irc.Modes;
 with Soja.Irc.User_Modes;
 with Soja.Logging;
 with Soja.Server;
+with Soja.Timers;
 with Soja.Upstream;
 with Soja.User;
 
@@ -75,6 +80,20 @@ package Soja.Core is
    package Upstream_User_Maps is new Soja.Irc.Case_Mapping_Maps
      (Element => Upstream_User_Access, Null_Element => null);
 
+   --  xirc.CaseMappingMap[bool] / [struct{}]: a set of names (a name is in the
+   --  set when Get returns True).
+   package Flag_Maps is new Soja.Irc.Case_Mapping_Maps
+     (Element => Boolean, Null_Element => False);
+
+   --  Go's zero time.Time, as the "absent" value of time-valued maps/fields.
+   Zero_Time : constant Ada.Calendar.Time := Ada.Calendar.Time_Of (1901, 1, 1);
+
+   --  xirc.CaseMappingMap[time.Time] (network.pushTargets).
+   package Time_Maps is new Soja.Irc.Case_Mapping_Maps
+     (Element => Ada.Calendar.Time, Null_Element => Zero_Time);
+
+   type Backoff_Access is access all Soja.Backoff.Backoffer;
+
    ---------------------------
    --  downstreamRegistration --
    ---------------------------
@@ -90,6 +109,66 @@ package Soja.Core is
    end record;
 
    type Downstream_Registration_Access is access Downstream_Registration;
+
+   -------------------------------------------------
+   --  Per-connection state (upstream.go/downstream.go) --
+   -------------------------------------------------
+
+   --  upstreamBatch: an open BATCH on an upstream.  Outer is the enclosing
+   --  batch (null when top-level).
+   type Upstream_Batch;
+   type Upstream_Batch_Access is access all Upstream_Batch;
+   type Upstream_Batch is record
+      Batch_Type : Unbounded_String;   --  Go's Type
+      Params     : Soja.Irc.Messages.Param_Vectors.Vector;
+      Outer      : Upstream_Batch_Access;
+      Label      : Unbounded_String;
+   end record;
+
+   package Batch_Maps is new Ada.Containers.Indefinite_Ordered_Maps
+     (Key_Type => String, Element_Type => Upstream_Batch);
+
+   --  pendingUpstreamCommand: a downstream command forwarded upstream and
+   --  awaiting its reply.
+   type Pending_Upstream_Command is record
+      Downstream_ID : Long_Long_Integer := 0;
+      Msg           : Soja.Irc.Messages.Message;
+      Sent_At       : Ada.Calendar.Time := Zero_Time;
+   end record;
+
+   package Pending_Command_Vectors is new Ada.Containers.Vectors
+     (Positive, Pending_Upstream_Command);
+
+   --  uc.pendingCmds: command name -> queue.  The first entry has been sent
+   --  and awaits a reply; the rest have not been sent yet.
+   package Pending_Command_Maps is new Ada.Containers.Indefinite_Ordered_Maps
+     (Key_Type => String, Element_Type => Pending_Command_Vectors.Vector,
+      "=" => Pending_Command_Vectors."=");
+
+   --  uc.isupport: token -> optional value (Go's map[string]*string, where a
+   --  nil value is a token without "=").
+   type Isupport_Value is record
+      Has_Value : Boolean := False;
+      Value     : Unbounded_String;
+   end record;
+
+   package Isupport_Maps is new Ada.Containers.Indefinite_Ordered_Maps
+     (Key_Type => String, Element_Type => Isupport_Value);
+
+   --  uc.saslClient: go-sasl's PLAIN and EXTERNAL clients (soju's only two).
+   type Sasl_Mechanism is (Sasl_None, Sasl_Plain, Sasl_External);
+
+   --  downstreamSASL: a client's SASL exchange in progress (nil unless SASL
+   --  is underway).  OAUTHBEARER's options are deferred with oauth2 auth.
+   type Downstream_SASL is record
+      Mechanism      : Unbounded_String;
+      Plain_Set      : Boolean := False;   --  Go's plain != nil
+      Plain_Username : Unbounded_String;
+      Plain_Password : Unbounded_String;
+      Pending_Resp   : Unbounded_String;   --  Go's pendingResp buffer
+   end record;
+
+   type Downstream_SASL_Access is access Downstream_SASL;
 
    --------------
    --  Events --
@@ -168,6 +247,9 @@ package Soja.Core is
    protected type Event_Queue is
       entry Enqueue (E : Event_Access);
       entry Dequeue (E : out Event_Access; Done : out Boolean);
+      --  Non-blocking send (Go's select-with-default): Ok is False, and E is
+      --  not queued, when the queue is full.
+      procedure Try_Enqueue (E : Event_Access; Ok : out Boolean);
       procedure Close;
       function Is_Closed return Boolean;
    private
@@ -209,7 +291,9 @@ package Soja.Core is
       Delivered : Soja.User.Delivered_Store;
       Casemap   : Kind;
 
-      --  Deferred: pushTargets, lastError.
+      Push_Targets   : Time_Maps.Map;
+      Has_Last_Error : Boolean := False;   --  Go's lastError != nil
+      Last_Error     : Unbounded_String;
    end record;
 
    type Downstream_Conn is tagged record
@@ -237,7 +321,8 @@ package Soja.Core is
       Last_Batch_Ref : Long_Long_Integer := 0;
       Casemap     : Kind;
 
-      --  Deferred: sasl, monitored.
+      Sasl      : Downstream_SASL_Access;   --  null unless SASL is underway
+      Monitored : Flag_Maps.Map;
    end record;
 
    type Upstream_Conn is tagged record
@@ -254,6 +339,8 @@ package Soja.Core is
       Available_Channel_Types : Unbounded_String;
       Available_Status_Msg    : Unbounded_String;
       Available_Memberships   : Soja.Irc.Members.Membership_Vectors.Vector;
+      Available_Channel_Modes : Soja.Irc.Modes.Mode_Type_Maps.Map;
+      Isupport                : Isupport_Maps.Map;
 
       Registered : Boolean := False;
       Nick       : Unbounded_String;
@@ -272,8 +359,19 @@ package Soja.Core is
       Got_MOTD       : Boolean := False;
       Has_Desired_Nick : Boolean := False;
 
-      --  Deferred: availableChannelModes, isupport, batches, monitored,
-      --  saslClient, pendingCmds, regain-nick timer/backoff.
+      Batches   : Batch_Maps.Map;
+      Monitored : Flag_Maps.Map;
+
+      Sasl_Mech     : Sasl_Mechanism := Sasl_None;   --  saslClient
+      Sasl_Username : Unbounded_String;               --  PLAIN credentials
+      Sasl_Password : Unbounded_String;
+      Sasl_Started  : Boolean := False;
+
+      Pending_Cmds : Pending_Command_Maps.Map;
+
+      Pending_Regain_Nick : Unbounded_String;
+      Regain_Nick_Timer   : Soja.Timers.Timer_Access;
+      Regain_Nick_Backoff : Backoff_Access;
    end record;
 
    type Upstream_Channel is tagged record
@@ -286,7 +384,9 @@ package Soja.Core is
       Creation_Time : Unbounded_String;
       Complete      : Boolean := False;
 
-      --  Deferred: modes (channelModes), Members, detachTimer.
+      Modes         : Soja.Irc.Modes.Channel_Modes;
+      Members       : Soja.Irc.Members.Member_Maps.Map;
+      Detach_Timer  : Soja.Timers.Timer_Access;
    end record;
 
    ------------------
@@ -310,6 +410,35 @@ package Soja.Core is
      (Srv : Soja.Server.Server_Access;
       IC  : not null Soja.Conn.IRC_Conn_Access;
       ID  : Long_Long_Integer) return Downstream_Conn_Access;
+
+   --  serverSASLMechanisms: the downstream SASL mechanisms the configured
+   --  authenticator supports, comma-joined ("" when none): internal and pam
+   --  authenticate PLAIN; oauth2 authenticates PLAIN and OAUTHBEARER.
+   function Server_SASL_Mechanisms (Srv : Soja.Server.Server_Access)
+      return String;
+
+   --  The `&upstreamChannel{Name, conn, Members}` literal of the JOIN handler:
+   --  a fresh channel whose member map uses the network's case-mapping.
+   function New_Upstream_Channel
+     (UC : not null Upstream_Conn_Access; Name : String)
+      return Upstream_Channel_Access;
+
+   --  upstreamChannel.updateAutoDetach: (re)arm the timer that posts a
+   --  Channel_Detach_Event after Dur; a zero Dur only cancels it.
+   procedure Update_Auto_Detach
+     (Ch : not null Upstream_Channel_Access; Dur : Duration);
+
+   --  uc.isOurNick.
+   function Is_Our_Nick (UC : not null Upstream_Conn_Access; Nick : String)
+      return Boolean;
+
+   --  The regain-nick machinery: while the desired nick is unavailable, a
+   --  backed-off timer posts Try_Regain_Nick_Events; Try_Regain_Nick (run by
+   --  the event handler) re-arms it and sends NICK.
+   procedure Start_Regain_Nick_Timer (UC : not null Upstream_Conn_Access);
+   procedure Stop_Regain_Nick_Timer (UC : not null Upstream_Conn_Access);
+   procedure Try_Regain_Nick
+     (UC : not null Upstream_Conn_Access; Nick : String);
 
    --  user.run(): load the user's networks from the DB, spawn each network's
    --  run task, then drain the event queue, dispatching each event to its

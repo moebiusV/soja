@@ -37,6 +37,24 @@ package body Soja.Server is
    --  package (not the accept loop's block) and it outlives the block.
    type Conn_Task_Access is access Conn_Task;
 
+   protected body Config_Holder is
+      procedure Set (C : Server_Config_Access) is
+      begin
+         Value := C;
+      end Set;
+      function Get return Server_Config_Access is (Value);
+   end Config_Holder;
+
+   function Config (S : Server) return Server_Config_Access is
+   begin
+      return S.Cfg.Get;
+   end Config;
+
+   procedure Set_Config (S : in out Server; Cfg : Server_Config_Access) is
+   begin
+      S.Cfg.Set (Cfg);
+   end Set_Config;
+
    function Logger (S : Server) return Soja.Logging.Logger_Access is
    begin
       return S.Logger;

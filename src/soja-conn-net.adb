@@ -2,6 +2,7 @@ pragma Ada_2022;
 
 with Ada.IO_Exceptions;
 with Ada.Streams;
+with Ada.Strings.Fixed;
 with AWS.Net;
 with Soja.Irc.Hbnf;
 
@@ -105,9 +106,16 @@ package body Soja.Conn.Net is
    end Close;
 
    overriding function Remote_Addr (C : Net_IRC_Conn) return String is
-      Port : constant Positive := C.Sock.Peer_Port;
+      Port : constant String :=
+        Ada.Strings.Fixed.Trim
+          (Positive'Image (C.Sock.Peer_Port), Ada.Strings.Left);
+      Addr : constant String := C.Sock.Peer_Addr;
    begin
-      return C.Sock.Peer_Addr & ":" & Positive'Image (Port);
+      --  net.JoinHostPort: an IPv6 literal is bracketed.
+      if Ada.Strings.Fixed.Index (Addr, ":") > 0 then
+         return "[" & Addr & "]:" & Port;
+      end if;
+      return Addr & ":" & Port;
    end Remote_Addr;
 
 end Soja.Conn.Net;

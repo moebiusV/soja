@@ -18,6 +18,8 @@ package body Soja.Core is
    use Soja.Logging;
    use Soja.Irc.Messages;
    use type AWS.Net.Socket_Access;
+   use type Soja.Timers.Timer_Access;
+   use type Backoff_Access;
 
    ------------
    -- Signal --
@@ -67,6 +69,17 @@ package body Soja.Core is
          end if;
       end Dequeue;
 
+      procedure Try_Enqueue (E : Event_Access; Ok : out Boolean) is
+      begin
+         if Count < Event_Capacity then
+            Buf ((Head + Count - 1) mod Event_Capacity + 1) := E;
+            Count := Count + 1;
+            Ok := True;
+         else
+            Ok := False;
+         end if;
+      end Try_Enqueue;
+
       procedure Close is
       begin
          Closed := True;
@@ -90,6 +103,35 @@ package body Soja.Core is
         (Base   => Base,
          Prefix => To_Unbounded_String (Text));
    end Prefixed;
+
+   --  net.SplitHostPort's host part; the whole string when it has no port
+   --  ("host:port", "[v6]:port"), as newDownstreamConn falls back to.
+   function Host_Of (Addr : String) return String is
+      Colons : Natural := 0;
+      Last   : Natural := 0;
+   begin
+      if Addr'Length > 0 and then Addr (Addr'First) = '[' then
+         for I in Addr'Range loop
+            if Addr (I) = ']' then
+               if I < Addr'Last and then Addr (I + 1) = ':' then
+                  return Addr (Addr'First + 1 .. I - 1);
+               end if;
+               return Addr;
+            end if;
+         end loop;
+         return Addr;
+      end if;
+      for I in Addr'Range loop
+         if Addr (I) = ':' then
+            Colons := Colons + 1;
+            Last := I;
+         end if;
+      end loop;
+      if Colons = 1 then
+         return Addr (Addr'First .. Last - 1);
+      end if;
+      return Addr;
+   end Host_Of;
 
    --  downstream.go's permanentDownstreamCaps: capabilities always advertised
    --  (each with an empty value string).
@@ -141,6 +183,7 @@ package body Soja.Core is
          Net.Channels.Set (To_String (Ch.Name), new Soja.Database.Channel'(Ch));
       end loop;
       Net.Delivered := Soja.User.New_Delivered_Store (CM);
+      Net.Push_Targets := Time_Maps.New_Map (CM);
       Net.Casemap := Case_RFC1459;   --  stdCaseMapping
       return Net;
    end New_Network;
@@ -166,15 +209,29 @@ package body Soja.Core is
       DC.Nick := To_Unbounded_String ("*");
       DC.Nick_CM := To_Unbounded_String ("*");
       DC.Username := To_Unbounded_String ("~u");
-      DC.Hostname := To_Unbounded_String (Remote);
+      DC.Hostname := To_Unbounded_String (Host_Of (Remote));
       DC.Caps := Soja.Irc.Cap_Registry.New_Registry;
       DC.Casemap := Case_ASCII;
+      DC.Monitored := Flag_Maps.New_Map (Case_ASCII);
       DC.Registration := new Downstream_Registration;
       for Cap of Permanent_Downstream_Caps loop
          Soja.Irc.Cap_Registry.Set_Available (DC.Caps, Cap.all, "");
       end loop;
-      --  Deferred: the "sasl" cap value (serverSASLMechanisms) and the
-      --  message-store caps, both of which need srv.Config().
+      Soja.Irc.Cap_Registry.Set_Available
+        (DC.Caps, "sasl", Server_SASL_Mechanisms (Srv));
+      --  TODO (Go): this is racy, chathistory should only be enabled after
+      --  authentication, once the user's store is known to support it.
+      declare
+         Driver : constant String :=
+           To_String (Soja.Server.Config (Srv.all).Msg_Store_Driver);
+      begin
+         if Driver = "fs" or else Driver = "db" then
+            Soja.Irc.Cap_Registry.Set_Available
+              (DC.Caps, "draft/chathistory", "");
+            Soja.Irc.Cap_Registry.Set_Available
+              (DC.Caps, "soju.im/search", "");
+         end if;
+      end;
       return DC;
    end New_Downstream_Conn;
 
@@ -491,6 +548,8 @@ package body Soja.Core is
          for M of Soja.Irc.Members.Std_Memberships loop
             Upc.Available_Memberships.Append (M);
          end loop;
+         Upc.Available_Channel_Modes := Soja.Irc.Modes.Std_Channel_Modes;
+         Upc.Monitored := Flag_Maps.New_Map (Case_RFC1459);
          Upc.Has_Desired_Nick := True;
       end return;
    end Connect_To_Upstream;
@@ -881,6 +940,150 @@ package body Soja.Core is
          end loop;
       end loop;
    end Sort_By_ID;
+
+   ----------------------------
+   -- Server_SASL_Mechanisms --
+   ----------------------------
+
+   function Server_SASL_Mechanisms (Srv : Soja.Server.Server_Access)
+      return String
+   is
+      Driver : constant String :=
+        To_String (Soja.Server.Config (Srv.all).Auth_Driver);
+   begin
+      if Driver = "oauth2" then
+         return "PLAIN,OAUTHBEARER";
+      elsif Driver = "internal" or else Driver = "pam" then
+         return "PLAIN";
+      end if;
+      return "";
+   end Server_SASL_Mechanisms;
+
+   ----------------------------------------
+   -- upstreamChannel and its timers --
+   ----------------------------------------
+
+   function New_Upstream_Channel
+     (UC : not null Upstream_Conn_Access; Name : String)
+      return Upstream_Channel_Access
+   is
+   begin
+      return new Upstream_Channel'
+        (Name    => To_Unbounded_String (Name),
+         Conn    => UC,
+         Members => Soja.Irc.Members.Member_Maps.New_Map
+                      (UC.Network.Casemap),
+         others  => <>);
+   end New_Upstream_Channel;
+
+   type Detach_Action is new Soja.Timers.Action with record
+      UC   : Upstream_Conn_Access;
+      Name : Unbounded_String;
+   end record;
+
+   overriding procedure Run (A : in out Detach_Action) is
+   begin
+      --  Go's blocking `events <- eventChannelDetach{...}`.
+      A.UC.Network.User.Events.Enqueue
+        (new Channel_Detach_Event'(UC => A.UC, Name => A.Name));
+   end Run;
+
+   procedure Update_Auto_Detach
+     (Ch : not null Upstream_Channel_Access; Dur : Duration)
+   is
+   begin
+      Soja.Timers.Stop (Ch.Detach_Timer);
+      if Dur = 0.0 then
+         return;
+      end if;
+      Ch.Detach_Timer := Soja.Timers.After_Func
+        (Dur, new Detach_Action'(UC => Ch.Conn, Name => Ch.Name));
+   end Update_Auto_Detach;
+
+   function Is_Our_Nick (UC : not null Upstream_Conn_Access; Nick : String)
+      return Boolean
+   is
+   begin
+      return Equal_Casemap (UC.Network, To_String (UC.Nick), Nick);
+   end Is_Our_Nick;
+
+   type Regain_Nick_Action is new Soja.Timers.Action with record
+      UC   : Upstream_Conn_Access;
+      Nick : Unbounded_String;
+   end record;
+
+   overriding procedure Run (A : in out Regain_Nick_Action) is
+      Ok : Boolean;
+   begin
+      A.UC.Network.User.Events.Try_Enqueue
+        (new Try_Regain_Nick_Event'(UC => A.UC, Nick => A.Nick), Ok);
+      if not Ok then
+         A.UC.Logger.Print
+           ("skipping nick regain attempt: event queue is full");
+      end if;
+   end Run;
+
+   procedure Stop_Regain_Nick_Timer (UC : not null Upstream_Conn_Access) is
+   begin
+      --  Maybe we're racing with the timer task, so maybe a
+      --  Try_Regain_Nick_Event still arrives; Try_Regain_Nick handles that.
+      Soja.Timers.Stop (UC.Regain_Nick_Timer);
+      UC.Regain_Nick_Backoff := null;
+   end Stop_Regain_Nick_Timer;
+
+   procedure Start_Regain_Nick_Timer (UC : not null Upstream_Conn_Access) is
+      Want : constant String := Soja.Database.Get_Nick
+        (UC.User.User_Record, UC.Network.Network_Record);
+   begin
+      if UC.Regain_Nick_Backoff /= null or else UC.Regain_Nick_Timer /= null
+      then
+         raise Program_Error with "startRegainNickTimer called twice";
+      end if;
+      if Is_Our_Nick (UC, Want) then
+         return;
+      end if;
+
+      UC.Regain_Nick_Backoff := new Soja.Backoff.Backoffer'
+        (Soja.Backoff.New_Backoffer
+           (Min => 15.0, Max => 600.0, Jitter => 10.0));
+      UC.Regain_Nick_Timer := Soja.Timers.After_Func
+        (Soja.Backoff.Next (UC.Regain_Nick_Backoff.all),
+         new Regain_Nick_Action'
+           (UC => UC, Nick => To_Unbounded_String (Want)));
+   end Start_Regain_Nick_Timer;
+
+   procedure Try_Regain_Nick
+     (UC : not null Upstream_Conn_Access; Nick : String)
+   is
+   begin
+      if UC.Regain_Nick_Timer = null then
+         return;
+      end if;
+
+      --  Maybe the user has updated their desired nick.
+      declare
+         Want : constant String := Soja.Database.Get_Nick
+           (UC.User.User_Record, UC.Network.Network_Record);
+         P    : Param_Vectors.Vector;
+      begin
+         if Want /= Nick or else Is_Our_Nick (UC, Want) then
+            Stop_Regain_Nick_Timer (UC);
+            return;
+         end if;
+
+         Soja.Timers.Reset
+           (UC.Regain_Nick_Timer,
+            Soja.Backoff.Next (UC.Regain_Nick_Backoff.all));
+
+         if Length (UC.Pending_Regain_Nick) > 0 then
+            return;
+         end if;
+
+         P.Append (To_Unbounded_String (Want));
+         Send_Message (UC, Make_Message ("NICK", P));
+         UC.Pending_Regain_Nick := To_Unbounded_String (Want);
+      end;
+   end Try_Regain_Nick;
 
    procedure Run_Network (Net : not null Network_Access) is
       use type Ada.Calendar.Time;

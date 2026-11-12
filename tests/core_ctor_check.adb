@@ -133,7 +133,7 @@ begin
       if DC.Username /= To_Unbounded_String ("~u") then
          raise Program_Error with "downstream default username wrong";
       end if;
-      if DC.Hostname /= To_Unbounded_String ("1.2.3.4:6667") then
+      if DC.Hostname /= To_Unbounded_String ("1.2.3.4") then
          raise Program_Error with "downstream hostname wrong";
       end if;
       if not Soja.Irc.Cap_Registry.Is_Available (DC.Caps, "batch")

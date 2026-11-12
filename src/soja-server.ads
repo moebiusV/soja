@@ -3,7 +3,10 @@
 --  database/auth spine and metrics are ported separately.
 pragma Ada_2022;
 
+with Ada.Strings.Unbounded;
+
 with AWS.Net;
+with Soja.Config;
 with Soja.Conn;
 with Soja.Database;
 with Soja.Logging;
@@ -30,8 +33,39 @@ package Soja.Server is
    --  the connection for its lifetime and returns when the peer disconnects.
    type Handler is access procedure (IC : not null Soja.Conn.IRC_Conn_Access);
 
+   --  server.go's Config: the runtime settings the core reads (cmd/soju's
+   --  loadConfig builds it from config.Server).  Defaults are NewServer's.
+   --  The authenticator and file uploader, which are objects in Go, are
+   --  represented by what the core asks of them: the auth driver name
+   --  ("internal", "pam" or "oauth2") and whether an uploader is set.
+   type Server_Config is record
+      Hostname          : Ada.Strings.Unbounded.Unbounded_String :=
+        Ada.Strings.Unbounded.To_Unbounded_String ("localhost");
+      Title             : Ada.Strings.Unbounded.Unbounded_String;
+      Msg_Store_Driver  : Ada.Strings.Unbounded.Unbounded_String;
+      Msg_Store_Path    : Ada.Strings.Unbounded.Unbounded_String;
+      HTTP_Origins      : Soja.Config.String_Vectors.Vector;
+      HTTP_Ingress      : Ada.Strings.Unbounded.Unbounded_String;
+      Accept_Proxy_IPs  : Soja.Config.IPSet;
+      Max_User_Networks : Integer := -1;
+      MOTD              : Ada.Strings.Unbounded.Unbounded_String;
+      Upstream_User_IPs : Soja.Config.IPNet_Vectors.Vector;
+      Disable_Inactive_Users_Delay : Duration := 0.0;
+      Enable_Users_On_Auth : Boolean := False;
+      Auth_Driver       : Ada.Strings.Unbounded.Unbounded_String :=
+        Ada.Strings.Unbounded.To_Unbounded_String ("internal");
+      Has_File_Uploader : Boolean := False;
+   end record;
+
+   type Server_Config_Access is access all Server_Config;
+
    type Server is tagged limited private;
    type Server_Access is access all Server;
+
+   --  Server.Config / SetConfig.  SetConfig swaps the whole object (as Go's
+   --  atomic.Value does); readers holding the old one keep a valid snapshot.
+   function Config (S : Server) return Server_Config_Access;
+   procedure Set_Config (S : in out Server; Cfg : Server_Config_Access);
 
    function Logger (S : Server) return Soja.Logging.Logger_Access;
 
@@ -65,7 +99,15 @@ private
       Set : Boolean := False;
    end Shutdown_Flag;
 
+   protected type Config_Holder is
+      procedure Set (C : Server_Config_Access);
+      function Get return Server_Config_Access;
+   private
+      Value : Server_Config_Access := new Server_Config;
+   end Config_Holder;
+
    type Server is tagged limited record
+      Cfg      : Config_Holder;
       Logger   : Soja.Logging.Logger_Access;
       DB       : Soja.Database.Database_Access;
       H        : Handler;

@@ -246,6 +246,36 @@ this rule is written explicitly, not assumed. Reference anchors:
     after a miss, so `"bobbob"` highlights `bob`.
   - `Parse_CTCP_Message` upper-cases the command ASCII-only.
 
+- **`Soja.Core`'s deferred record fields are filled** (except `user.msgStore`,
+  which arrives with the message store).  Added: `upstreamConn`
+  availableChannelModes/isupport/batches/monitored/SASL client state/
+  pendingCmds/regain-nick state, `upstreamChannel` modes/Members/detachTimer,
+  `downstreamConn` sasl/monitored, `network` pushTargets/lastError.
+  - `time.AfterFunc`/`Reset`/`Stop` is **`Soja.Timers`**: one task per timer
+    running a tagged `Action` (Go's closure).  Timers must be `Stop`ped (which
+    frees them), since a live timer task blocks program exit.  Used by
+    `Update_Auto_Detach` and the regain-nick timer (`Start_`/`Stop_Regain_
+    Nick_Timer`, `Try_Regain_Nick`).
+  - Go's non-blocking `select { case ch <- e: default: }` is
+    `Event_Queue.Try_Enqueue` (the regain-nick timer uses it; the detach timer
+    keeps Go's blocking send).
+  - `Soja.Server` gained `Server_Config` / `Config` / `Set_Config` (soju's
+    `Config`, swapped whole like Go's `atomic.Value`).  Go's `Auth` and
+    `FileUploader` objects are represented by the auth *driver name* and a
+    has-uploader flag, which is all the core asks of them; `Server_SASL_
+    Mechanisms` maps driver -> mechanisms (internal/pam: PLAIN; oauth2: PLAIN +
+    OAUTHBEARER).  `New_Downstream_Conn` now sets the `sasl` cap value and, for
+    the `fs`/`db` message stores, `draft/chathistory` and `soju.im/search`.
+  - `downstreamSASL.oauthBearer` and go-sasl's server/client objects are
+    reduced to the data soja needs (PLAIN/EXTERNAL mechanism + credentials);
+    OAUTHBEARER arrives with oauth2 auth.
+  - Bug fixes found on the way: `Net_IRC_Conn.Remote_Addr` returned
+    `"1.2.3.4: 6667"` (stray space from `Positive'Image`) and did not bracket
+    IPv6; and `newDownstreamConn`'s `net.SplitHostPort` fallback is now
+    honoured (`hostname` is the host part, not `host:port`).
+  - Test note: an unclosed `Soja.Conn.Conn` keeps its writer task blocked and
+    the program alive, so tests that build connections must `Close` them.
+
 - **Ordering**: `downstream.go`, `upstream.go`, `user.go` and `service.go`
   form one mutually-dependent core (the `network` type in `user.go` holds both
   an `upstreamConn` and downstream connections), so they are ported together,
