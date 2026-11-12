@@ -34,6 +34,24 @@ package Soja.Irc.Numerics is
    ERR_UNKNOWNERROR      : constant String := "400";
    ERR_INVALIDCAPCMD     : constant String := "410";
 
+   --  soju-specific replies (upstream/soju/xirc/xirc.go), not in irc.v4.
+   RPL_STATSPING       : constant String := "246";
+   RPL_LOCALUSERS      : constant String := "265";
+   RPL_GLOBALUSERS     : constant String := "266";
+   RPL_WHOISCERTFP     : constant String := "276";
+   RPL_WHOISREGNICK    : constant String := "307";
+   RPL_WHOISSPECIAL    : constant String := "320";
+   RPL_CREATIONTIME    : constant String := "329";
+   RPL_WHOISACCOUNT    : constant String := "330";
+   RPL_TOPICWHOTIME    : constant String := "333";
+   RPL_WHOISBOT        : constant String := "335";
+   RPL_WHOISACTUALLY   : constant String := "338";
+   RPL_WHOSPCRPL       : constant String := "354";
+   RPL_WHOISHOST       : constant String := "378";
+   RPL_WHOISMODES      : constant String := "379";
+   RPL_VISIBLEHOST     : constant String := "396";
+   RPL_WHOISSECURE     : constant String := "671";
+
    --  Replies
    RPL_WELCOME         : constant String := "001";
    RPL_YOURHOST        : constant String := "002";

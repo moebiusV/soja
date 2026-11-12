@@ -2,6 +2,8 @@ pragma Ada_2022;
 
 with Ada.Containers.Vectors;
 
+with Soja.Irc.Case_Mapping_Maps;
+
 --  xirc.go's channel membership and channel status types.
 package Soja.Irc.Members is
 
@@ -14,6 +16,13 @@ package Soja.Irc.Members is
 
    package Membership_Vectors is
      new Ada.Containers.Vectors (Positive, Membership);
+
+   --  Go's *xirc.MembershipSet, and the channel's member table
+   --  (xirc.CaseMappingMap[*MembershipSet], nick -> that member's ranks).
+   type Membership_Set_Access is access Membership_Vectors.Vector;
+
+   package Member_Maps is new Soja.Irc.Case_Mapping_Maps
+     (Element => Membership_Set_Access, Null_Element => null);
 
    --  Add inserts New_M into MS at its rank position in Available's order;
    --  it is a no-op if already present.

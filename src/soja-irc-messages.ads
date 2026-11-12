@@ -2,6 +2,7 @@ pragma Ada_2022;
 
 with Ada.Containers.Indefinite_Ordered_Maps;
 with Ada.Containers.Indefinite_Vectors;
+with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded;
 
 --  IRC message types, translated from gopkg.in/irc.v4's parser.go: the
@@ -56,6 +57,10 @@ package Soja.Irc.Messages is
       Command : Unbounded_String;
       Params  : Param_Vectors.Vector;
    end record;
+
+   package Message_Vectors is new Ada.Containers.Vectors
+     (Index_Type   => Positive,
+      Element_Type => Message);
 
    function Parse_Message (Line : String) return Message;
    function Param (M : Message; I : Natural) return String;

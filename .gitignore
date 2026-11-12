@@ -30,6 +30,7 @@ tests/upstream_connect_check
 tests/upstream_register_check
 tests/downstream_register_check
 tests/certfp_check
+tests/helpers_check
 
 # Test fixtures (regenerate with the openssl commands in certfp_check.adb)
 tests/certfp_cert.pem

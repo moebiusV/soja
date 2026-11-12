@@ -10,7 +10,7 @@ same logic, same quirks — including observable bugs.
 | Go (soju)                  | Ada (soja)        | ada-on-alpine package            |
 | -------------------------- | ----------------- | -------------------------------- |
 | `rate.go` (backoffer)      | `Soja.Backoff`    | — (pure Ada)                     |
-| `irc.go` + `xirc/`         | `Soja.Irc`        | — (pure Ada)                     |
+| `irc.go` + `xirc/`         | `Soja.Irc.*` (`Messages`, `Modes`, `Helpers`, `Xirc`, `Genmsg`, `Members`, …) | — (pure Ada) |
 | `config/config.go`         | `Soja.Config`     | `hbnf` (scfg grammar)             |
 | `conn.go` (TLS, buffering) | `Soja.Conn`       | `aws` (`AWS.Net.SSL`, OpenSSL 3) |
 | `certfp.go` (generateCertFP) | `Soja.Certfp`   | **deferred** — X.509 cert creation (see below) |
@@ -51,7 +51,7 @@ CSPRNG are all already in `bracke-cryptolib`; TLS is already in `aws`.
 | `crypto/tls` (stdlib) | every TLS socket | `AWS.Net.SSL` (OpenSSL 3, in `aws`) |
 | `golang.org/x/crypto/bcrypt` | `internal` auth password hash | `CryptoLib.Bcrypt` (`bracke-cryptolib`) — see `$2a$` note |
 | `crypto/sha256` (stdlib) | cert fingerprints (certfp) | `CryptoLib.Hashes` |
-| `encoding/base64` (stdlib) | SASL PLAIN payload | `CryptoLib.Base64` |
+| `encoding/base64` (stdlib) | SASL PLAIN payload | hand-written in `Soja.Irc.Genmsg` — `CryptoLib.Base64` is a *private* child and unpadded, so it is not usable |
 | `crypto/rand` (stdlib) | bcrypt salt, SASL nonces | `CryptoLib.OS_Random` |
 | `github.com/emersion/go-sasl` | SASL PLAIN / EXTERNAL | hand-written (both trivial) |
 | `github.com/pires/go-proxyproto` | PROXY protocol | hand-written (small) |
@@ -219,6 +219,32 @@ this rule is written explicitly, not assumed. Reference anchors:
   negotiation, `dc.welcome` (the welcome burst + network joins + backlog), the
   ~1700-line `dc.handleMessageRegistered` command dispatch, and the
   `server.Handle` glue (`getOrCreateUser`, the connected/disconnected events).
+
+- **`irc.go` and `xirc/xirc.go` + `genmsg.go` are ported** (`Soja.Irc.Modes`,
+  `.Helpers`, `.Xirc`, `.Genmsg`; `userModes` was already `.User_Modes`).
+  Helpers that in Go take a `downstreamConn`/`upstreamConn` take only the datum
+  they read (`Format_Member_Prefix` takes the multi-prefix flag,
+  `Strip_Member_Prefixes`/`Apply_Channel_Modes` the available memberships and
+  mode-type table), so these packages do not depend on `Soja.Core`; the
+  `Core` upstream-channel record gets its `modes`/`Members` fields (type
+  `Soja.Irc.Modes.Channel_Modes` / `Soja.Irc.Members.Member_Maps.Map`) next.
+  Deviations from Go:
+  - `channelModes.Format` iterates a Go map (random order); soja sorts by mode
+    letter (wire-equivalent, deterministic), like the tag-order note above.
+  - `GenerateJoin` sorts the caller's slices in place in Go; `Generate_Join`
+    sorts a copy.  No Go caller relies on the side effect.
+  - `stripMemberPrefixes` is byte-wise; Go maps runes and compares `byte(r)`.
+    Identical for the ASCII WHO flags it is applied to.
+  - `parseChatHistoryBound` rejects years outside `Ada.Calendar`'s
+    1901..2399 (Go accepts 0..9999); it otherwise follows `time.Parse` for the
+    server-time layout, including its 1-or-2-digit hour and `,` as the
+    fraction separator.
+  - `isWordBoundary`/`isHighlight` use `Ada.Wide_Wide_Characters.Unicode`'s
+    categories for `unicode.IsLetter`/`IsNumber` (same categories; the
+    Unicode version may differ from Go's tables).  `isHighlight` keeps Go's
+    quirk that the left context is relative to the re-sliced remainder
+    after a miss, so `"bobbob"` highlights `bob`.
+  - `Parse_CTCP_Message` upper-cases the command ASCII-only.
 
 - **Ordering**: `downstream.go`, `upstream.go`, `user.go` and `service.go`
   form one mutually-dependent core (the `network` type in `user.go` holds both
