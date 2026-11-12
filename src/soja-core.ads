@@ -18,6 +18,7 @@ with Soja.Irc.Messages;
 with Soja.Irc.Modes;
 with Soja.Irc.User_Modes;
 with Soja.Logging;
+with Soja.Msgstore;
 with Soja.Server;
 with Soja.Timers;
 with Soja.Upstream;
@@ -277,7 +278,9 @@ package Soja.Core is
       Events : Event_Queue_Access;
       Done   : Signal_Access;
 
-      --  Deferred: msgStore.
+      --  user.msgStore: null when no store is configured.  Only the
+      --  "memory" driver is ported; "fs" and "db" leave it null.
+      Msg_Store : Soja.Msgstore.Store_Access;
    end record;
 
    type Network is tagged record
@@ -416,6 +419,16 @@ package Soja.Core is
    --  authenticate PLAIN; oauth2 authenticates PLAIN and OAUTHBEARER.
    function Server_SASL_Mechanisms (Srv : Soja.Server.Server_Access)
       return String;
+
+   --  uc.appendLog: store a message sent to or received from Entity and
+   --  return its ID ("" when it is not stored: no store, a TAGMSG without a
+   --  storable tag, a server-mask target, or NickServ).  The first message
+   --  from a target also records the last message ID in every known client's
+   --  delivery receipt, for the backlog of a reconnecting client.
+   function Append_Log
+     (UC     : not null Upstream_Conn_Access;
+      Entity : String;
+      Msg    : Soja.Irc.Messages.Message) return String;
 
    --  The `&upstreamChannel{Name, conn, Members}` literal of the JOIN handler:
    --  a fresh channel whose member map uses the network's case-mapping.

@@ -2,6 +2,7 @@ pragma Ada_2022;
 
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 
+with Soja.Base64;
 with Soja.Irc.Numerics;
 with Soja.Irc.Xirc;
 
@@ -311,36 +312,7 @@ package body Soja.Irc.Genmsg is
    -------------------
 
    function Generate_SASL (Resp : String) return Message_Vector is
-      Alphabet : constant String :=
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-      --  encoding/base64.StdEncoding: padded standard alphabet.  (CryptoLib's
-      --  Base64 is a private child and unpadded, so it is not usable here.)
-      function Encode (Data : String) return String is
-         Groups : constant Natural := (Data'Length + 2) / 3;
-         R      : String (1 .. Groups * 4);
-         P      : Natural := Data'First;
-         O      : Natural := 0;
-         B0, B1, B2, N : Natural;
-      begin
-         while P <= Data'Last loop
-            N := Natural'Min (3, Data'Last - P + 1);
-            B0 := Character'Pos (Data (P));
-            B1 := (if N > 1 then Character'Pos (Data (P + 1)) else 0);
-            B2 := (if N > 2 then Character'Pos (Data (P + 2)) else 0);
-            R (O + 1) := Alphabet (B0 / 4 + 1);
-            R (O + 2) := Alphabet ((B0 mod 4) * 16 + B1 / 16 + 1);
-            R (O + 3) :=
-              (if N > 1 then Alphabet ((B1 mod 16) * 4 + B2 / 64 + 1)
-               else '=');
-            R (O + 4) := (if N > 2 then Alphabet (B2 mod 64 + 1) else '=');
-            P := P + 3;
-            O := O + 4;
-         end loop;
-         return R;
-      end Encode;
-
-      Encoded : constant String := Encode (Resp);
+      Encoded : constant String := Soja.Base64.Encode (Resp);
       Msgs    : Message_Vector;
       I       : Natural := 0;   --  0-based, as in Go
    begin

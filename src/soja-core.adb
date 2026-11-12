@@ -1,5 +1,6 @@
 pragma Ada_2022;
 
+with Ada.Exceptions;
 with Ada.IO_Exceptions;
 with Ada.Streams;
 with Ada.Strings.Fixed;
@@ -12,6 +13,7 @@ with CryptoLib.Hashes;
 with Soja.Backoff;
 with Soja.Conn.Net;
 with Soja.Irc.Numerics;
+with Soja.Msgstore.Memory;
 
 package body Soja.Core is
 
@@ -19,7 +21,7 @@ package body Soja.Core is
    use Soja.Irc.Messages;
    use type AWS.Net.Socket_Access;
    use type Soja.Timers.Timer_Access;
-   use type Backoff_Access;
+   use type Soja.Msgstore.Store_Access;
 
    ------------
    -- Signal --
@@ -163,6 +165,15 @@ package body Soja.Core is
          "user " & To_String (Rec.Username) & ": ");
       U.Events := new Event_Queue;
       U.Done := new Signal;
+      declare
+         Driver : constant String :=
+           To_String (Soja.Server.Config (Srv.all).Msg_Store_Driver);
+      begin
+         if Driver = "memory" then
+            U.Msg_Store := Soja.Msgstore.Memory.New_Memory_Store;
+         end if;
+         --  "fs" and "db": not ported yet (no history for those users).
+      end;
       return U;
    end New_User;
 
@@ -962,6 +973,98 @@ package body Soja.Core is
    ----------------------------------------
    -- upstreamChannel and its timers --
    ----------------------------------------
+
+   ----------------
+   -- Append_Log --
+   ----------------
+
+   --  storableMessageTags: tags that cause a TAGMSG to be stored.
+   function Is_Storable_Tag (Tag : String) return Boolean is
+     (Tag = "+draft/react" or else Tag = "+react");
+
+   function Append_Log
+     (UC     : not null Upstream_Conn_Access;
+      Entity : String;
+      Msg    : Soja.Irc.Messages.Message) return String
+   is
+      Store : constant Soja.Msgstore.Store_Access := UC.User.Msg_Store;
+   begin
+      if Store = null then
+         return "";
+      end if;
+
+      if To_String (Msg.Command) = "TAGMSG" then
+         declare
+            Storable : Boolean := False;
+         begin
+            for C in Msg.Tags.Data.Iterate loop
+               if Is_Storable_Tag (Tag_Maps.Key (C)) then
+                  Storable := True;
+                  exit;
+               end if;
+            end loop;
+            if not Storable then
+               return "";
+            end if;
+         end;
+      end if;
+
+      --  Don't store messages with a server mask target.
+      if Entity'Length > 0 and then Entity (Entity'First) = '$' then
+         return "";
+      end if;
+
+      declare
+         Entity_CM : constant String :=
+           Soja.Irc.Case_Mapping.Fold (UC.Network.Casemap, Entity);
+      begin
+         --  The messages sent/received from NickServ may contain
+         --  security-related information (like passwords): don't store them.
+         if Entity_CM = "nickserv" then
+            return "";
+         end if;
+
+         if not Soja.User.Has_Target (UC.Network.Delivered, Entity) then
+            --  This is the first message we receive from this target.  Save
+            --  the last message ID in delivery receipts, so that we can send
+            --  the new message in the backlog if an offline client
+            --  reconnects.
+            declare
+               Last_ID : Unbounded_String;
+
+               procedure Record_For (Client_Name : String) is
+               begin
+                  Soja.User.Store_ID
+                    (UC.Network.Delivered, Entity, Client_Name,
+                     To_String (Last_ID));
+               end Record_For;
+            begin
+               --  (In the body, not the declarative part, so that the
+               --  handler below catches a Store_Error from the store.)
+               Last_ID := To_Unbounded_String
+                 (Store.Last_Msg_ID
+                    (UC.Network.Network_Record, Entity_CM,
+                     Ada.Calendar.Clock));
+               Soja.User.For_Each_Client
+                 (UC.Network.Delivered, Record_For'Access);
+            exception
+               when E : Soja.Msgstore.Store_Error =>
+                  UC.Logger.Print
+                    ("failed to log message: failed to get last message ID: "
+                     & Ada.Exceptions.Exception_Message (E));
+                  return "";
+            end;
+         end if;
+
+         return Store.Append (UC.Network.Network_Record, Entity_CM, Msg);
+      exception
+         when E : Soja.Msgstore.Store_Error =>
+            UC.Logger.Print
+              ("failed to append message to store: "
+               & Ada.Exceptions.Exception_Message (E));
+            return "";
+      end;
+   end Append_Log;
 
    function New_Upstream_Channel
      (UC : not null Upstream_Conn_Access; Name : String)

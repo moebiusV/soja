@@ -21,7 +21,7 @@ same logic, same quirks — including observable bugs.
 | `service.go`               | `Soja.Service`    | —                                |
 | `database/`                | `Soja.Database` + `.Sqlite` | `gnatcoll-db` (SQLite) + `bracke-cryptolib` (bcrypt) |
 | `auth/`                    | `Soja.Auth`       | `bracke-cryptolib`, `aws` (oauth2) |
-| `msgstore/`                | `Soja.Msgstore`   | `gnatcoll-db`                    |
+| `msgstore/`                | `Soja.Msgstore` (+ `.Memory`; `.FS`/`.DB` later) | `gnatcoll-db` |
 | `fileupload/`              | `Soja.Fileupload` | `aws`                            |
 | `identd/`                  | `Soja.Identd`     | `GNAT.Sockets`                   |
 | `cmd/soju`                 | `soju` (main)     | —                                |
@@ -51,7 +51,7 @@ CSPRNG are all already in `bracke-cryptolib`; TLS is already in `aws`.
 | `crypto/tls` (stdlib) | every TLS socket | `AWS.Net.SSL` (OpenSSL 3, in `aws`) |
 | `golang.org/x/crypto/bcrypt` | `internal` auth password hash | `CryptoLib.Bcrypt` (`bracke-cryptolib`) — see `$2a$` note |
 | `crypto/sha256` (stdlib) | cert fingerprints (certfp) | `CryptoLib.Hashes` |
-| `encoding/base64` (stdlib) | SASL PLAIN payload | hand-written in `Soja.Irc.Genmsg` — `CryptoLib.Base64` is a *private* child and unpadded, so it is not usable |
+| `encoding/base64` (stdlib) | SASL PLAIN payload, msg IDs | `Soja.Base64` (hand-written: std/URL alphabets, padded/raw) — `CryptoLib.Base64` is a *private* child and unpadded, so it is not usable |
 | `crypto/rand` (stdlib) | bcrypt salt, SASL nonces | `CryptoLib.OS_Random` |
 | `github.com/emersion/go-sasl` | SASL PLAIN / EXTERNAL | hand-written (both trivial) |
 | `github.com/pires/go-proxyproto` | PROXY protocol | hand-written (small) |
@@ -60,7 +60,7 @@ CSPRNG are all already in `bracke-cryptolib`; TLS is already in `aws`.
 | `gopkg.in/irc.v4` + `xirc/` | IRC parse/format, caps | `Soja.Irc` (message grammar via `hbnf`, caps/casemapping hand-written) |
 | `git.sr.ht/~emersion/go-scfg` | config | `hbnf` (scfg grammar) |
 | `nhooyr.io/websocket` | WebSocket transport | hand-written RFC6455 (SHA-1 + base64) |
-| `git.sr.ht/~sircmpwn/go-bare` | msgstore fs encoding | hand-written (small) |
+| `git.sr.ht/~sircmpwn/go-bare` | msgstore message IDs (and the fs store's encoding) | `Soja.Bare` (hand-written: uint, int, string) |
 | `github.com/prometheus/client_golang` | metrics | `aws` + hand-written text format |
 | `github.com/SherClockHolmes/webpush-go` | push | `bracke-cryptolib` + `aws` — defer |
 | `github.com/msteinert/pam/v2` | PAM auth | libpam binding — defer |
@@ -275,6 +275,19 @@ this rule is written explicitly, not assumed. Reference anchors:
     honoured (`hostname` is the host part, not `host:port`).
   - Test note: an unclosed `Soja.Conn.Conn` keeps its writer task blocked and
     the program alive, so tests that build connections must `Close` them.
+
+- **The message store interface and the in-memory store are ported**
+  (`Soja.Msgstore`, `Soja.Msgstore.Memory`), with the BARE message-ID codec
+  (`Soja.Bare`, `Soja.Base64`) so IDs are byte-compatible with soju's (they
+  matter for the fs store, whose IDs are persisted).  `Core.User.Msg_Store` is
+  set from the `Msg_Store_Driver` config ("memory" only; "fs"/"db" leave it
+  null until those stores exist) and `uc.appendLog` is `Core.Append_Log`.
+  Not ported yet: Go's optional store interfaces (`ChatHistoryStore`,
+  `SearchStore`, `RenameNetworkStore`), which arrive with the stores that
+  implement them, and `uc.produce` (needs the downstream send path).
+  Deviations: errors are `Store_Error` exceptions; the memory store keeps
+  and returns *copies* of messages (Go shares pointers); a negative load limit
+  raises (Go would panic in `make`).
 
 - **Ordering**: `downstream.go`, `upstream.go`, `user.go` and `service.go`
   form one mutually-dependent core (the `network` type in `user.go` holds both
