@@ -41,4 +41,45 @@ package Soja.Core.Downstream_Helpers is
       M  : Soja.Irc.Messages.Message);
    procedure End_SASL (DC : not null Downstream_Conn_Access);
 
+
+   ------------------------------------------------------------------
+   --  Message IDs (delivery receipts) and channel replay
+   ------------------------------------------------------------------
+
+   --  dc.messageSupportsBacklog: only PRIVMSG and NOTICE are replayed,
+   --  because replaying anything else would mess up client state.
+   function Message_Supports_Backlog
+     (M : Soja.Irc.Messages.Message) return Boolean;
+
+   --  dc.sendMessageWithID: send M, then (for clients without
+   --  draft/chathistory) a PING whose token carries the message's internal
+   --  ID, so the client's PONG acknowledges delivery.  ID "" sends no PING.
+   procedure Send_Message_With_ID
+     (DC : not null Downstream_Conn_Access;
+      M  : Soja.Irc.Messages.Message;
+      ID : String);
+
+   --  dc.advanceMessageWithID: advance history to ID without sending M (e.g.
+   --  for self-messages when echo-message isn't enabled).
+   procedure Advance_Message_With_ID
+     (DC : not null Downstream_Conn_Access;
+      M  : Soja.Irc.Messages.Message;
+      ID : String);
+
+   --  dc.ackMsgID / handlePong: record that this client received ID.
+   procedure Ack_Msg_ID (DC : not null Downstream_Conn_Access; ID : String);
+   procedure Handle_Pong (DC : not null Downstream_Conn_Access; Token : String);
+
+   --  sendTopic / sendNames / forwardChannel (downstream.go): replay a joined
+   --  channel's topic, read marker and member list to a client.
+   procedure Send_Topic
+     (DC : not null Downstream_Conn_Access;
+      Ch : not null Upstream_Channel_Access);
+   procedure Send_Names
+     (DC : not null Downstream_Conn_Access;
+      Ch : not null Upstream_Channel_Access);
+   procedure Forward_Channel
+     (DC : not null Downstream_Conn_Access;
+      Ch : not null Upstream_Channel_Access);
+
 end Soja.Core.Downstream_Helpers;

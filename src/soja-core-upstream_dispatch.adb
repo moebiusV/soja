@@ -2,9 +2,12 @@ pragma Ada_2022;
 
 with Ada.Calendar;
 with Ada.Containers;
+with Ada.Calendar.Conversions;
 with Ada.Containers.Indefinite_Hashed_Sets;
+with Ada.Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Strings.Hash;
+with Interfaces.C;
 
 with Soja.Base64;
 with Soja.Core.Downstream_Helpers;
@@ -13,9 +16,9 @@ with Soja.Irc.Cap_Registry;
 with Soja.Irc.Case_Mapping;
 with Soja.Irc.Genmsg;
 with Soja.Irc.Helpers;
-with Soja.Irc.Members;
 with Soja.Irc.Modes;
 with Soja.Irc.Numerics;
+with Soja.Irc.User_Modes;
 with Soja.Irc.Xirc;
 
 package body Soja.Core.Upstream_Dispatch is
@@ -28,6 +31,7 @@ package body Soja.Core.Upstream_Dispatch is
 
    use type Ada.Calendar.Time;
    use type Ada.Containers.Count_Type;
+   use type Soja.Irc.Members.Membership_Set_Access;
 
    ----------------------------------------------------------------------
    --  Static tables (upstream.go / downstream.go)
@@ -302,15 +306,18 @@ package body Soja.Core.Upstream_Dispatch is
                      (Downstream_ID => DC.ID, Msg => Copy (M),
                       Sent_At => Zero_Time));
 
-         --  If we didn't get a reply after a while, just give up.  (Go
-         --  writes this as copy(l, l[1:]), which shifts the entries down
-         --  but keeps the length, so the last one is duplicated; kept.)
+         --  If we didn't get a reply after a while, just give up on it, and
+         --  send the next command, which nothing else would.  (Go writes
+         --  this as copy(l, l[1:]), which keeps the length and so
+         --  duplicates the last entry, and its `len == 1` test then
+         --  never sends the new command; fixed, see PORTING.md.)
          if V (1).Sent_At /= Zero_Time
            and then Ada.Calendar.Clock - V (1).Sent_At > 30.0
          then
-            for I in 1 .. Natural (V.Length) - 1 loop
-               V.Replace_Element (I, V (I + 1));
-            end loop;
+            V.Delete_First;
+            UC.Pending_Cmds.Replace (Cmd, V);
+            Send_Next_Pending_Command (UC, Cmd);
+            return;
          end if;
 
          UC.Pending_Cmds.Replace (Cmd, V);
@@ -487,11 +494,31 @@ package body Soja.Core.Upstream_Dispatch is
    function Supports_SASL
      (UC : not null Upstream_Conn_Access; Mech : String) return Boolean
    is
-      pragma Unreferenced (Mech);
    begin
-      --  Go: `if strings.EqualFold(mech, mech)` -- the loop variable shadows
-      --  the parameter, so any advertised "sasl" counts as support.
-      return Is_Available (UC.Caps, "sasl");
+      if not Is_Available (UC.Caps, "sasl") then
+         return False;
+      end if;
+
+      --  A "sasl" cap without a value supports every mechanism; otherwise
+      --  the value lists them (case-insensitively).  (Go compares the loop
+      --  variable with itself, so it accepted any list; fixed.)
+      declare
+         V     : constant String := Value (UC.Caps, "sasl");
+         Start : Positive := V'First;
+      begin
+         if V = "" then
+            return True;
+         end if;
+         for I in V'First .. V'Last + 1 loop
+            if I > V'Last or else V (I) = ',' then
+               if Upper (V (Start .. I - 1)) = Upper (Mech) then
+                  return True;
+               end if;
+               Start := I + 1;
+            end if;
+         end loop;
+         return False;
+      end;
    end Supports_SASL;
 
    function Request_SASL (UC : not null Upstream_Conn_Access) return Boolean is
@@ -537,8 +564,8 @@ package body Soja.Core.Upstream_Dispatch is
                UC.Logger.Print ("starting SASL EXTERNAL authentication");
                UC.Sasl_Mech := Sasl_External;
             else
-               --  (Go formats the capability name here, not the mechanism.)
-               return Fail ("unsupported SASL mechanism " & Quote (Name));
+               --  (Go formats the capability name here; fixed.)
+               return Fail ("unsupported SASL mechanism " & Quote (Mech));
             end if;
             Send_Message (UC, Make ("AUTHENTICATE", [Mech]));
          end;
@@ -750,6 +777,841 @@ package body Soja.Core.Upstream_Dispatch is
    --  uc.handleMessage, case by case
    ----------------------------------------------------------------------
 
+   ----------------------------------------------------------------------
+   --  Channel state (4b): users, channels, produce
+   ----------------------------------------------------------------------
+
+   procedure Cache_User_Info
+     (UC   : not null Upstream_Conn_Access;
+      Nick : String;
+      Info : Soja.Upstream.Upstream_User)
+   is
+      Existing : constant Upstream_User_Access := UC.Users.Get (Nick);
+      Data     : Soja.Upstream.Upstream_User := Info;
+   begin
+      if Nick = "" then
+         raise Program_Error with "cacheUserInfo called with empty nickname";
+      end if;
+
+      if Existing = null then
+         if Length (Data.Nickname) > 0 then
+            UC.Users.Set (To_String (Data.Nickname),
+                          new Soja.Upstream.Upstream_User'(Data));
+         else
+            Data.Nickname := To_Unbounded_String (Nick);
+            UC.Users.Set (Nick, new Soja.Upstream.Upstream_User'(Data));
+         end if;
+      else
+         Soja.Upstream.Update_From (Existing.all, Info);
+         if Length (Info.Nickname) > 0
+           and then Nick /= To_String (Info.Nickname)
+         then
+            UC.Users.Del (Nick);
+            UC.Users.Set (To_String (Existing.Nickname), Existing);
+         end if;
+      end if;
+   end Cache_User_Info;
+
+   procedure Update_Channel_Auto_Detach
+     (UC : not null Upstream_Conn_Access; Name : String)
+   is
+      Uch : constant Upstream_Channel_Access := UC.Channels.Get (Name);
+      Ch  : constant Channel_Access := UC.Network.Channels.Get (Name);
+   begin
+      if Uch = null or else Ch = null or else Ch.Detached then
+         return;
+      end if;
+      Update_Auto_Detach (Uch, Ch.Detach_After);
+   end Update_Channel_Auto_Detach;
+
+   procedure Produce
+     (UC        : not null Upstream_Conn_Access;
+      Target    : String;
+      Msg       : Soja.Irc.Messages.Message;
+      Origin_ID : Long_Long_Integer)
+   is
+      use Soja.Core.Downstream_Helpers;
+      Msg_ID   : constant String :=
+        (if Target /= "" then Append_Log (UC, Target, Msg) else "");
+      Ch       : constant Channel_Access := UC.Network.Channels.Get (Target);
+      Detached : constant Boolean := Ch /= null and then Ch.Detached;
+   begin
+      --  Don't forward messages if it's a detached channel.
+      for DC of Downstreams (UC.Network) loop
+         declare
+            Echo : constant Boolean :=
+              DC.ID = Origin_ID and then Msg.Prefix /= null
+              and then Is_Our_Nick (UC, To_String (Msg.Prefix.Name));
+         begin
+            if not Detached
+              and then (not Echo or else Is_Enabled (DC.Caps, "echo-message"))
+            then
+               Send_Message_With_ID (DC, Msg, Msg_ID);
+            else
+               Advance_Message_With_ID (DC, Msg, Msg_ID);
+            end if;
+         end;
+      end loop;
+   end Produce;
+
+   procedure Parse_Membership_Prefix
+     (UC          : not null Upstream_Conn_Access;
+      S           : String;
+      Memberships : out Soja.Irc.Members.Membership_Vectors.Vector;
+      Nick        : out Unbounded_String)
+   is
+      I : Natural := 0;
+   begin
+      Memberships.Clear;
+      for M of UC.Available_Memberships loop
+         exit when I >= S'Length;
+         if S (S'First + I) = M.Prefix then
+            Memberships.Append (M);
+            I := I + 1;
+         end if;
+      end loop;
+      Nick := To_Unbounded_String (S (S'First + I .. S'Last));
+   end Parse_Membership_Prefix;
+
+   --  strings.Split(s, ","): every piece, empty ones included.
+   function Split_Commas (S : String) return String_Vectors.Vector is
+      V     : String_Vectors.Vector;
+      Start : Positive := S'First;
+   begin
+      for I in S'Range loop
+         if S (I) = ',' then
+            V.Append (S (Start .. I - 1));
+            Start := I + 1;
+         end if;
+      end loop;
+      V.Append (S (Start .. S'Last));
+      return V;
+   end Split_Commas;
+
+   function Unknown_Channel (Name : String) return Handle_Result is
+     (Fail ("unknown channel " & Quote (Name)));
+
+   function Is_Detached
+     (UC : not null Upstream_Conn_Access; Name : String) return Boolean
+   is
+      C : constant Channel_Access := UC.Network.Channels.Get (Name);
+   begin
+      return C /= null and then C.Detached;
+   end Is_Detached;
+
+   --  uc.appendLog, for the callers that ignore the message ID.
+   procedure Log
+     (UC : not null Upstream_Conn_Access; Entity : String; Msg : Message)
+   is
+      ID : constant String := Append_Log (UC, Entity, Msg);
+      pragma Unreferenced (ID);
+   begin
+      null;
+   end Log;
+
+   function Handle_Batch
+     (UC : not null Upstream_Conn_Access;
+      Msg : Message;
+      Label : Unbounded_String;
+      Outer : Upstream_Batch_Access) return Handle_Result
+   is
+      Bad : Boolean;
+      R   : Handle_Result := Check_Params (Msg, 1, Bad);
+   begin
+      if Bad then
+         return R;
+      end if;
+
+      declare
+         Tag : constant String := Param (Msg, 0);
+      begin
+         if Tag'Length > 0 and then Tag (Tag'First) = '+' then
+            declare
+               Name : constant String := Tag (Tag'First + 1 .. Tag'Last);
+               B    : Upstream_Batch;
+            begin
+               if UC.Batches.Contains (Name) then
+                  return Fail
+                    ("unexpected BATCH reference tag: batch was already "
+                     & "defined: " & Quote (Name));
+               end if;
+               R := Check_Params (Msg, 2, Bad);
+               if Bad then
+                  return R;
+               end if;
+               B.Batch_Type := Msg.Params (2);
+               for I in 3 .. Natural (Msg.Params.Length) loop
+                  B.Params.Append (Msg.Params (I));
+               end loop;
+               B.Outer := Outer;
+               B.Label := Label;
+               if Length (B.Label) = 0 and then Outer /= null then
+                  B.Label := Outer.Label;
+               end if;
+               UC.Batches.Insert (Name, B);
+            end;
+         elsif Tag'Length > 0 and then Tag (Tag'First) = '-' then
+            declare
+               Name : constant String := Tag (Tag'First + 1 .. Tag'Last);
+            begin
+               if not UC.Batches.Contains (Name) then
+                  return Fail ("unknown BATCH reference tag: " & Quote (Name));
+               end if;
+               UC.Batches.Delete (Name);
+            end;
+         else
+            return Fail
+              ("unexpected BATCH reference tag: missing +/- prefix: "
+               & Quote (Tag));
+         end if;
+      end;
+      return Success;
+   end Handle_Batch;
+
+   function Handle_Nick
+     (UC : not null Upstream_Conn_Access; Msg : Message) return Handle_Result
+   is
+      use Soja.Core.Downstream_Helpers;
+      Bad : Boolean;
+      R   : constant Handle_Result := Check_Params (Msg, 1, Bad);
+   begin
+      if Bad then
+         return R;
+      end if;
+
+      declare
+         New_Nick : constant String := Param (Msg, 0);
+         Old_Nick : constant String := To_String (Msg.Prefix.Name);
+         Me       : Boolean := False;
+
+         procedure Rename (Name : String; Ch : Upstream_Channel_Access) is
+            pragma Unreferenced (Name);
+            Memberships : constant Soja.Irc.Members.Membership_Set_Access :=
+              Ch.Members.Get (Old_Nick);
+         begin
+            if Memberships /= null then
+               Ch.Members.Del (Old_Nick);
+               Ch.Members.Set (New_Nick, Memberships);
+               Log (UC, To_String (Ch.Name), Msg);
+            end if;
+         end Rename;
+      begin
+         if Is_Our_Nick (UC, Old_Nick) then
+            UC.Logger.Print
+              ("changed nick from " & Quote (To_String (UC.Nick)) & " to "
+               & Quote (New_Nick));
+            Me := True;
+            UC.Nick := To_Unbounded_String (New_Nick);
+
+            if Equal_Casemap
+                 (UC.Network, To_String (UC.Pending_Regain_Nick), New_Nick)
+            then
+               UC.Pending_Regain_Nick := Null_Unbounded_String;
+               Stop_Regain_Nick_Timer (UC);
+            end if;
+            if Equal_Casemap
+                 (UC.Network,
+                  Soja.Database.Get_Nick
+                    (UC.User.User_Record, UC.Network.Network_Record),
+                  New_Nick)
+            then
+               UC.Has_Desired_Nick := True;
+            end if;
+         end if;
+
+         UC.Channels.For_Each (Rename'Access);
+
+         Cache_User_Info
+           (UC, Old_Nick,
+            (Nickname => To_Unbounded_String (New_Nick), others => <>));
+
+         if not Me then
+            Forward_Message (UC, Msg);
+         else
+            for DC of Downstreams (UC.Network) loop
+               Update_Nick (DC);
+            end loop;
+            Update_Monitor (UC);
+         end if;
+      end;
+      return Success;
+   end Handle_Nick;
+
+   function Handle_Join
+     (UC : not null Upstream_Conn_Access; Msg : Message) return Handle_Result
+   is
+      Bad : Boolean;
+      R   : constant Handle_Result := Check_Params (Msg, 1, Bad);
+      UU  : Soja.Upstream.Upstream_User;
+   begin
+      if Bad then
+         return R;
+      end if;
+
+      UU.Username := Msg.Prefix.User;
+      UU.Hostname := Msg.Prefix.Host;
+      if Is_Enabled (UC.Caps, "away-notify") then
+         --  We have enough info to build the user flags in a best-effort
+         --  manner: H (here) first, replaced by G later if the user is AWAY;
+         --  and the bot flag if the JOIN comes from a bot.
+         UU.Flags := To_Unbounded_String ("H");
+         if Has_Tag (Msg.Tags, "bot") and then UC.Isupport.Contains ("BOT")
+           and then UC.Isupport ("BOT").Has_Value
+         then
+            Append (UU.Flags, UC.Isupport ("BOT").Value);
+         end if;
+      end if;
+      if Msg.Params.Length > 2 then   --  extended-join
+         UU.Account := Msg.Params (2);
+         UU.Realname := Msg.Params (3);
+      end if;
+      Cache_User_Info (UC, To_String (Msg.Prefix.Name), UU);
+
+      for Name of Split_Commas (Param (Msg, 0)) loop
+         if Is_Our_Nick (UC, To_String (Msg.Prefix.Name)) then
+            UC.Logger.Print ("joined channel " & Quote (Name));
+            UC.Channels.Set (Name, New_Upstream_Channel (UC, Name));
+            Update_Channel_Auto_Detach (UC, Name);
+
+            Send_Message (UC, Make ("MODE", [Name]));
+         else
+            declare
+               Ch : constant Upstream_Channel_Access := UC.Channels.Get (Name);
+            begin
+               if Ch = null then
+                  return Unknown_Channel (Name);
+               end if;
+               Ch.Members.Set
+                 (To_String (Msg.Prefix.Name),
+                  new Soja.Irc.Members.Membership_Vectors.Vector);
+            end;
+         end if;
+
+         declare
+            Ch_Msg : Message := Copy (Msg);
+         begin
+            Ch_Msg.Params.Replace_Element (1, To_Unbounded_String (Name));
+            Produce (UC, Name, Ch_Msg, 0);
+         end;
+      end loop;
+      return Success;
+   end Handle_Join;
+
+   function Handle_Part
+     (UC : not null Upstream_Conn_Access; Msg : Message) return Handle_Result
+   is
+      Bad : Boolean;
+      R   : constant Handle_Result := Check_Params (Msg, 1, Bad);
+   begin
+      if Bad then
+         return R;
+      end if;
+
+      for Name of Split_Commas (Param (Msg, 0)) loop
+         if Is_Our_Nick (UC, To_String (Msg.Prefix.Name)) then
+            UC.Logger.Print ("parted channel " & Quote (Name));
+            declare
+               Uch : constant Upstream_Channel_Access := UC.Channels.Get (Name);
+
+               procedure Forget (Nick : String;
+                  Set : Soja.Irc.Members.Membership_Set_Access)
+               is
+                  pragma Unreferenced (Set);
+               begin
+                  if not Should_Cache_User_Info (UC, Nick) then
+                     UC.Users.Del (Nick);
+                  end if;
+               end Forget;
+            begin
+               if Uch /= null then
+                  UC.Channels.Del (Name);
+                  Update_Auto_Detach (Uch, 0.0);
+                  Uch.Members.For_Each (Forget'Access);
+               end if;
+            end;
+         else
+            declare
+               Ch   : constant Upstream_Channel_Access := UC.Channels.Get (Name);
+               Nick : constant String := To_String (Msg.Prefix.Name);
+            begin
+               if Ch = null then
+                  return Unknown_Channel (Name);
+               end if;
+               Ch.Members.Del (Nick);
+               if not Should_Cache_User_Info (UC, Nick) then
+                  UC.Users.Del (Nick);
+               end if;
+            end;
+         end if;
+
+         declare
+            Ch_Msg : Message := Copy (Msg);
+         begin
+            Ch_Msg.Params.Replace_Element (1, To_Unbounded_String (Name));
+            Produce (UC, Name, Ch_Msg, 0);
+         end;
+      end loop;
+      return Success;
+   end Handle_Part;
+
+   function Handle_Kick
+     (UC : not null Upstream_Conn_Access; Msg : Message) return Handle_Result
+   is
+      Bad : Boolean;
+      R   : constant Handle_Result := Check_Params (Msg, 2, Bad);
+   begin
+      if Bad then
+         return R;
+      end if;
+
+      declare
+         Channel : constant String := Param (Msg, 0);
+         Victim  : constant String := Param (Msg, 1);
+      begin
+         if Is_Our_Nick (UC, Victim) then
+            --  We are not rejoining: the channel stays in the network's saved
+            --  list (so it is joined again on the next connection), but
+            --  nothing here sends a JOIN.
+            UC.Logger.Print
+              ("kicked from channel " & Quote (Channel) & " by "
+               & To_String (Msg.Prefix.Name));
+            declare
+               Uch : constant Upstream_Channel_Access :=
+                 UC.Channels.Get (Channel);
+
+               procedure Forget (Nick : String;
+                  Set : Soja.Irc.Members.Membership_Set_Access)
+               is
+                  pragma Unreferenced (Set);
+               begin
+                  if not Should_Cache_User_Info (UC, Nick) then
+                     UC.Users.Del (Nick);
+                  end if;
+               end Forget;
+            begin
+               if Uch /= null then
+                  UC.Channels.Del (Channel);
+                  Uch.Members.For_Each (Forget'Access);
+               end if;
+            end;
+         else
+            declare
+               Ch : constant Upstream_Channel_Access :=
+                 UC.Channels.Get (Channel);
+            begin
+               if Ch = null then
+                  return Unknown_Channel (Channel);
+               end if;
+               Ch.Members.Del (Victim);
+               if not Should_Cache_User_Info (UC, Victim) then
+                  UC.Users.Del (Victim);
+               end if;
+            end;
+         end if;
+
+         Produce (UC, Channel, Msg, 0);
+      end;
+      return Success;
+   end Handle_Kick;
+
+   procedure Handle_Quit
+     (UC : not null Upstream_Conn_Access; Msg : Message)
+   is
+      Nick : constant String := To_String (Msg.Prefix.Name);
+
+      procedure Leave (Name : String; Ch : Upstream_Channel_Access) is
+         pragma Unreferenced (Name);
+      begin
+         if Ch.Members.Has (Nick) then
+            Ch.Members.Del (Nick);
+            Log (UC, To_String (Ch.Name), Msg);
+         end if;
+      end Leave;
+   begin
+      if Is_Our_Nick (UC, Nick) then
+         UC.Logger.Print ("quit");
+      end if;
+
+      UC.Channels.For_Each (Leave'Access);
+      UC.Users.Del (Nick);
+
+      if Nick /= To_String (UC.Nick) then
+         Forward_Message (UC, Msg);
+      end if;
+   end Handle_Quit;
+
+   function Handle_Topic_Reply
+     (UC : not null Upstream_Conn_Access;
+      Msg : Message;
+      Downstream_ID : Long_Long_Integer) return Handle_Result
+   is
+      Bad : Boolean;
+      R   : constant Handle_Result := Check_Params (Msg, 3, Bad);
+   begin
+      if Bad then
+         return R;
+      end if;
+      declare
+         Ch : constant Upstream_Channel_Access := UC.Channels.Get (Param (Msg, 1));
+      begin
+         if Ch = null then
+            Forward_Msg_By_ID (UC, Downstream_ID, Msg);
+         elsif To_String (Msg.Command) = RPL_TOPIC then
+            Ch.Topic := Msg.Params (3);
+         else
+            Ch.Topic := Null_Unbounded_String;
+         end if;
+      end;
+      return Success;
+   end Handle_Topic_Reply;
+
+   function Handle_Topic
+     (UC : not null Upstream_Conn_Access; Msg : Message) return Handle_Result
+   is
+      Bad : Boolean;
+      R   : constant Handle_Result := Check_Params (Msg, 1, Bad);
+   begin
+      if Bad then
+         return R;
+      end if;
+      declare
+         Ch : constant Upstream_Channel_Access := UC.Channels.Get (Param (Msg, 0));
+      begin
+         if Ch = null then
+            return Unknown_Channel (Param (Msg, 0));
+         end if;
+         if Msg.Params.Length > 1 then
+            Ch.Topic := Msg.Params (2);
+            Ch.Topic_Who := new Prefix'(Msg.Prefix.all);
+            Ch.Topic_Time := Ada.Calendar.Clock;   --  TODO (Go): the time tag
+         else
+            Ch.Topic := Null_Unbounded_String;
+         end if;
+         Produce (UC, To_String (Ch.Name), Msg, 0);
+      end;
+      return Success;
+   end Handle_Topic;
+
+   --  applyChannelModes(ch, modeStr, args) with the upstream's tables.
+   function Apply_Modes
+     (UC       : not null Upstream_Conn_Access;
+      Ch       : not null Upstream_Channel_Access;
+      Mode_Str : String;
+      Args     : Param_Vectors.Vector) return Handle_Result
+   is
+   begin
+      Soja.Irc.Modes.Apply_Channel_Modes
+        (UC.Available_Memberships, UC.Available_Channel_Modes, Ch.Members,
+         Ch.Modes, Mode_Str, Args);
+      return Success;
+   exception
+      when E : Soja.Irc.Modes.Mode_Error =>
+         return Fail (Ada.Exceptions.Exception_Message (E));
+   end Apply_Modes;
+
+   --  msg.Params[From:] (0-based).
+   function Params_From (Msg : Message; From : Natural)
+      return Param_Vectors.Vector
+   is
+      V : Param_Vectors.Vector;
+   begin
+      for I in From + 1 .. Natural (Msg.Params.Length) loop
+         V.Append (Msg.Params (I));
+      end loop;
+      return V;
+   end Params_From;
+
+   function Handle_Mode
+     (UC : not null Upstream_Conn_Access; Msg : Message) return Handle_Result
+   is
+      Bad : Boolean;
+      R   : Handle_Result := Check_Params (Msg, 2, Bad);
+   begin
+      if Bad then
+         return R;
+      end if;
+
+      declare
+         Name     : constant String := Param (Msg, 0);
+         Mode_Str : constant String := Param (Msg, 1);
+      begin
+         if not Is_Channel (UC, Name) then   --  user mode change
+            declare
+               Ok : Boolean;
+            begin
+               if Name /= To_String (UC.Nick) then
+                  return Fail
+                    ("received MODE message for unknown nick "
+                     & Quote (Name));
+               end if;
+               Soja.Irc.User_Modes.Apply (UC.Modes, Mode_Str, Ok);
+               if not Ok then
+                  return Fail
+                    ("malformed modestring " & Quote (Mode_Str)
+                     & ": missing plus/minus");
+               end if;
+               Forward_Message (UC, Msg);
+            end;
+         else   --  channel mode change
+            declare
+               Ch : constant Upstream_Channel_Access := UC.Channels.Get (Name);
+            begin
+               if Ch = null then
+                  return Unknown_Channel (Name);
+               end if;
+               R := Apply_Modes (UC, Ch, Mode_Str, Params_From (Msg, 2));
+               if R.Failed then
+                  return R;
+               end if;
+
+               Log (UC, To_String (Ch.Name), Msg);
+
+               if not Is_Detached (UC, Name) then
+                  Forward_Message (UC, Msg);
+               end if;
+            end;
+         end if;
+      end;
+      return Success;
+   end Handle_Mode;
+
+   function Handle_User_Mode_Is
+     (UC : not null Upstream_Conn_Access; Msg : Message) return Handle_Result
+   is
+      Bad : Boolean;
+      R   : constant Handle_Result := Check_Params (Msg, 1, Bad);
+      Ok  : Boolean;
+   begin
+      if Bad then
+         return R;
+      end if;
+      declare
+         Mode_Str : constant String :=
+           (if Msg.Params.Length > 1 then Param (Msg, 1) else "");
+      begin
+         UC.Modes.Value := Null_Unbounded_String;
+         Soja.Irc.User_Modes.Apply (UC.Modes, Mode_Str, Ok);
+         if not Ok then
+            return Fail
+              ("malformed modestring " & Quote (Mode_Str)
+               & ": missing plus/minus");
+         end if;
+      end;
+      Forward_Message (UC, Msg);
+      return Success;
+   end Handle_User_Mode_Is;
+
+   function Handle_Channel_Mode_Is
+     (UC : not null Upstream_Conn_Access;
+      Msg : Message;
+      Downstream_ID : Long_Long_Integer) return Handle_Result
+   is
+      Bad : Boolean;
+      R   : Handle_Result := Check_Params (Msg, 2, Bad);
+   begin
+      if Bad then
+         return R;
+      end if;
+
+      declare
+         Channel  : constant String := Param (Msg, 1);
+         Mode_Str : constant String :=
+           (if Msg.Params.Length > 2 then Param (Msg, 2) else "");
+         Ch       : constant Upstream_Channel_Access := UC.Channels.Get (Channel);
+      begin
+         if Ch = null then
+            Forward_Msg_By_ID (UC, Downstream_ID, Msg);
+            return Success;
+         end if;
+
+         declare
+            First_Mode : constant Boolean := not Ch.Modes.Known;
+         begin
+            Ch.Modes.Known := True;
+            Ch.Modes.Values.Clear;
+            R := Apply_Modes (UC, Ch, Mode_Str, Params_From (Msg, 3));
+            if R.Failed then
+               return R;
+            end if;
+            if First_Mode and then not Is_Detached (UC, Channel) then
+               Forward_Message (UC, Msg);
+            end if;
+         end;
+      end;
+      return Success;
+   end Handle_Channel_Mode_Is;
+
+   function Handle_Creation_Time
+     (UC : not null Upstream_Conn_Access;
+      Msg : Message;
+      Downstream_ID : Long_Long_Integer) return Handle_Result
+   is
+      Bad : Boolean;
+      R   : constant Handle_Result := Check_Params (Msg, 3, Bad);
+   begin
+      if Bad then
+         return R;
+      end if;
+      declare
+         Channel : constant String := Param (Msg, 1);
+         Ch      : constant Upstream_Channel_Access := UC.Channels.Get (Channel);
+      begin
+         if Ch = null then
+            Forward_Msg_By_ID (UC, Downstream_ID, Msg);
+            return Success;
+         end if;
+         declare
+            First : constant Boolean := Length (Ch.Creation_Time) = 0;
+         begin
+            Ch.Creation_Time := Msg.Params (3);
+            if First and then not Is_Detached (UC, Channel) then
+               Forward_Message (UC, Msg);
+            end if;
+         end;
+      end;
+      return Success;
+   end Handle_Creation_Time;
+
+   function Handle_Topic_Who_Time
+     (UC : not null Upstream_Conn_Access;
+      Msg : Message;
+      Downstream_ID : Long_Long_Integer) return Handle_Result
+   is
+      Bad : Boolean;
+      R   : constant Handle_Result := Check_Params (Msg, 4, Bad);
+   begin
+      if Bad then
+         return R;
+      end if;
+      declare
+         Channel : constant String := Param (Msg, 1);
+         Ch      : constant Upstream_Channel_Access := UC.Channels.Get (Channel);
+      begin
+         if Ch = null then
+            Forward_Msg_By_ID (UC, Downstream_ID, Msg);
+            return Success;
+         end if;
+         declare
+            First : constant Boolean := Ch.Topic_Who = null;
+            Sec   : Long_Long_Integer;
+         begin
+            Ch.Topic_Who := new Prefix'(Parse_Prefix (Param (Msg, 2)));
+            begin
+               Sec := Long_Long_Integer'Value (Param (Msg, 3));
+               Ch.Topic_Time := Ada.Calendar.Conversions.To_Ada_Time_64
+                 (Interfaces.C.long_long (Sec));
+            exception
+               when Constraint_Error =>
+                  return Fail
+                    ("failed to parse topic time: strconv.ParseInt: parsing "
+                     & Quote (Param (Msg, 3)) & ": invalid syntax");
+            end;
+            if First and then not Is_Detached (UC, Channel) then
+               Forward_Message (UC, Msg);
+            end if;
+         end;
+      end;
+      return Success;
+   end Handle_Topic_Who_Time;
+
+   function Handle_Names_Reply
+     (UC : not null Upstream_Conn_Access;
+      Msg : Message;
+      Downstream_ID : Long_Long_Integer) return Handle_Result
+   is
+      Bad : Boolean;
+      R   : constant Handle_Result := Check_Params (Msg, 4, Bad);
+   begin
+      if Bad then
+         return R;
+      end if;
+      declare
+         Name   : constant String := Param (Msg, 2);
+         Ch     : constant Upstream_Channel_Access := UC.Channels.Get (Name);
+         Status : Soja.Irc.Members.Channel_Status;
+         Ok     : Boolean;
+      begin
+         if Ch = null then
+            --  NAMES on a channel we have not joined, forward to downstream.
+            Forward_Msg_By_ID (UC, Downstream_ID, Msg);
+            return Success;
+         end if;
+
+         Status := Soja.Irc.Members.Parse_Channel_Status (Param (Msg, 1), Ok);
+         if not Ok then
+            return Fail
+              ("invalid channel status " & Quote (Param (Msg, 1)));
+         end if;
+         Ch.Status := Status;
+
+         --  splitSpace: only ' ' separates.
+         declare
+            Members : constant String := Param (Msg, 3);
+            Start   : Natural := 0;
+
+            procedure Add (Item : String) is
+               Set  : constant Soja.Irc.Members.Membership_Set_Access :=
+                 new Soja.Irc.Members.Membership_Vectors.Vector;
+               Nick : Unbounded_String;
+            begin
+               Parse_Membership_Prefix (UC, Item, Set.all, Nick);
+               Ch.Members.Set (To_String (Nick), Set);
+            end Add;
+         begin
+            for I in Members'Range loop
+               if Members (I) = ' ' then
+                  if Start /= 0 then
+                     Add (Members (Start .. I - 1));
+                     Start := 0;
+                  end if;
+               elsif Start = 0 then
+                  Start := I;
+               end if;
+            end loop;
+            if Start /= 0 then
+               Add (Members (Start .. Members'Last));
+            end if;
+         end;
+      end;
+      return Success;
+   end Handle_Names_Reply;
+
+   function Handle_End_Of_Names
+     (UC : not null Upstream_Conn_Access;
+      Msg : Message;
+      Downstream_ID : Long_Long_Integer) return Handle_Result
+   is
+      use Soja.Core.Downstream_Helpers;
+      Bad : Boolean;
+      R   : constant Handle_Result := Check_Params (Msg, 2, Bad);
+   begin
+      if Bad then
+         return R;
+      end if;
+      declare
+         Name : constant String := Param (Msg, 1);
+         Ch   : constant Upstream_Channel_Access := UC.Channels.Get (Name);
+      begin
+         if Ch = null then
+            --  NAMES on a channel we have not joined, forward to downstream.
+            Forward_Msg_By_ID (UC, Downstream_ID, Msg);
+            return Success;
+         end if;
+
+         if Ch.Complete then
+            return Fail ("received unexpected RPL_ENDOFNAMES");
+         end if;
+         Ch.Complete := True;
+
+         if not Is_Detached (UC, Name) then
+            for DC of Downstreams (UC.Network) loop
+               Forward_Channel (DC, Ch);
+            end loop;
+         end if;
+      end;
+      return Success;
+   end Handle_End_Of_Names;
+
    function Handle_Cap
      (UC : not null Upstream_Conn_Access; Msg : Message) return Handle_Result
    is
@@ -773,9 +1635,11 @@ package body Soja.Core.Upstream_Dispatch is
             declare
                Caps : constant String :=
                  Param (Msg, Natural (Msg.Params.Length) - 1);
-               --  (Go indexes msg.Params, not the sub-params, with len-2.)
+               --  The sub-parameter before the last one is "*" when more lines
+               --  follow.  (Go indexes msg.Params with len(subParams)-2,
+               --  missing the offset of two; fixed.)
                More : constant Boolean :=
-                 N >= 2 and then Param (Msg, N - 2) = "*";
+                 N >= 2 and then Param (Msg, N) = "*";
             begin
                Handle_Supported_Caps (UC, Caps);
                if not More then
@@ -953,17 +1817,18 @@ package body Soja.Core.Upstream_Dispatch is
       for I in 1 .. Natural (Msg.Params.Length) - 2 loop
          declare
             Raw       : constant String := Param (Msg, I);
-            Token     : Unbounded_String := To_Unbounded_String (Raw);
             Parameter : Unbounded_String := To_Unbounded_String (Raw);
             Negate    : Boolean := False;
             Has_Value : Boolean := False;
             Value     : Unbounded_String;
          begin
             if Raw'Length > 0 and then Raw (Raw'First) = '-' then
+               --  A negated token: the parameter is the name after the dash.
+               --  (Go leaves it "-"-prefixed, so none of the negation
+               --  branches below could ever match; fixed, see PORTING.md.)
                Negate := True;
-               Token := To_Unbounded_String (Raw (Raw'First + 1 .. Raw'Last));
-               --  (Go leaves `parameter` as-is here, "-"-prefixed, so the
-               --  negation branches of the switch below never match.)
+               Parameter :=
+                 To_Unbounded_String (Raw (Raw'First + 1 .. Raw'Last));
             else
                declare
                   Eq : constant Natural := Ada.Strings.Fixed.Index (Raw, "=");
@@ -1025,8 +1890,11 @@ package body Soja.Core.Upstream_Dispatch is
                   return R;
                end if;
 
+               --  Downstreams get the token as the server sent it, so a
+               --  negation reaches them as a negation.  (Go passes it
+               --  without its dash, i.e. as if it were being set.)
                if Is_Passthrough_Isupport (Name) then
-                  Downstream_Isupport.Append (To_String (Token));
+                  Downstream_Isupport.Append (Raw);
                end if;
             end;
          end;
@@ -1134,6 +2002,7 @@ package body Soja.Core.Upstream_Dispatch is
       Msg           : Message := Copy (M);
       Cmd           : constant String := To_String (M.Command);
       Label         : Unbounded_String;
+      Msg_Batch     : Upstream_Batch_Access;
       Downstream_ID : Long_Long_Integer := 0;
       Bad           : Boolean;
       R             : Handle_Result;
@@ -1153,8 +2022,9 @@ package body Soja.Core.Upstream_Dispatch is
                  ("unexpected batch reference: batch was not defined: "
                   & Quote (Name));
             end if;
+            Msg_Batch := new Upstream_Batch'(UC.Batches (Name));
             if Length (Label) = 0 then
-               Label := UC.Batches (Name).Label;
+               Label := Msg_Batch.Label;
             end if;
             Msg.Tags.Data.Exclude ("batch");
          end;
@@ -1336,6 +2206,51 @@ package body Soja.Core.Upstream_Dispatch is
 
       elsif Cmd = ERR_NOMOTD or else Cmd = RPL_ENDOFMOTD then
          return Handle_End_Of_Motd (UC, Msg, Downstream_ID);
+
+      elsif Cmd = "BATCH" then
+         return Handle_Batch (UC, Msg, Label, Msg_Batch);
+
+      elsif Cmd = "NICK" then
+         return Handle_Nick (UC, Msg);
+
+      elsif Cmd = "JOIN" then
+         return Handle_Join (UC, Msg);
+
+      elsif Cmd = "PART" then
+         return Handle_Part (UC, Msg);
+
+      elsif Cmd = "KICK" then
+         return Handle_Kick (UC, Msg);
+
+      elsif Cmd = "QUIT" then
+         Handle_Quit (UC, Msg);
+
+      elsif Cmd = RPL_TOPIC or else Cmd = RPL_NOTOPIC then
+         return Handle_Topic_Reply (UC, Msg, Downstream_ID);
+
+      elsif Cmd = "TOPIC" then
+         return Handle_Topic (UC, Msg);
+
+      elsif Cmd = "MODE" then
+         return Handle_Mode (UC, Msg);
+
+      elsif Cmd = RPL_UMODEIS then
+         return Handle_User_Mode_Is (UC, Msg);
+
+      elsif Cmd = RPL_CHANNELMODEIS then
+         return Handle_Channel_Mode_Is (UC, Msg, Downstream_ID);
+
+      elsif Cmd = RPL_CREATIONTIME then
+         return Handle_Creation_Time (UC, Msg, Downstream_ID);
+
+      elsif Cmd = RPL_TOPICWHOTIME then
+         return Handle_Topic_Who_Time (UC, Msg, Downstream_ID);
+
+      elsif Cmd = RPL_NAMREPLY then
+         return Handle_Names_Reply (UC, Msg, Downstream_ID);
+
+      elsif Cmd = RPL_ENDOFNAMES then
+         return Handle_End_Of_Names (UC, Msg, Downstream_ID);
 
       elsif Cmd = ERR_UNKNOWNERROR or else Cmd = ERR_UNKNOWNCOMMAND
         or else Cmd = ERR_NEEDMOREPARAMS or else Cmd = RPL_TRYAGAIN

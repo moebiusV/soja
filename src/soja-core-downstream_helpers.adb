@@ -1,6 +1,15 @@
 pragma Ada_2022;
 
+with Ada.Calendar.Conversions;
+with Ada.Exceptions;
+with Ada.Strings.Fixed;
+
 with Soja.Core.Upstream_Dispatch;
+with Soja.Irc.Case_Mapping;
+with Soja.Irc.Helpers;
+with Soja.Irc.Members;
+with Soja.Irc.Xirc;
+with Soja.User;
 with Soja.Irc.Cap_Registry;
 with Soja.Irc.Genmsg;
 with Soja.Irc.Numerics;
@@ -12,6 +21,8 @@ package body Soja.Core.Downstream_Helpers is
    use Soja.Irc.Genmsg;
    use Soja.Irc.Messages;
    use type Soja.Msgstore.Store_Access;
+   use type Soja.Database.Database_Access;
+   use type Soja.Database.Read_Receipt_Access;
 
    --  database.GetNick(&user, nil) and friends: no network record.
    No_Network : constant Soja.Database.Network := (others => <>);
@@ -327,5 +338,204 @@ package body Soja.Core.Downstream_Helpers is
         (DC, Make (Soja.Irc.Numerics.RPL_SASLSUCCESS,
                    [To_String (DC.Nick), "SASL authentication successful"]));
    end End_SASL;
+
+
+   ------------------------------------------------------------------
+   --  Message IDs (delivery receipts) and channel replay
+   ------------------------------------------------------------------
+
+   function Message_Supports_Backlog (M : Message) return Boolean is
+      Cmd : constant String := To_String (M.Command);
+   begin
+      --  Don't replay all messages, because that would mess up client
+      --  state.  For instance we just sent the list of users, sending PART
+      --  messages for one of these users would be incorrect.
+      return Cmd = "PRIVMSG" or else Cmd = "NOTICE";
+   end Message_Supports_Backlog;
+
+   procedure Send_Ping (DC : not null Downstream_Conn_Access; Msg_ID : String)
+   is
+   begin
+      Send_Message (DC, Make ("PING", ["soju-msgid-" & Msg_ID]));
+   end Send_Ping;
+
+   procedure Send_Message_With_ID
+     (DC : not null Downstream_Conn_Access; M : Message; ID : String) is
+   begin
+      Send_Message (DC, M);
+
+      if ID = "" or else not Message_Supports_Backlog (M)
+        or else Is_Enabled (DC.Caps, "draft/chathistory")
+      then
+         return;
+      end if;
+      Send_Ping (DC, ID);
+   end Send_Message_With_ID;
+
+   procedure Advance_Message_With_ID
+     (DC : not null Downstream_Conn_Access; M : Message; ID : String) is
+   begin
+      if ID = "" or else not Message_Supports_Backlog (M)
+        or else Is_Enabled (DC.Caps, "draft/chathistory")
+      then
+         return;
+      end if;
+      Send_Ping (DC, ID);
+   end Advance_Message_With_ID;
+
+   procedure Ack_Msg_ID (DC : not null Downstream_Conn_Access; ID : String) is
+      Net_ID : Long_Long_Integer;
+      Entity, Rest : Unbounded_String;
+   begin
+      Soja.Msgstore.Parse_Msg_ID (ID, Net_ID, Entity, Rest);
+      declare
+         Network : constant Network_Access :=
+           Get_Network_By_ID (DC.User, Net_ID);
+      begin
+         if Network = null then
+            return;
+         end if;
+         Soja.User.Store_ID
+           (Network.Delivered, To_String (Entity),
+            To_String (DC.Client_Name), ID);
+      end;
+   exception
+      when E : Soja.Msgstore.Store_Error =>
+         DC.Logger.Print
+           ("failed to ACK message ID " & Soja.Irc.Helpers.Quote (ID) & ": "
+            & Ada.Exceptions.Exception_Message (E));
+   end Ack_Msg_ID;
+
+   procedure Handle_Pong
+     (DC : not null Downstream_Conn_Access; Token : String)
+   is
+      Tag : constant String := "soju-msgid-";
+   begin
+      if Token'Length < Tag'Length
+        or else Token (Token'First .. Token'First + Tag'Length - 1) /= Tag
+      then
+         DC.Logger.Print
+           ("received unrecognized PONG token "
+            & Soja.Irc.Helpers.Quote (Token));
+         return;
+      end if;
+      Ack_Msg_ID (DC, Token (Token'First + Tag'Length .. Token'Last));
+   end Handle_Pong;
+
+   function Unix_Seconds (T : Ada.Calendar.Time) return String is
+      N : constant Long_Long_Integer := Long_Long_Integer
+        (Ada.Calendar.Conversions.To_Unix_Time_64 (T));
+   begin
+      return Ada.Strings.Fixed.Trim
+        (Long_Long_Integer'Image (N), Ada.Strings.Left);
+   end Unix_Seconds;
+
+   procedure Send_Topic
+     (DC : not null Downstream_Conn_Access;
+      Ch : not null Upstream_Channel_Access)
+   is
+   begin
+      if Length (Ch.Topic) > 0 then
+         Send_Message
+           (DC, Make (Soja.Irc.Numerics.RPL_TOPIC,
+                      [To_String (DC.Nick), To_String (Ch.Name),
+                       To_String (Ch.Topic)]));
+         if Ch.Topic_Who /= null then
+            Send_Message
+              (DC, Make (Soja.Irc.Numerics.RPL_TOPICWHOTIME,
+                         [To_String (DC.Nick), To_String (Ch.Name),
+                          Image (Ch.Topic_Who.all),
+                          Unix_Seconds (Ch.Topic_Time)]));
+         end if;
+      else
+         Send_Message
+           (DC, Make (Soja.Irc.Numerics.RPL_NOTOPIC,
+                      [To_String (DC.Nick), To_String (Ch.Name),
+                       "No topic is set"]));
+      end if;
+   end Send_Topic;
+
+   procedure Send_Names
+     (DC : not null Downstream_Conn_Access;
+      Ch : not null Upstream_Channel_Access)
+   is
+      Members : String_Vectors.Vector;
+      Multi   : constant Boolean := Is_Enabled (DC.Caps, "multi-prefix");
+
+      procedure Add (Nick : String; Set : Soja.Irc.Members.Membership_Set_Access)
+      is
+      begin
+         Members.Append
+           (Soja.Irc.Helpers.Format_Member_Prefix (Set.all, Multi) & Nick);
+      end Add;
+   begin
+      Ch.Members.For_Each (Add'Access);
+      for M of Generate_Names_Reply
+                 (To_String (Ch.Name), Ch.Status, Members)
+      loop
+         Send_Message (DC, M);
+      end loop;
+   end Send_Names;
+
+   procedure Forward_Channel
+     (DC : not null Downstream_Conn_Access;
+      Ch : not null Upstream_Channel_Access)
+   is
+      Mark_Read_Cmd : Unbounded_String;
+   begin
+      if not Ch.Complete then
+         raise Program_Error with "Tried to forward a partial channel";
+      end if;
+
+      --  RPL_NOTOPIC shouldn't be sent on JOIN.
+      if Length (Ch.Topic) > 0 then
+         Send_Topic (DC, Ch);
+      end if;
+
+      if Is_Enabled (DC.Caps, "draft/read-marker") then
+         Mark_Read_Cmd := To_Unbounded_String ("MARKREAD");
+      elsif Is_Enabled (DC.Caps, "soju.im/read") then
+         Mark_Read_Cmd := To_Unbounded_String ("READ");
+      end if;
+      if Length (Mark_Read_Cmd) > 0 then
+         declare
+            Net : constant Network_Access := Ch.Conn.Network;
+            DB  : constant Soja.Database.Database_Access :=
+              Soja.Server.DB (DC.Srv.all);
+            Channel_CM : constant String :=
+              Soja.Irc.Case_Mapping.Fold (Net.Casemap, To_String (Ch.Name));
+         begin
+            if DB /= null then
+               declare
+                  R : constant Soja.Database.Read_Receipt_Access :=
+                    Soja.Database.Get_Read_Receipt
+                      (DB.all, Net.Network_Record.ID, Channel_CM);
+                  Timestamp : constant String :=
+                    (if R = null then "*"
+                     else "timestamp="
+                          & Soja.Irc.Xirc.Format_Server_Time (R.Timestamp));
+                  M : Message := Make
+                    (To_String (Mark_Read_Cmd),
+                     [To_String (Ch.Name), Timestamp]);
+               begin
+                  M.Prefix := new Prefix'(Prefix_Of (DC));
+                  Send_Message (DC, M);
+               end;
+            end if;
+         exception
+            when E : others =>
+               DC.Logger.Print
+                 ("failed to get the read receipt for "
+                  & Soja.Irc.Helpers.Quote (To_String (Ch.Name)) & ": "
+                  & Ada.Exceptions.Exception_Message (E));
+         end;
+      end if;
+
+      if not Is_Enabled (DC.Caps, "soju.im/no-implicit-names")
+        and then not Is_Enabled (DC.Caps, "draft/no-implicit-names")
+      then
+         Send_Names (DC, Ch);
+      end if;
+   end Forward_Channel;
 
 end Soja.Core.Downstream_Helpers;

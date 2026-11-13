@@ -1,6 +1,10 @@
 pragma Ada_2022;
 
+with Ada.Strings.Unbounded;
+
+with Soja.Irc.Members;
 with Soja.Irc.Messages;
+with Soja.Upstream;
 
 --  The upstreamConn message handling of upstream.go: uc.handleMessage and
 --  the helpers around it (pending commands, capability negotiation, SASL,
@@ -35,6 +39,36 @@ package Soja.Core.Upstream_Dispatch is
      (UC : not null Upstream_Conn_Access;
       ID : Long_Long_Integer;
       M  : Soja.Irc.Messages.Message);
+
+   --  uc.cacheUserInfo: remember (or merge) what is known about a user.
+   procedure Cache_User_Info
+     (UC   : not null Upstream_Conn_Access;
+      Nick : String;
+      Info : Soja.Upstream.Upstream_User);
+
+   --  uc.updateChannelAutoDetach: (re)arm the idle-detach timer of a channel
+   --  that is attached.
+   procedure Update_Channel_Auto_Detach
+     (UC : not null Upstream_Conn_Access; Name : String);
+
+   --  uc.produce: append Msg to the logs of Target (when non-empty) and send
+   --  it to the downstream connections -- or only advance their history when
+   --  the channel is detached, or the message is the echo of what a client
+   --  sent without echo-message.  Origin_ID is the downstream that sent it
+   --  (0 for none).
+   procedure Produce
+     (UC        : not null Upstream_Conn_Access;
+      Target    : String;
+      Msg       : Soja.Irc.Messages.Message;
+      Origin_ID : Long_Long_Integer);
+
+   --  uc.parseMembershipPrefix: split a NAMES entry ("@+nick") into its
+   --  memberships and the nick.
+   procedure Parse_Membership_Prefix
+     (UC          : not null Upstream_Conn_Access;
+      S           : String;
+      Memberships : out Soja.Irc.Members.Membership_Vectors.Vector;
+      Nick        : out Ada.Strings.Unbounded.Unbounded_String);
 
    --  uc.isChannel.
    function Is_Channel
@@ -82,8 +116,8 @@ package Soja.Core.Upstream_Dispatch is
      (UC : not null Upstream_Conn_Access; Caps : String);
    procedure Update_Caps (UC : not null Upstream_Conn_Access);
 
-   --  uc.supportsSASL.  (Go's version compares the mechanism with itself, so
-   --  it is true whenever the server advertises "sasl" at all; kept.)
+   --  uc.supportsSASL: the server advertises SASL with that mechanism (or
+   --  with no mechanism list).
    function Supports_SASL
      (UC : not null Upstream_Conn_Access; Mech : String) return Boolean;
    function Request_SASL (UC : not null Upstream_Conn_Access) return Boolean;

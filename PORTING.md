@@ -2,8 +2,10 @@
 
 soja is a translation of [soju] from Go to Ada 2022, reusing the packages
 published by [ada-on-alpine]. The upstream Go source is pinned at
-`upstream/soju` (submodule). Keep the translation faithful: same structure,
-same logic, same quirks — including observable bugs.
+`upstream/soju` (submodule). Keep the translation faithful: same structure
+and logic.  Wire-format quirks of irc.v4 stay (see below).  Clear bugs in soju
+itself are fixed, not copied (decided 2026-11-12), and each fix is recorded
+here under "Bugs in soju that soja fixes".
 
 ## Component map
 
@@ -301,10 +303,10 @@ this rule is written explicitly, not assumed. Reference anchors:
   (`updateSupportedCaps`, `updateNick/Host/Realname/Account`, `endSASL`,
   `setSupportedCap`) were pulled forward from the downstream step, and
   `dc.SendMessage` now does Go's full per-capability filtering.  Commands not
-  handled yet (JOIN/PART/KICK/QUIT/NICK/MODE/TOPIC, PRIVMSG/NOTICE/TAGMSG,
-  WHO/WHOIS/LIST/NAMES replies, ...) take the default branch, which forwards
-  them to the downstream connections unchanged, as Go's default does; 4b - 4d
-  replace that.  `Run_Until_Registered` also sends the network's connect
+  handled yet (PRIVMSG/NOTICE/TAGMSG, the WHO/WHOIS/LIST/WHOX replies,
+  AWAY/ACCOUNT/CHGHOST/SETNAME/INVITE, the MONITOR numerics, ...) take the
+  default branch, which forwards them to the downstream connections
+  unchanged, as Go's default does; 4c - 4d replace that.  `Run_Until_Registered` also sends the network's connect
   commands once registered.
 
   *Auto-join (user rules, 2026-10-05).*  Soja joins on its own only in the
@@ -316,22 +318,47 @@ this rule is written explicitly, not assumed. Reference anchors:
   (`ERR_CHANNELISFULL`) retry with `Soja.Backoff`**, which Go does not have
   and which lands with the numerics in 4d.
 
-  *Quirks of soju kept as-is (they look like bugs; your call):*
-  - ISUPPORT negation (`-TOKEN`) never takes effect: `parameter` keeps its
+  *Bugs in soju that soja fixes (deliberate deviations; user decision
+  2026-11-12):*
+  - ISUPPORT negation (`-TOKEN`) never took effect in Go: `parameter` kept its
     leading `-`, so none of the `CASEMAPPING`/`CHANMODES`/`CHANTYPES`/
-    `STATUSMSG`/`PREFIX` reset branches can match, and the token is deleted
-    from the table under the wrong name.
-  - `uc.supportsSASL(mech)` compares the mechanism with itself (the loop
-    variable shadows the parameter), so it is true whenever the server
-    advertises `sasl` at all.
-  - `enqueueCommand`'s "give up after 30 s" is `copy(l, l[1:])`, which shifts
-    the queue but keeps its length, duplicating the last entry; the following
-    `len == 1` test then never sends the new command.
-  - `handleCapAck`'s "unsupported SASL mechanism" error formats the
-    capability name, not the mechanism.
-  - `CAP LS`'s "more lines follow" test indexes `msg.Params` with
-    `len(subParams)-2` (not offset by two), which only works for the usual
-    `CAP * LS * :caps` form.
+    `STATUSMSG`/`PREFIX` reset branches could match, and the token was deleted
+    from the table under the wrong name.  Go also passed the dash-stripped
+    token on to downstreams, i.e. as if the setting were being *set*.  Soja
+    resets the setting, deletes the right table entry, and passes the
+    original `-TOKEN` through.
+  - `uc.supportsSASL(mech)` compared the mechanism with itself (the loop
+    variable shadowed the parameter), so it was true whenever the server
+    advertised `sasl` at all (e.g. EXTERNAL configured, server offers only
+    PLAIN).  Soja matches the mechanism, case-insensitively, against the
+    cap's value list (no value = everything).
+  - `enqueueCommand`'s "give up after 30 s" was `copy(l, l[1:])`, which
+    shifts the queue but keeps its length, duplicating the last entry; the
+    following `len == 1` test then never sent the new command.  Soja drops
+    the stale entry and sends the next one.
+  - `handleCapAck`'s "unsupported SASL mechanism" error formatted the
+    capability name instead of the mechanism.
+  - `CAP LS`'s "more lines follow" test indexed `msg.Params` with
+    `len(subParams)-2` (missing the offset of two), which only worked for the
+    usual `CAP * LS * :caps` form.  Soja tests the sub-parameter before the
+    last.
+
+- **Upstream message handling, slice 4b: channel state.**  `Soja.Core.
+  Upstream_Dispatch` now handles BATCH (definition, nesting, label
+  inheritance), NICK, JOIN, PART, KICK, QUIT, TOPIC and the topic replies
+  (331/332/333), MODE (user and channel, via `Soja.Irc.Modes`), 221, 324, 329,
+  353 and 366, with `uc.produce`, `cacheUserInfo`,
+  `updateChannelAutoDetach` and `parseMembershipPrefix`.  The downstream half
+  they need was pulled forward into `Soja.Core.Downstream_Helpers`:
+  `sendMessageWithID` / `advanceMessageWithID` (the `PING soju-msgid-<id>`
+  delivery acknowledgement) with `handlePong` / `ackMsgID`, and `sendTopic` /
+  `sendNames` / `forwardChannel` (the replay on 366).  As in Go, NAMES replies
+  are sent with `*` as the target.
+  *Auto-join rules, verified:* a KICK of our own nick drops the channel from
+  the upstream's state and sends nothing upstream (tested: no line is written
+  after it), and the saved channel list is untouched, so it is joined again
+  only on the next connection; a PART likewise.  Joining happens only in the
+  001 handler.
 
 - **Ordering**: `downstream.go`, `upstream.go`, `user.go` and `service.go`
   form one mutually-dependent core (the `network` type in `user.go` holds both

@@ -1,5 +1,6 @@
 pragma Ada_2022;
 
+with Ada.Calendar;
 with Ada.Containers;
 with Ada.Containers.Indefinite_Vectors;
 with Ada.Strings.Fixed;
@@ -10,21 +11,29 @@ with GNAT.OS_Lib;
 
 with Soja.Conn;
 with Soja.Core;
+with Soja.Core.Downstream_Helpers;
 with Soja.Core.Upstream_Dispatch;
 with Soja.Database;
 with Soja.Irc.Cap_Registry;
 with Soja.Irc.Case_Mapping;
 with Soja.Irc.Members;
+with Soja.Irc.Helpers;
 with Soja.Irc.Messages;
+with Soja.Irc.Xirc;
+with Soja.Msgstore;
 with Soja.Logging;
 with Soja.Server;
 with Soja.Timers;
+with Soja.User;
 
 procedure Upstream_Dispatch_Check is
    use Soja.Core;
    use Soja.Core.Upstream_Dispatch;
    use Soja.Irc.Messages;
    use type Ada.Containers.Count_Type;
+   use type Ada.Calendar.Time;
+   use type Soja.Irc.Members.Membership_Set_Access;
+   use type Soja.Irc.Members.Channel_Status;
    use type Soja.Irc.Case_Mapping.Kind;
    use type Soja.Timers.Timer_Access;
 
@@ -44,6 +53,7 @@ procedure Upstream_Dispatch_Check is
       function Count return Natural;
       function Line (I : Positive) return String;
       function Contains (Prefix : String) return Boolean;
+      function Has (Needle : String) return Boolean;
    private
       V : String_Vectors.Vector;
    end Recorder;
@@ -56,6 +66,16 @@ procedure Upstream_Dispatch_Check is
       end Add;
       function Count return Natural is (Natural (V.Length));
       function Line (I : Positive) return String is (V (I));
+      function Has (Needle : String) return Boolean is
+      begin
+         for L of V loop
+            if Ada.Strings.Fixed.Index (L, Needle) > 0 then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Has;
+
       function Contains (Prefix : String) return Boolean is
       begin
          for L of V loop
@@ -152,6 +172,7 @@ begin
    Chans.Append (Soja.Database.Channel'
      (Name => To_Unbounded_String ("#b"), others => <>));
    Net := New_Network (U, NR, Chans);
+   U.Networks.Append (Net);
 
    UC.Network := Net;
    UC.User := U;
@@ -231,12 +252,21 @@ begin
    Ok (":irc CAP * LS * :multi-prefix");
    delay 0.15;
    Check (UC_Log.Count = 1, "multiline CAP LS: no reply yet");
+   --  The sub-parameter before the last is "*" even with extra parameters.
+   Ok (":irc CAP * LS x * :account-notify");
+   delay 0.15;
+   Check (UC_Log.Count = 1, "CAP LS continuation with extra parameters");
+   Soja.Irc.Cap_Registry.Delete (UC.Caps, "account-notify");
    Ok (":irc CAP * LS :sasl=PLAIN,EXTERNAL server-time");
    Check (Wait (UC_Log, 2)
           and then Line_Of (UC_Log, 2) = "CAP REQ :multi-prefix sasl server-time",
           "CAP REQ: " & Line_Of (UC_Log, 2));
    Settle (UC_Log, 2, "no CAP END while SASL is pending");
    Check (Request_SASL (UC) and then Supports_SASL (UC, "PLAIN"), "request SASL");
+   Check (Supports_SASL (UC, "plain") and then Supports_SASL (UC, "EXTERNAL"),
+          "mechanisms are matched case-insensitively");
+   Check (not Supports_SASL (UC, "SCRAM-SHA-256"),
+          "a mechanism the server does not list is not supported");
 
    Ok (":irc CAP * ACK :sasl multi-prefix");
    Check (Wait (UC_Log, 3) and then Line_Of (UC_Log, 3) = "AUTHENTICATE PLAIN",
@@ -262,6 +292,20 @@ begin
    Check (UC.Sasl_Mech = Sasl_None and then not UC.Sasl_Started, "SASL done");
    Check (Wait (UC_Log, 6) and then Line_Of (UC_Log, 6) = "CAP END",
           "CAP END after SASL while unregistered");
+
+   --  A configured mechanism soja cannot run is reported by its own name.
+   Net.Network_Record.SASL.Mechanism := To_Unbounded_String ("FOO");
+   Soja.Irc.Cap_Registry.Set_Available (UC.Caps, "sasl", "FOO");
+   declare
+      R : constant Handle_Result := H (":irc CAP * ACK :sasl");
+   begin
+      Check (R.Failed
+             and then To_String (R.Reason)
+                      = "unsupported SASL mechanism ""FOO""",
+             "unsupported mechanism: " & To_String (R.Reason));
+   end;
+   Net.Network_Record.SASL.Mechanism := To_Unbounded_String ("PLAIN");
+   Soja.Irc.Cap_Registry.Set_Available (UC.Caps, "sasl", "PLAIN,EXTERNAL");
 
    --  AUTHENTICATE without a client is an error.
    Check (H ("AUTHENTICATE +").Failed, "unexpected AUTHENTICATE");
@@ -397,10 +441,34 @@ begin
           "malformed PREFIX");
    Check (H (":irc 005 alice_ PREFIX=(ovv)@+ :are supported").Failed,
           "PREFIX with mismatched lengths");
-   --  Go quirk (see PORTING.md): "-TOKEN" never matches its switch case,
-   --  so negating PREFIX leaves the memberships as they were.
-   Ok (":irc 005 alice_ -PREFIX :are supported");
-   Check (UC.Available_Memberships.Length = 3, "negation quirk kept");
+   --  Negated tokens ("-PREFIX") undo a setting (a bug in Go; PORTING.md).
+   declare
+      N : constant Natural := DC_Log.Count;
+   begin
+      Ok (":irc 005 alice_ -PREFIX -CHANTYPES -STATUSMSG :are supported");
+      Check (UC.Available_Memberships.Length = 5
+             and then UC.Available_Memberships (1).Mode = 'q',
+             "-PREFIX restores the standard memberships");
+      Check (To_String (UC.Available_Channel_Types) = "#&+!"
+             and then To_String (UC.Available_Status_Msg) = "",
+             "-CHANTYPES / -STATUSMSG reset to the defaults");
+      Check (not UC.Isupport.Contains ("PREFIX"),
+             "a negated token leaves the isupport table");
+      Check (Wait (DC_Log, N + 1)
+             and then Ada.Strings.Fixed.Index
+                        (Line_Of (DC_Log, N + 1), "-PREFIX") > 0,
+             "downstreams are told about the negation: "
+             & Line_Of (DC_Log, N + 1));
+   end;
+   declare
+      N : constant Natural := DC_Log.Count;
+   begin
+      Ok (":irc 005 alice_ -CHANMODES :are supported");
+      Check (Wait (DC_Log, N + 1), "-CHANMODES reaches downstreams");
+   end;
+   Check (UC.Available_Channel_Modes.Contains ('t')
+          and then not UC.Available_Channel_Modes.Contains ('p'),
+          "-CHANMODES restores the standard modes");
 
    -------------------------------------------------------------------
    --  End of MOTD: the first one is swallowed and finishes setup.
@@ -450,6 +518,7 @@ begin
           and then To_String (UC.Hostname) = "other.example", "396 user@host");
    Ok (":irc 901 alice_ alice_!~ident@host.example :You are logged out");
    Check (Length (UC.Account) = 0, "901");
+   delay 0.2;
    Check (DC_Log.Contains (":localhost 901 bob "), "downstream sees 901");
 
    -------------------------------------------------------------------
@@ -477,6 +546,35 @@ begin
       Check (P.Found, "dequeue");
       P := Dequeue_Command (UC, "WHOIS");
       Check (not P.Found, "nothing left");
+
+      --  A command whose reply never came is given up on after 30 s, and the
+      --  next one is sent in its place (Go duplicated the last entry and
+      --  never sent it).
+      declare
+         K : constant Natural := UC_Log.Count;
+      begin
+         Enqueue_Command (UC, DC, Parse_Message ("WHOIS stale"));
+         Check (Wait (UC_Log, K + 1)
+                and then Last_Line (UC_Log) = "WHOIS stale", "stale sent");
+         declare
+            V  : Pending_Command_Vectors.Vector := UC.Pending_Cmds ("WHOIS");
+            PC : Pending_Upstream_Command := V (1);
+         begin
+            PC.Sent_At := Ada.Calendar.Clock - 40.0;
+            V.Replace_Element (1, PC);
+            UC.Pending_Cmds.Replace ("WHOIS", V);
+         end;
+         Enqueue_Command (UC, DC, Parse_Message ("WHOIS fresh"));
+         Check (Wait (UC_Log, K + 2)
+                and then Last_Line (UC_Log) = "WHOIS fresh",
+                "the next command is sent after giving up");
+         Check (UC.Pending_Cmds ("WHOIS").Length = 1
+                and then Param (UC.Pending_Cmds ("WHOIS") (1).Msg, 0)
+                         = "fresh",
+                "the stale command is dropped, not duplicated");
+         P := Dequeue_Command (UC, "WHOIS");
+         Check (P.Found, "dequeue the fresh one");
+      end;
       --  Cancelling skips the running command.
       Enqueue_Command (UC, DC, Parse_Message ("WHO #x"));
       Enqueue_Command (UC, DC, Parse_Message ("WHO #y"));
@@ -505,6 +603,274 @@ begin
       end;
    end;
 
+   -------------------------------------------------------------------
+   --  4b: channel state.  UC is registered as alice_, DC is attached.
+   -------------------------------------------------------------------
+   declare
+      Chan : Upstream_Channel_Access;
+
+      --  Run Line and wait for K more lines to reach the downstream.
+      procedure Down (Line : String; K : Natural; What : String) is
+         N : constant Natural := DC_Log.Count;
+      begin
+         Ok (Line);
+         Check (Wait (DC_Log, N + K), What & ": expected" & Natural'Image (K)
+                & " downstream lines");
+         delay 0.1;
+         Check (DC_Log.Count = N + K, What & ": exactly" & Natural'Image (K)
+                & " downstream lines, got"
+                & Natural'Image (DC_Log.Count - N));
+      end Down;
+
+      --  Run Line and check that nothing reaches the downstream.
+      procedure Quiet (Line : String; What : String) is
+         N : constant Natural := DC_Log.Count;
+      begin
+         Ok (Line);
+         delay 0.15;
+         Check (DC_Log.Count = N, What & ": nothing forwarded");
+      end Quiet;
+
+      function Members_Of (Name : String)
+         return Soja.Irc.Members.Member_Maps.Map is (UC.Channels.Get (Name).Members);
+
+      function Prefix_Of_Member (Name, Nick : String) return String is
+        (Soja.Irc.Helpers.Format_Member_Prefix
+           (Members_Of (Name).Get (Nick).all, True));
+
+      U_N : Natural;
+   begin
+      Net.Casemap := Soja.Irc.Case_Mapping.Case_RFC1459;
+      Net.Channels.Set_Case_Mapping (Soja.Irc.Case_Mapping.Case_RFC1459);
+
+      --  JOIN by us: the channel is created and its modes requested.
+      U_N := UC_Log.Count;
+      Down (":alice_!u@h JOIN #chan", 1, "own JOIN");
+      Chan := UC.Channels.Get ("#chan");
+      Check (Chan /= null and then UC.Channels.Has ("#CHAN"),
+             "channel created (case-mapped)");
+      Check (Wait (UC_Log, U_N + 1) and then Last_Line (UC_Log) = "MODE #chan",
+             "MODE query after joining: " & Last_Line (UC_Log));
+      Check (DC_Log.Has (" JOIN #chan"), "JOIN forwarded");
+      Check (UC.Users.Has ("alice_"), "our user info is cached");
+      Check (not Chan.Complete and then not Chan.Modes.Known, "fresh channel");
+
+      --  JOIN for a channel we are not in is an error.
+      Check (H (":carol!c@h JOIN #nowhere").Failed, "JOIN of an unknown channel");
+      Check (H (":carol!c@h JOIN").Failed, "JOIN without params");
+
+      --  Topic replies.
+      Quiet (":irc 332 alice_ #chan :the topic", "332 for a joined channel");
+      Check (To_String (Chan.Topic) = "the topic", "topic stored");
+      Down (":irc 333 alice_ #chan setter!s@h 1700000000", 1, "333 first");
+      Check (Chan.Topic_Who /= null
+             and then To_String (Chan.Topic_Who.Name) = "setter"
+             and then Soja.Irc.Xirc.Format_Server_Time (Chan.Topic_Time)
+                      = "2023-11-14T22:13:20.000Z", "topic who/time");
+      Quiet (":irc 333 alice_ #chan setter2!s@h 1700000001", "333 repeated");
+      Check (H (":irc 333 alice_ #chan setter!s@h notanumber").Failed,
+             "bad topic time");
+      Down (":irc 332 alice_ #other :elsewhere", 1, "332 for another channel");
+
+      --  Channel modes: forwarded once, recorded every time.
+      Down (":irc 324 alice_ #chan +nt", 1, "324 first");
+      Check (Chan.Modes.Known and then Chan.Modes.Values.Contains ('n')
+             and then Chan.Modes.Values.Contains ('t'), "modes recorded");
+      Quiet (":irc 324 alice_ #chan +ntk secret", "324 repeated");
+      Check (Chan.Modes.Values.Contains ('k')
+             and then Chan.Modes.Values ('k') = "secret", "key mode value");
+      Down (":irc 329 alice_ #chan 1700000000", 1, "329 first");
+      Check (To_String (Chan.Creation_Time) = "1700000000", "creation time");
+      Quiet (":irc 329 alice_ #chan 1700000005", "329 repeated");
+
+      --  NAMES: members are recorded, and the channel replayed at the end.
+      Quiet (":irc 353 alice_ = #chan :@op +voice alice_ plain",
+             "353 for a joined channel");
+      Check (Chan.Status = Soja.Irc.Members.Channel_Public, "status =");
+      Check (Prefix_Of_Member ("#chan", "op") = "@"
+             and then Prefix_Of_Member ("#chan", "voice") = "+"
+             and then Prefix_Of_Member ("#chan", "plain") = ""
+             and then Members_Of ("#chan").Has ("alice_"), "members");
+      Check (H (":irc 353 alice_ ? #chan :x").Failed, "bad channel status");
+      --  The topic, then the member list (a 332, 333, 353 and 366).
+      Down (":irc 366 alice_ #chan :End of /NAMES list", 4, "366 replays");
+      Check (Chan.Complete, "channel complete");
+      Check (DC_Log.Has (" 332 bob #chan :the topic")
+             and then DC_Log.Has (" 333 bob #chan setter!s@h 1700000001"),
+             "topic replayed");
+      Check (DC_Log.Has (" 353 * = #chan :") and then DC_Log.Has ("@op")
+             and then DC_Log.Has ("+voice") and then DC_Log.Has (" 366 * #chan"),
+             "names replayed");
+      Check (H (":irc 366 alice_ #chan :again").Failed, "duplicate 366");
+      --  NAMES on a channel we are not in goes to the asker.
+      Down (":irc 353 alice_ = #elsewhere :x y", 1, "353 for another channel");
+      Down (":irc 366 alice_ #elsewhere :End", 1, "366 for another channel");
+
+      --  Other users.
+      Down (":carol!c@h JOIN #chan", 1, "JOIN by another user");
+      Check (Members_Of ("#chan").Has ("carol")
+             and then UC.Users.Has ("carol")
+             and then To_String (UC.Users.Get ("carol").Hostname) = "h",
+             "member and user info");
+      Down (":carol!c@h NICK caroline", 1, "NICK by another user");
+      Check (not Members_Of ("#chan").Has ("carol")
+             and then Members_Of ("#chan").Has ("caroline")
+             and then UC.Users.Has ("caroline")
+             and then not UC.Users.Has ("carol"), "NICK re-keys members and users");
+      Down (":op!o@h MODE #chan +o caroline", 1, "MODE +o");
+      Check (Prefix_Of_Member ("#chan", "caroline") = "@", "op granted");
+      Down (":op!o@h MODE #chan -o+v caroline voice", 1, "MODE -o+v");
+      Check (Prefix_Of_Member ("#chan", "caroline") = "", "op removed");
+      Down (":op!o@h MODE #chan +l 9", 1, "MODE +l");
+      Check (Chan.Modes.Values.Contains ('l') and then Chan.Modes.Values ('l') = "9",
+             "channel limit recorded");
+      Check (H (":op!o@h MODE #chan").Failed, "MODE needs a mode string");
+      Check (H (":op!o@h MODE #nowhere +n").Failed, "MODE of an unknown channel");
+      Check (H (":op!o@h MODE #chan n").Failed, "malformed mode string");
+      Down (":op!o@h TOPIC #chan :new topic", 1, "TOPIC");
+      Check (To_String (Chan.Topic) = "new topic"
+             and then To_String (Chan.Topic_Who.Name) = "op", "topic changed");
+      Down (":op!o@h TOPIC #chan", 1, "TOPIC cleared");
+      Check (Length (Chan.Topic) = 0, "topic cleared");
+      Check (H (":op!o@h TOPIC #nowhere :x").Failed, "TOPIC of an unknown channel");
+      Down (":irc 332 alice_ #chan :restored", 0, "332 sets the topic");
+      Down (":irc 331 alice_ #chan :No topic is set", 0, "331 clears it");
+      Check (Length (Chan.Topic) = 0, "331");
+
+      --  User modes.
+      Down (":alice_ MODE alice_ +iw", 1, "user MODE");
+      Check (UC.Modes.Value = To_Unbounded_String ("iw"), "user modes");
+      Check (H (":x MODE someoneelse +i").Failed, "MODE for an unknown nick");
+      Down (":irc 221 alice_ +i", 1, "221");
+      Check (UC.Modes.Value = To_Unbounded_String ("i"), "221 replaces the modes");
+
+      --  Leaving.
+      Down (":caroline!c@h PART #chan :bye", 1, "PART by another user");
+      Check (not Members_Of ("#chan").Has ("caroline")
+             and then not UC.Users.Has ("caroline"),
+             "member and cached user dropped");
+      Check (H (":carol!c@h PART #nowhere").Failed, "PART of an unknown channel");
+      Down (":plain!p@h QUIT :gone", 1, "QUIT");
+      Check (not Members_Of ("#chan").Has ("plain")
+             and then not UC.Users.Has ("plain"), "QUIT removes the user");
+      Down (":op!o@h KICK #chan voice :out", 1, "KICK of another user");
+      Check (not Members_Of ("#chan").Has ("voice"), "kicked user removed");
+      Check (H (":op!o@h KICK #chan").Failed, "KICK needs a user");
+      Check (H (":op!o@h KICK #nowhere x").Failed, "KICK in an unknown channel");
+
+      --  Our own QUIT is not forwarded (the connection is going away).
+      Quiet (":alice_!u@h QUIT :bye", "own QUIT");
+
+      --  Kicked: the channel is forgotten and soja does NOT rejoin.
+      declare
+         Before : constant Natural := UC_Log.Count;
+      begin
+         Down (":op!o@h KICK #chan alice_ :out", 1, "KICK of us");
+         Check (UC.Channels.Get ("#chan") = null, "kicked: channel forgotten");
+         delay 0.4;
+         Check (UC_Log.Count = Before, "kicked: nothing sent upstream (no rejoin)");
+         Check (Net.Channels.Has ("#a") and then Net.Channels.Has ("#b"),
+                "saved channels are untouched");
+      end;
+
+      --  Parted: the channel is forgotten and its idle timer stopped.
+      Down (":alice_!u@h JOIN #p", 1, "JOIN #p");
+      Check (UC.Channels.Get ("#p") /= null, "joined #p");
+      Down (":alice_!u@h PART #p", 1, "own PART");
+      Check (UC.Channels.Get ("#p") = null, "parted: channel forgotten");
+
+      --  A detached channel is not forwarded.
+      declare
+         Saved : constant Channel_Access := Net.Channels.Get ("#b");
+      begin
+         Saved.Detached := True;
+         Quiet (":alice_!u@h JOIN #b", "JOIN of a detached channel");
+         Check (UC.Channels.Get ("#b") /= null, "joined detached channel");
+         Quiet (":irc 324 alice_ #b +n", "324 for a detached channel");
+         Quiet (":op!o@h MODE #b +m", "MODE in a detached channel");
+         Saved.Detached := False;
+      end;
+
+      --  BATCH: definitions, nesting, label inheritance, errors.
+      Ok ("BATCH +b1 chathistory #c");
+      Check (UC.Batches.Contains ("b1")
+             and then To_String (UC.Batches ("b1").Batch_Type) = "chathistory"
+             and then UC.Batches ("b1").Params.Length = 1, "batch defined");
+      Check (H ("BATCH +b1 other").Failed, "batch defined twice");
+      Check (H ("BATCH -nope").Failed, "unknown batch end");
+      Check (H ("BATCH nosign").Failed, "batch without a sign");
+      Check (H ("BATCH").Failed, "BATCH without a tag");
+      Check (H ("BATCH +b9").Failed, "batch without a type");
+      Ok ("@batch=b1 BATCH +b2 nested");
+      Check (UC.Batches ("b2").Outer /= null
+             and then To_String (UC.Batches ("b2").Outer.Batch_Type)
+                      = "chathistory", "nested batch has its outer batch");
+      Ok ("BATCH -b2");
+      Ok ("BATCH -b1");
+      Check (UC.Batches.Is_Empty, "batches ended");
+      --  A batch started by a labeled command routes its content by the label.
+      Ok ("@label=sd-99-0 BATCH +b3 labeled-response");
+      Check (To_String (UC.Batches ("b3").Label) = "sd-99-0", "batch label");
+      Quiet ("@batch=b3 ZZZ inside", "batch content labeled for another client");
+      Ok ("BATCH -b3");
+
+      --  Our own nick change updates the downstream and the desired-nick flag.
+      UC.Has_Desired_Nick := False;
+      Down (":alice_!u@h NICK alice", 1, "own NICK");
+      Check (To_String (UC.Nick) = "alice" and then UC.Has_Desired_Nick,
+             "our nick and the desired-nick flag");
+      Check (To_String (DC.Nick) = "alice", "the downstream follows our nick");
+      Check (DC_Log.Has (" NICK alice"), "downstream sees the NICK");
+   end;
+
+   -------------------------------------------------------------------
+   --  Message IDs: the PING after a backlog-able message, and its PONG.
+   -------------------------------------------------------------------
+   declare
+      use Soja.Core.Downstream_Helpers;
+      ID : constant String := Soja.Msgstore.Format_Msg_ID
+        (1, "#chan", Soja.Msgstore.Msg_ID_Memory, [Character'Val (7)]);
+      N  : Natural := DC_Log.Count;
+   begin
+      Send_Message_With_ID (DC, Parse_Message (":x!y@z PRIVMSG #chan :hi"), ID);
+      Check (Wait (DC_Log, N + 2)
+             and then Last_Line (DC_Log) = "PING soju-msgid-" & ID,
+             "PING carries the message id: " & Last_Line (DC_Log));
+      N := DC_Log.Count;
+      Send_Message_With_ID (DC, Parse_Message (":x!y@z JOIN #chan"), ID);
+      Check (Wait (DC_Log, N + 1), "JOIN sent");
+      delay 0.15;
+      Check (DC_Log.Count = N + 1, "no PING for a message that is not replayed");
+      N := DC_Log.Count;
+      Advance_Message_With_ID
+        (DC, Parse_Message (":x!y@z PRIVMSG #chan :hi"), ID);
+      Check (Wait (DC_Log, N + 1)
+             and then Last_Line (DC_Log) = "PING soju-msgid-" & ID,
+             "advancing sends only the PING");
+      N := DC_Log.Count;
+      Send_Message_With_ID (DC, Parse_Message (":x!y@z PRIVMSG #chan :hi"), "");
+      Check (Wait (DC_Log, N + 1), "message without an id");
+      delay 0.15;
+      Check (DC_Log.Count = N + 1, "no PING without an id");
+      Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "draft/chathistory", True);
+      N := DC_Log.Count;
+      Send_Message_With_ID (DC, Parse_Message (":x!y@z PRIVMSG #chan :hi"), ID);
+      Check (Wait (DC_Log, N + 1), "message sent");
+      delay 0.15;
+      Check (DC_Log.Count = N + 1, "no PING for chathistory clients");
+      Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "draft/chathistory", False);
+
+      --  The PONG records the delivery for this client.
+      DC.Client_Name := To_Unbounded_String ("phone");
+      Handle_Pong (DC, "soju-msgid-" & ID);
+      Check (Soja.User.Load_ID (Net.Delivered, "#chan", "phone") = ID,
+             "PONG acknowledges the message");
+      Handle_Pong (DC, "garbage");                    --  logged, ignored
+      Handle_Pong (DC, "soju-msgid-!!notanid");       --  logged, ignored
+      Check (Soja.User.Load_ID (Net.Delivered, "#chan", "phone") = ID,
+             "bad PONGs change nothing");
+   end;
+
    Soja.Timers.Stop (UC.Regain_Nick_Timer);
    Soja.Conn.Close (UC.Conn);
    Soja.Conn.Close (DC.Conn);
@@ -514,5 +880,13 @@ exception
       --  Unclosed connection writers would keep the process alive.
       Ada.Text_IO.Put_Line
         ("FAILED: " & Ada.Exceptions.Exception_Information (E));
+      Ada.Text_IO.Put_Line ("--- upstream wire ---");
+      for I in 1 .. UC_Log.Count loop
+         Ada.Text_IO.Put_Line (UC_Log.Line (I));
+      end loop;
+      Ada.Text_IO.Put_Line ("--- downstream wire ---");
+      for I in 1 .. DC_Log.Count loop
+         Ada.Text_IO.Put_Line (DC_Log.Line (I));
+      end loop;
       GNAT.OS_Lib.OS_Exit (1);
 end Upstream_Dispatch_Check;
