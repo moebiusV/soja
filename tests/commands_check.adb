@@ -709,6 +709,132 @@ begin
    end;
 
    -------------------------------------------------------------------
+   --  PRIVMSG, NOTICE, TAGMSG, INVITE, AWAY, INFO, MONITOR, ...
+   -------------------------------------------------------------------
+   delay 0.3;
+   declare
+      N : Natural := UC_Log.Count;
+      B : Natural := Bnc_Log.Count;
+      D : Natural := DC_Log.Count;
+   begin
+      Ok (DC, "PRIVMSG #one,carol :hello there");
+      Check (Wait (UC_Log, N + 2)
+             and then Line_Of (UC_Log, N + 1) = "PRIVMSG #one :hello there"
+             and then Line_Of (UC_Log, N + 2) = "PRIVMSG carol :hello there",
+             "PRIVMSG is sent to each target");
+      N := UC_Log.Count;
+      Ok (DC, "NOTICE carol :psst");
+      Ok (DC, "TAGMSG #one");
+      Check (Wait (UC_Log, N + 2) and then Last (UC_Log) = "TAGMSG #one",
+             "NOTICE and TAGMSG");
+      Check (Error_Of (DC, "PRIVMSG carol")(1 .. 3) = "461",
+             "PRIVMSG needs text");
+      Check (Error_Of (DC, "PRIVMSG")(1 .. 3) = "461", "PRIVMSG needs a target");
+
+      --  To oneself on the bouncer connection: echoed back.
+      Ok (Bnc, "PRIVMSG alice_ :note to self");
+      Check (Wait (Bnc_Log, B + 1)
+             and then Last (Bnc_Log) = ":alice_!~u@1.2.3.4 PRIVMSG alice_ :note to self",
+             "self message: " & Last (Bnc_Log));
+
+      --  To the service: the handler answers; PRIVMSG only.
+      Ok (DC, "PRIVMSG BouncerServ :help");
+      Check (Wait (DC_Log, D + 1)
+             and then DC_Log.Has ("BouncerServ!BouncerServ@BouncerServ NOTICE"),
+             "the service answers");
+      Check (Error_Of (Bnc, "PRIVMSG somebody :hi")(1 .. 3) = "400",
+             "no messaging others on the bouncer connection");
+
+      --  Bouncer-wide broadcast needs an administrator.
+      Check (Error_Of (DC, "NOTICE $*")(1 .. 3) = "461", "(needs text)");
+      Check (Error_Of (Bnc, "NOTICE $* :everyone")
+               = "415 alice_ $* :Permission denied to broadcast message to "
+                 & "all bouncer users", "broadcast needs admin");
+      U.User_Record.Admin := True;
+      Ok (Bnc, "NOTICE $* :everyone");
+      U.User_Record.Admin := False;
+
+      --  NickServ passwords are saved for SASL.
+      N := UC_Log.Count;
+      Ok (DC, "PRIVMSG NickServ :IDENTIFY hunter2");
+      Check (Wait (UC_Log, N + 1)
+             and then Last (UC_Log) = "PRIVMSG NickServ :IDENTIFY hunter2",
+             "NickServ message is relayed");
+   end;
+
+   declare
+      N : Natural := UC_Log.Count;
+      D : Natural;
+   begin
+      Ok (DC, "INVITE carol #one");
+      Check (Wait (UC_Log, N + 1) and then Last (UC_Log) = "INVITE carol #one",
+             "INVITE relayed");
+      Check (Error_Of (Bnc, "INVITE carol #one")(1 .. 3) = "400",
+             "INVITE needs a network");
+
+      N := UC_Log.Count;
+      Ok (DC, "AWAY :lunch");
+      Check (To_String (DC.Away) = "lunch", "AWAY is remembered");
+      delay 0.2;
+      Ok (DC, "AWAY");
+      Check (Length (DC.Away) = 0, "and cleared");
+      delay 0.2;
+      Check (DC_Log.Has (" 306 ") and then DC_Log.Has (" 305 "),
+             "with the replies");
+
+      Ok (Bnc, "INFO");
+      delay 0.2;
+      Check (Bnc_Log.Has (" 371 alice_ :soju <https://soju.im>")
+             and then Bnc_Log.Has (" 374 alice_ :End of INFO"), "INFO");
+      N := UC_Log.Count;
+      Ok (DC, "INFO");
+      Check (Wait (UC_Log, N + 1) and then Last (UC_Log) = "INFO",
+             "INFO on a network goes upstream");
+
+      --  Registration, authentication.
+      Check (Error_Of (DC, "REGISTER acct")(1 .. 3) = "461", "REGISTER params");
+      Check (Error_Of (DC, "VERIFY acct")(1 .. 3) = "461", "VERIFY params");
+      Check (Error_Of (DC, "REGISTER acct mail pw")
+               = "FAIL REGISTER TEMPORARILY_UNAVAILABLE * "
+                 & ":Upstream network account registration not supported",
+             "REGISTER needs the capability");
+      Soja.Irc.Cap_Registry.Set_Enabled
+        (UC.Caps, "draft/account-registration", True);
+      N := UC_Log.Count;
+      Ok (DC, "REGISTER acct mail pw");
+      delay 0.15;
+      Check (UC.Pending_Cmds.Contains ("REGISTER"), "REGISTER is queued");
+      Check (Error_Of (DC, "AUTHENTICATE PLAIN")
+               = "904 alice_ :Upstream network authentication not supported",
+             "AUTHENTICATE needs upstream SASL");
+
+      --  MONITOR.
+      Check (Error_Of (DC, "MONITOR L")(1 .. 3) = "421",
+             "MONITOR without upstream support");
+      UC.Isupport.Include
+        ("MONITOR", (Has_Value => True, Value => Null_Unbounded_String));
+      D := DC_Log.Count;
+      Ok (DC, "MONITOR + carol,BouncerServ");
+      Check (Wait (DC_Log, D + 1) and then DC_Log.Has (" 730 alice_ BouncerServ"),
+             "the service is always online");
+      Ok (DC, "MONITOR L");
+      Check (Wait (DC_Log, D + 4) and then DC_Log.Has (" 732 alice_ carol")
+             and then DC_Log.Has (" 733 alice_ :End of MONITOR list"),
+             "MONITOR L");
+      D := DC_Log.Count;
+      Ok (DC, "MONITOR S");
+      Check (Wait (DC_Log, D + 2) and then DC_Log.Has (" 731 alice_ carol"),
+             "MONITOR S: offline until known");
+      Ok (DC, "MONITOR - carol");
+      Ok (DC, "MONITOR C");
+      D := DC_Log.Count;
+      Ok (DC, "MONITOR L");
+      Check (Wait (DC_Log, D + 1) and then Last (DC_Log)(1 .. 20) /= ""
+             and then DC.Monitored.Length = 0, "cleared");
+      Check (Error_Of (DC, "MONITOR")(1 .. 3) = "461", "MONITOR needs more");
+   end;
+
+   -------------------------------------------------------------------
    --  Anything else
    -------------------------------------------------------------------
    declare

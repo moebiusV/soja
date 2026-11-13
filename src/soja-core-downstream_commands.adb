@@ -1,5 +1,6 @@
 pragma Ada_2022;
 
+with Ada.Calendar;
 with Ada.Containers;
 with Ada.Exceptions;
 with Ada.Strings.Fixed;
@@ -20,6 +21,7 @@ with Soja.Irc.Modes;
 with Soja.Irc.Members;
 with Soja.Irc.Numerics;
 with Soja.Irc.Whox;
+with Soja.Irc.Xirc;
 with Soja.Server;
 
 package body Soja.Core.Downstream_Commands is
@@ -938,6 +940,509 @@ package body Soja.Core.Downstream_Commands is
       return Success;
    end Cmd_Whois;
 
+   procedure Default_Service_Handler
+     (DC : not null Downstream_Conn_Access; Text : String)
+   is
+      pragma Unreferenced (Text);
+   begin
+      Send_Service_Privmsg
+        (DC, "error: the bouncer service commands are not available yet");
+   end Default_Service_Handler;
+
+   procedure Broadcast_To_All_Users
+     (Srv  : not null Soja.Server.Server_Access;
+      From : not null User_Access;
+      Msg  : Message) is
+   begin
+      if Broadcast_Hook /= null then
+         Broadcast_Hook (Srv, From, Msg);
+      else
+         From.Events.Enqueue (new Broadcast_Event'(Msg => Copy (Msg)));
+      end if;
+   end Broadcast_To_All_Users;
+
+   ----------------------------------------------------------------------
+   --  PRIVMSG, NOTICE, TAGMSG
+   ----------------------------------------------------------------------
+
+   --  parseNickServCredentials
+   procedure Parse_NickServ_Credentials
+     (Text, Nick : String;
+      Username, Password : out Unbounded_String;
+      Ok : out Boolean)
+   is
+      Words : constant String_Vectors.Vector := Fields (Text);
+   begin
+      Username := Null_Unbounded_String;
+      Password := Null_Unbounded_String;
+      Ok := False;
+      if Words.Length < 2 then
+         return;
+      end if;
+
+      declare
+         Command : constant String := Upper (Words (1));
+         Count   : constant Natural := Natural (Words.Length) - 1;   --  params
+      begin
+         if Command = "REGISTER" then
+            Username := To_Unbounded_String (Nick);
+            Password := To_Unbounded_String (Words (2));
+            Ok := True;
+         elsif Command = "IDENTIFY" then
+            if Count = 1 then
+               Username := To_Unbounded_String (Nick);
+               Password := To_Unbounded_String (Words (2));
+            else
+               Username := To_Unbounded_String (Words (2));
+               Password := To_Unbounded_String (Words (3));
+            end if;
+            Ok := True;
+         elsif Command = "SET" then
+            Ok := True;   --  (only when it is "SET PASSWORD <pw>")
+            if Count = 2 and then Upper (Words (2)) = "PASSWORD" then
+               Username := To_Unbounded_String (Nick);
+               Password := To_Unbounded_String (Words (3));
+            end if;
+         end if;
+      end;
+   end Parse_NickServ_Credentials;
+
+   function Cmd_Chat
+     (DC : not null Downstream_Conn_Access; M : Message)
+      return Irc_Error_Result
+   is
+      Cmd : constant String := To_String (M.Command);
+      PR  : constant Params_Result :=
+        Parse_Message_Params (M, (if Cmd /= "TAGMSG" then 2 else 1));
+   begin
+      if not PR.Ok then
+         return Need_More (PR);
+      end if;
+
+      declare
+         Targets : constant String := Param (M, 0);
+         Text    : constant String :=
+           (if Cmd /= "TAGMSG" then Param (M, 1) else "");
+         Tags    : constant Tag_Map := Copy_Client_Tags (M.Tags);
+         Cfg     : constant Soja.Server.Server_Config_Access :=
+           Soja.Server.Config (DC.Srv.all);
+
+         function Params_For (Name : String) return String_Vectors.Vector is
+         begin
+            return (if Cmd /= "TAGMSG" then [Name, Text] else [Name]);
+         end Params_For;
+
+         function Now_Tag return String is
+           (Soja.Irc.Xirc.Format_Server_Time (Ada.Calendar.Clock));
+      begin
+         for Name of Split_Commas (Targets) loop
+            if Name = "$" & To_String (Cfg.Hostname)
+              or else (Name = "$*" and then DC.Network = null)
+            then
+               --  "$" means a server mask follows.  If it is the bouncer's
+               --  hostname, broadcast the message to all bouncer users.
+               if not DC.User.User_Record.Admin then
+                  return IRC_Fail
+                    (ERR_BADMASK,
+                     [Nick_Of (DC), Name,
+                      "Permission denied to broadcast message to all "
+                      & "bouncer users"]);
+               end if;
+
+               DC.Logger.Print
+                 ("broadcasting bouncer-wide " & Cmd & ": " & Text);
+               declare
+                  B : Message := Make (Cmd, Params_For (Name));
+               begin
+                  B.Tags := Copy (Tags);
+                  Set_Tag (B.Tags, "time", Now_Tag);
+                  B.Prefix := Service_Prefix;
+                  Broadcast_To_All_Users (DC.Srv, DC.User, B);
+               end;
+
+            elsif DC.Network = null
+              and then Fold (DC, Name) = To_String (DC.Nick_CM)
+            then
+               declare
+                  Echo : Message := Make (Cmd, Params_For (Name));
+               begin
+                  Echo.Tags := Copy (M.Tags);
+                  Echo.Prefix := new Prefix'(Prefix_Of (DC));
+                  Send_Message (DC, Echo);
+               end;
+
+            elsif Fold (DC, Name) = Service_Nick_CM then
+               if Soja.Irc.Cap_Registry.Is_Enabled (DC.Caps, "echo-message")
+               then
+                  declare
+                     Echo : Message := Make (Cmd, Params_For (Name));
+                  begin
+                     Echo.Tags := Copy (Tags);
+                     Set_Tag (Echo.Tags, "time", Now_Tag);
+                     Echo.Prefix := new Prefix'(Prefix_Of (DC));
+                     Send_Message (DC, Echo);
+                  end;
+               end if;
+               if Cmd = "PRIVMSG" then
+                  Service_Handler (DC, Text);
+               end if;
+
+            else
+               declare
+                  UC : Upstream_Conn_Access;
+                  R  : constant Irc_Error_Result :=
+                    Upstream_For_Command (DC, Cmd, UC);
+               begin
+                  if R.Failed then
+                     return R;
+                  end if;
+
+                  if Cmd = "PRIVMSG"
+                    and then Soja.Irc.Case_Mapping.Fold
+                               (UC.Network.Casemap, Name) = "nickserv"
+                  then
+                     declare
+                        User, Pass : Unbounded_String;
+                        Found      : Boolean;
+                     begin
+                        Parse_NickServ_Credentials
+                          (Text, To_String (UC.Nick), User, Pass, Found);
+                        if Found and then Length (Pass) > 0 then
+                           Auto_Save_SASL_Plain
+                             (UC.Network, To_String (User), To_String (Pass));
+                        end if;
+                     end;
+                  end if;
+
+                  declare
+                     Out_Msg : Message := Make (Cmd, Params_For (Name));
+                  begin
+                     Out_Msg.Tags := Copy (Tags);
+                     Relay (UC, DC, Out_Msg);
+                  end;
+
+                  --  If the upstream supports echo-message, we produce the
+                  --  message when it is echoed back.  Otherwise, produce and
+                  --  log it here because it's the last time we'll see it.
+                  if not Soja.Irc.Cap_Registry.Is_Enabled
+                           (UC.Caps, "echo-message")
+                  then
+                     declare
+                        Echo : Message := Make (Cmd, Params_For (Name));
+                     begin
+                        Echo.Tags := Copy (Tags);
+                        Set_Tag (Echo.Tags, "time", Now_Tag);
+                        if Length (UC.Account) > 0 then
+                           Set_Tag (Echo.Tags, "account",
+                                    To_String (UC.Account));
+                        end if;
+                        Echo.Prefix := new Prefix'
+                          (Name => UC.Nick, User => UC.Username,
+                           Host => UC.Hostname);
+                        Soja.Core.Upstream_Dispatch.Produce
+                          (UC, Name, Echo, DC.ID);
+                     end;
+                  end if;
+
+                  Soja.Core.Upstream_Dispatch.Update_Channel_Auto_Detach
+                    (UC, Name);
+               end;
+            end if;
+         end loop;
+      end;
+      return Success;
+   end Cmd_Chat;
+
+   ----------------------------------------------------------------------
+   --  INVITE, AUTHENTICATE, REGISTER/VERIFY, AWAY, INFO
+   ----------------------------------------------------------------------
+
+   function Cmd_Invite
+     (DC : not null Downstream_Conn_Access; M : Message)
+      return Irc_Error_Result
+   is
+      UC : Upstream_Conn_Access;
+      R  : constant Irc_Error_Result := Upstream_For_Command (DC, "INVITE", UC);
+   begin
+      if R.Failed then
+         return R;
+      end if;
+      Relay (UC, DC, M);
+      return Success;
+   end Cmd_Invite;
+
+   function Cmd_Authenticate
+     (DC : not null Downstream_Conn_Access; M : Message)
+      return Irc_Error_Result
+   is
+      --  Post-registration AUTHENTICATE is only supported if an upstream is
+      --  bound and supports SASL.
+      UC : constant Upstream_Conn_Access := Upstream_Of (DC);
+   begin
+      if UC = null or else not Soja.Irc.Cap_Registry.Is_Enabled (UC.Caps, "sasl")
+      then
+         return IRC_Fail
+           (ERR_SASLFAIL,
+            [Nick_Of (DC), "Upstream network authentication not supported"]);
+      end if;
+
+      declare
+         Step : constant Soja.Core.Downstream_Handshake.Authenticate_Step :=
+           Soja.Core.Downstream_Handshake.Handle_Authenticate (DC, M);
+      begin
+         if Step.Result.Failed then
+            return Step.Result;
+         elsif not Step.Done then
+            return Success;
+         end if;
+      end;
+
+      if UC.Sasl_Mech /= Sasl_None then
+         End_SASL
+           (DC, Make (ERR_SASLFAIL,
+                      [Nick_Of (DC),
+                       "Another authentication attempt is already in "
+                       & "progress"]));
+         return Success;
+      end if;
+
+      declare
+         Mech : constant String := To_String (DC.Sasl.Mechanism);
+      begin
+         if Mech = "PLAIN" then
+            UC.Logger.Print
+              ("starting post-registration SASL PLAIN authentication with "
+               & "username " & Quote (To_String (DC.Sasl.Plain_Username)));
+            UC.Sasl_Mech := Sasl_Plain;
+            UC.Sasl_Username := DC.Sasl.Plain_Username;
+            UC.Sasl_Password := DC.Sasl.Plain_Password;
+            Soja.Core.Upstream_Dispatch.Enqueue_Command
+              (UC, DC, Make ("AUTHENTICATE", ["PLAIN"]));
+
+         elsif Mech = "ANONYMOUS" then
+            if Length (UC.Network.Network_Record.SASL.Mechanism) > 0 then
+               --  Clear the stored credentials (on a copy of the record).
+               declare
+                  Rec : Soja.Database.Network := UC.Network.Network_Record;
+               begin
+                  Rec.SASL.Plain_Username := Null_Unbounded_String;
+                  Rec.SASL.Plain_Password := Null_Unbounded_String;
+                  Rec.SASL.External_Cert := Null_Unbounded_String;
+                  Rec.SASL.External_Key := Null_Unbounded_String;
+                  Rec.SASL.Mechanism := Null_Unbounded_String;
+                  declare
+                     Ignored : constant Network_Access :=
+                       Soja.Core.User_Ops.Update_Network (DC.User, Rec);
+                     pragma Unreferenced (Ignored);
+                  begin
+                     null;
+                  exception
+                     when Soja.Core.User_Ops.Operation_Error =>
+                        null;
+                  end;
+               exception
+                  when Soja.Core.User_Ops.Operation_Error =>
+                     DC.Logger.Print ("failed to clear SASL credentials");
+                     End_SASL
+                       (DC, Make (ERR_SASLFAIL,
+                                  [Nick_Of (DC), "Internal server error"]));
+                     return Success;
+               end;
+            end if;
+            End_SASL (DC);
+
+         else
+            End_SASL
+              (DC, Make (ERR_SASLFAIL,
+                         [Nick_Of (DC),
+                          "Unsupported SASL authentication mechanism"]));
+         end if;
+      end;
+      return Success;
+   end Cmd_Authenticate;
+
+   function Cmd_Register
+     (DC : not null Downstream_Conn_Access; M : Message)
+      return Irc_Error_Result
+   is
+      Cmd : constant String := To_String (M.Command);
+   begin
+      --  Check the number of parameters here: it is what saves the
+      --  credentials when the command succeeds.
+      if (Cmd = "REGISTER" and then M.Params.Length < 3)
+        or else (Cmd = "VERIFY" and then M.Params.Length < 2)
+      then
+         return From_Error
+           (Soja.Downstream.New_Need_More_Params_Error (Cmd));
+      end if;
+
+      declare
+         UC : constant Upstream_Conn_Access := Upstream_Of (DC);
+      begin
+         if UC = null
+           or else not Soja.Irc.Cap_Registry.Is_Enabled
+                         (UC.Caps, "draft/account-registration")
+         then
+            return IRC_Fail
+              ("FAIL",
+               [Cmd, "TEMPORARILY_UNAVAILABLE", "*",
+                "Upstream network account registration not supported"]);
+         end if;
+         UC.Logger.Print
+           ("starting " & Cmd & " with account name " & Param (M, 0));
+         Soja.Core.Upstream_Dispatch.Enqueue_Command (UC, DC, M);
+      end;
+      return Success;
+   end Cmd_Register;
+
+   function Cmd_Away
+     (DC : not null Downstream_Conn_Access; M : Message)
+      return Irc_Error_Result is
+   begin
+      if not M.Params.Is_Empty then
+         DC.Away := M.Params (1);
+      else
+         DC.Away := Null_Unbounded_String;
+      end if;
+      Send_Message (DC, Generate_Away_Reply (Length (DC.Away) > 0));
+
+      declare
+         UC : constant Upstream_Conn_Access := Upstream_Of (DC);
+      begin
+         if UC /= null then
+            Soja.Core.Upstream_Dispatch.Update_Away (UC);
+         end if;
+      end;
+      return Success;
+   end Cmd_Away;
+
+   function Cmd_Info
+     (DC : not null Downstream_Conn_Access; M : Message)
+      return Irc_Error_Result is
+   begin
+      if DC.Network = null then
+         Send_Message
+           (DC, Make (RPL_INFO, [Nick_Of (DC), "soju <https://soju.im>"]));
+         Send_Message
+           (DC, Make (RPL_ENDOFINFO, [Nick_Of (DC), "End of INFO"]));
+         return Success;
+      end if;
+
+      declare
+         UC : constant Upstream_Conn_Access := Upstream_Of (DC);
+      begin
+         if UC = null then
+            return IRC_Fail
+              (ERR_UNKNOWNCOMMAND,
+               [Nick_Of (DC), To_String (M.Command),
+                "Disconnected from upstream network"]);
+         end if;
+         Relay (UC, DC, M);
+      end;
+      return Success;
+   end Cmd_Info;
+
+   ----------------------------------------------------------------------
+   --  MONITOR
+   ----------------------------------------------------------------------
+
+   function Cmd_Monitor
+     (DC : not null Downstream_Conn_Access; M : Message)
+      return Irc_Error_Result
+   is
+      UC  : constant Upstream_Conn_Access := Upstream_Of (DC);
+      Cmd : constant String := To_String (M.Command);
+      PR  : Params_Result;
+   begin
+      if UC = null or else not UC.Isupport.Contains ("MONITOR") then
+         return From_Error (Soja.Downstream.New_Unknown_Command_Error (Cmd));
+      end if;
+
+      PR := Parse_Message_Params (M, 1);
+      if not PR.Ok then
+         return Need_More (PR);
+      end if;
+
+      declare
+         Sub  : constant String := Param (M, 0);
+         Nick : constant String := Nick_Of (DC);
+      begin
+         if Sub = "+" or else Sub = "-" then
+            PR := Parse_Message_Params (M, 2);
+            if not PR.Ok then
+               return Need_More (PR);
+            end if;
+
+            for Target of Split_Commas (Param (M, 1)) loop
+               if Sub = "+" then
+                  --  A hard limit, just to avoid having clients fill our map.
+                  if DC.Monitored.Length >= 1000 then
+                     Send_Message
+                       (DC, Make (ERR_MONLISTFULL,
+                                  [Nick, "1000", Target,
+                                   "Bouncer monitor list is full"]));
+                  else
+                     DC.Monitored.Set (Target, True);
+
+                     if Soja.Irc.Case_Mapping.Fold
+                          (UC.Network.Casemap, Target) = Service_Nick_CM
+                     then
+                        --  BouncerServ is never tired.
+                        Send_Message
+                          (DC, Make (RPL_MONONLINE, [Nick, Target]));
+                     elsif UC.Monitored.Has (Target) then
+                        Send_Message
+                          (DC, Make
+                                 ((if UC.Monitored.Get (Target)
+                                   then RPL_MONONLINE else RPL_MONOFFLINE),
+                                  [Nick, Target]));
+                     end if;
+                  end if;
+               else
+                  DC.Monitored.Del (Target);
+               end if;
+            end loop;
+            Soja.Core.Upstream_Dispatch.Update_Monitor (UC);
+
+         elsif Upper (Sub) = "C" then   --  clear
+            DC.Monitored := Flag_Maps.New_Map (UC.Network.Casemap);
+            Soja.Core.Upstream_Dispatch.Update_Monitor (UC);
+
+         elsif Upper (Sub) = "L" then   --  list
+            --  TODO (Go): be less lazy and pack the list.
+            declare
+               procedure Show (Name : String; Present : Boolean) is
+                  pragma Unreferenced (Present);
+               begin
+                  Send_Message (DC, Make (RPL_MONLIST, [Nick, Name]));
+               end Show;
+            begin
+               DC.Monitored.For_Each (Show'Access);
+            end;
+            Send_Message
+              (DC, Make (RPL_ENDOFMONLIST, [Nick, "End of MONITOR list"]));
+
+         elsif Upper (Sub) = "S" then   --  status
+            declare
+               procedure Show (Target : String; Present : Boolean) is
+                  pragma Unreferenced (Present);
+                  Online : constant Boolean :=
+                    UC.Monitored.Get (Target)
+                    or else Soja.Irc.Case_Mapping.Fold
+                              (UC.Network.Casemap, Target) = Service_Nick_CM;
+               begin
+                  Send_Message
+                    (DC, Make ((if Online then RPL_MONONLINE
+                                else RPL_MONOFFLINE), [Nick, Target]));
+               end Show;
+            begin
+               DC.Monitored.For_Each (Show'Access);
+            end;
+         end if;
+      end;
+      return Success;
+   end Cmd_Monitor;
+
    ----------------------------------------------------------------------
    --  The dispatch
    ----------------------------------------------------------------------
@@ -979,6 +1484,20 @@ package body Soja.Core.Downstream_Commands is
          return Cmd_Who (DC, M);
       elsif Cmd = "WHOIS" then
          return Cmd_Whois (DC, M);
+      elsif Cmd = "PRIVMSG" or else Cmd = "NOTICE" or else Cmd = "TAGMSG" then
+         return Cmd_Chat (DC, M);
+      elsif Cmd = "INVITE" then
+         return Cmd_Invite (DC, M);
+      elsif Cmd = "AUTHENTICATE" then
+         return Cmd_Authenticate (DC, M);
+      elsif Cmd = "REGISTER" or else Cmd = "VERIFY" then
+         return Cmd_Register (DC, M);
+      elsif Cmd = "AWAY" then
+         return Cmd_Away (DC, M);
+      elsif Cmd = "INFO" then
+         return Cmd_Info (DC, M);
+      elsif Cmd = "MONITOR" then
+         return Cmd_Monitor (DC, M);
       end if;
 
       DC.Logger.Debug ("unhandled message: " & Image (M));

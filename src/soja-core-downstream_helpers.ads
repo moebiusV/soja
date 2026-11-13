@@ -19,6 +19,9 @@ package Soja.Core.Downstream_Helpers is
       new String'("message-tags"), new String'("multi-prefix"),
       new String'("draft/extended-monitor")];
 
+   --  servicePrefix: BouncerServ's prefix.
+   function Service_Prefix return Soja.Irc.Messages.Prefix_Access;
+
    --  dc.prefix(): nick!username@hostname.
    function Prefix_Of (DC : not null Downstream_Conn_Access)
       return Soja.Irc.Messages.Prefix;

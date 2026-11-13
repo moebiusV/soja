@@ -187,6 +187,21 @@ this rule is written explicitly, not assumed. Reference anchors:
 `upstream/soju/upstream.go` (KICK ~1255) and `downstream.go` (JOIN ~1867);
 `rate.go` is the backoff primitive.
 
+### Registered-client dispatch (`Soja.Core.Downstream_Commands`)
+
+Step 7 of Milestone A: `downstream.go` `handleMessageRegistered`, in three
+slices (7a PING..NAMES + default forward; 7b WHO/WHOIS with WHOX and the
+user-info cache; 7c PRIVMSG/NOTICE/TAGMSG, INVITE, AUTHENTICATE, REGISTER/
+VERIFY, AWAY, INFO, MONITOR).  Deviations from the Go layout:
+
+- BouncerServ is a hook (`Service_Handler`); the default answers "not
+  available yet" until `service.go` is ported (step 9).
+- A bouncer-wide `NOTICE $*` goes through `Broadcast_Hook`; with no hook it
+  reaches only the sender's own user until the server's user table exists
+  (step 8).
+- BOUNCER, CHATHISTORY, READ, SEARCH and WEBPUSH are Milestone B and fall
+  through to the default (forward upstream / 421).
+
 ## Open decisions
 
 - **v1 scope**: webpush, PAM, and PostgreSQL are the heavy items; ship
