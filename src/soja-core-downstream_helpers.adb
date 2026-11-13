@@ -1,9 +1,11 @@
 pragma Ada_2022;
 
 with Ada.Calendar.Conversions;
+with Ada.Containers;
 with Ada.Exceptions;
 with Ada.Strings.Fixed;
 
+with Soja.Core.Network_Ops;
 with Soja.Core.Upstream_Dispatch;
 with Soja.Irc.Case_Mapping;
 with Soja.Irc.Helpers;
@@ -22,6 +24,7 @@ package body Soja.Core.Downstream_Helpers is
    use Soja.Irc.Messages;
    use type Soja.Msgstore.Store_Access;
    use type Soja.Database.Database_Access;
+   use type Ada.Containers.Count_Type;
    use type Soja.Database.Read_Receipt_Access;
 
    --  database.GetNick(&user, nil) and friends: no network record.
@@ -537,5 +540,171 @@ package body Soja.Core.Downstream_Helpers is
          Send_Names (DC, Ch);
       end if;
    end Forward_Channel;
+
+
+   ------------------------------------------------------------------
+   --  Service notices, batches, backlog
+   ------------------------------------------------------------------
+
+   function Service_Prefix return Prefix_Access is
+     (new Prefix'(Name => To_Unbounded_String (Service_Nick),
+                  User => To_Unbounded_String (Service_Nick),
+                  Host => To_Unbounded_String (Service_Nick)));
+
+   procedure Send_Service_Notice
+     (DC : not null Downstream_Conn_Access; Text : String)
+   is
+      M : Message := Make ("NOTICE", [To_String (DC.Nick), Text]);
+   begin
+      M.Prefix := Service_Prefix;
+      Send_Message (DC, M);
+   end Send_Service_Notice;
+
+   procedure Send_Service_Privmsg
+     (DC : not null Downstream_Conn_Access; Text : String)
+   is
+      M : Message := Make ("PRIVMSG", [To_String (DC.Nick), Text]);
+   begin
+      M.Prefix := Service_Prefix;
+      Send_Message (DC, M);
+   end Send_Service_Privmsg;
+
+   procedure Send_Kicked_Notices (DC : not null Downstream_Conn_Access) is
+      procedure Notice (Name : String; Kick : Kick_Info_Access) is
+         Reason : constant String := To_String (Kick.Reason);
+      begin
+         Send_Service_Notice
+           (DC,
+            "you were kicked from " & Name & " by "
+            & To_String (Kick.Kicked_By)
+            & (if Reason /= "" then " (" & Reason & ")" else "") & " at "
+            & Soja.Irc.Xirc.Format_Server_Time (Kick.At_Time)
+            & "; soju does not rejoin automatically, send JOIN " & Name
+            & " to rejoin");
+      end Notice;
+   begin
+      if DC.Network /= null then
+         DC.Network.Kicked.For_Each (Notice'Access);
+      end if;
+   end Send_Kicked_Notices;
+
+   procedure Relay_Detached_Message
+     (DC  : not null Downstream_Conn_Access;
+      Net : not null Network_Access;
+      M   : Message)
+   is
+      Cmd : constant String := To_String (M.Command);
+   begin
+      if (Cmd /= "PRIVMSG" and then Cmd /= "NOTICE")
+        or else M.Params.Length < 2
+      then
+         return;
+      end if;
+
+      declare
+         Sender : constant String := To_String (M.Prefix.Name);
+         Target : constant String := Param (M, 0);
+         Text   : constant String := Param (M, 1);
+      begin
+         if Soja.Core.Network_Ops.Is_Highlight (Net, M) then
+            Send_Service_Notice
+              (DC, "highlight in " & Target & ": <" & Sender & "> " & Text);
+         else
+            Send_Service_Notice
+              (DC, "message in " & Target & ": <" & Sender & "> " & Text);
+         end if;
+      end;
+   end Relay_Detached_Message;
+
+   procedure Send_Batch
+     (DC      : not null Downstream_Conn_Access;
+      Typ     : String;
+      Params  : String_Vectors.Vector;
+      Process : not null access procedure (Batch_Ref : String);
+      Tags    : Tag_Map := (others => <>))
+   is
+      Ref : Unbounded_String;
+   begin
+      DC.Last_Batch_Ref := DC.Last_Batch_Ref + 1;
+      Ref := To_Unbounded_String
+        (Ada.Strings.Fixed.Trim
+           (Long_Long_Integer'Image (DC.Last_Batch_Ref), Ada.Strings.Left));
+
+      if Is_Enabled (DC.Caps, "batch") then
+         declare
+            P : String_Vectors.Vector;
+            M : Message;
+         begin
+            P.Append ("+" & To_String (Ref));
+            P.Append (Typ);
+            for Item of Params loop
+               P.Append (Item);
+            end loop;
+            M := Make ("BATCH", P);
+            M.Tags := Tags;
+            Send_Message (DC, M);
+         end;
+      end if;
+
+      Process (To_String (Ref));
+
+      if Is_Enabled (DC.Caps, "batch") then
+         Send_Message (DC, Make ("BATCH", ["-" & To_String (Ref)]));
+      end if;
+   end Send_Batch;
+
+   procedure Send_Target_Backlog
+     (DC     : not null Downstream_Conn_Access;
+      Net    : not null Network_Access;
+      Target : String;
+      Msg_ID : String)
+   is
+      Ch      : constant Channel_Access := Net.Channels.Get (Target);
+      History : Message_Vectors.Vector;
+      Options : Soja.Msgstore.Load_Message_Options;
+
+      procedure Replay (Batch_Ref : String) is
+      begin
+         for M of History loop
+            if Ch /= null and then Ch.Detached then
+               if Soja.Core.Network_Ops.Detached_Message_Needs_Relay
+                    (Net, Ch, M)
+               then
+                  Relay_Detached_Message (DC, Net, M);
+               end if;
+            else
+               declare
+                  Msg : Message := M;
+               begin
+                  Set_Tag (Msg.Tags, "batch", Batch_Ref);
+                  Send_Message (DC, Msg);
+               end;
+            end if;
+         end loop;
+      end Replay;
+   begin
+      if Is_Enabled (DC.Caps, "draft/chathistory")
+        or else DC.User.Msg_Store = null
+      then
+         return;
+      end if;
+
+      Options.Network := Net.Network_Record;
+      Options.Entity := To_Unbounded_String
+        (Soja.Irc.Case_Mapping.Fold (Net.Casemap, Target));
+      Options.Limit := Soja.Server.Backlog_Limit;
+      begin
+         History := DC.User.Msg_Store.Load_Latest_ID (Msg_ID, Options);
+      exception
+         when E : Soja.Msgstore.Store_Error =>
+            DC.Logger.Print
+              ("failed to send backlog for "
+               & Soja.Irc.Helpers.Quote (Target) & ": "
+               & Ada.Exceptions.Exception_Message (E));
+            return;
+      end;
+
+      Send_Batch (DC, "chathistory", [Target], Replay'Access);
+   end Send_Target_Backlog;
 
 end Soja.Core.Downstream_Helpers;

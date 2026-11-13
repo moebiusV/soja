@@ -158,8 +158,12 @@ package body Soja.Msgstore.Memory is
       Seq : Unsigned_64 := 0;
       K   : constant String := Key (Network.ID, Entity);
    begin
+      --  The sequence number of the newest message (0 when there is none).
+      --  (Go returns the *next* sequence number, which LoadLatestID then
+      --  excludes as if it were the last seen, so the first message stored
+      --  after this call was missing from the backlog; fixed.)
       if S.Buffers.Contains (K) then
-         Seq := S.Buffers (K).Cur;
+         Seq := S.Buffers (K).Cur - 1;
       end if;
       return Format_Memory_Msg_ID (Network.ID, Entity, Seq);
    end Last_Msg_ID;

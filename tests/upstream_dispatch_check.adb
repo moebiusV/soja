@@ -12,6 +12,7 @@ with GNAT.OS_Lib;
 with Soja.Conn;
 with Soja.Core;
 with Soja.Core.Downstream_Helpers;
+with Soja.Core.Network_Ops;
 with Soja.Core.Upstream_Dispatch;
 with Soja.Database;
 with Soja.Irc.Cap_Registry;
@@ -20,7 +21,9 @@ with Soja.Irc.Members;
 with Soja.Irc.Helpers;
 with Soja.Irc.Messages;
 with Soja.Irc.Xirc;
+with Soja.Database;
 with Soja.Msgstore;
+with Soja.Msgstore.Memory;
 with Soja.Logging;
 with Soja.Server;
 with Soja.Timers;
@@ -176,6 +179,7 @@ begin
 
    UC.Network := Net;
    UC.User := U;
+   UC.Srv := Srv'Unchecked_Access;
    UC.Logger := Log'Unchecked_Access;
    UC.Nick := To_Unbounded_String ("alice");
    UC.Conn := Soja.Conn.New_Conn
@@ -773,6 +777,44 @@ begin
                 "saved channels are untouched");
       end;
 
+      --  The kick is remembered, and clients that connect later are told.
+      Check (Net.Kicked.Has ("#chan")
+             and then To_String (Net.Kicked.Get ("#chan").Kicked_By) = "op"
+             and then To_String (Net.Kicked.Get ("#chan").Reason) = "out",
+             "the kick is remembered");
+      declare
+         N : constant Natural := DC_Log.Count;
+      begin
+         Soja.Core.Downstream_Helpers.Send_Kicked_Notices (DC);
+         Check (Wait (DC_Log, N + 1)
+                and then DC_Log.Has ("you were kicked from #chan by op (out)")
+                and then DC_Log.Has ("send JOIN #chan to rejoin"),
+                "clients are told about the kick: " & Line_Of (DC_Log, N + 1));
+      end;
+
+      --  A saved channel we were kicked from is NOT rejoined when the
+      --  upstream connection is established again; the others are.
+      Down (":alice_!u@h JOIN #a", 1, "JOIN #a");
+      Down (":op!o@h KICK #a alice_ :bye", 1, "KICK from #a");
+      Check (Net.Kicked.Has ("#a") and then Net.Kicked.Has ("#A"),
+             "kicked from a saved channel (case-mapped)");
+      declare
+         K : constant Natural := UC_Log.Count;
+      begin
+         Ok (":irc 001 alice_ :Welcome back");
+         Check (Wait (UC_Log, K + 1) and then Last_Line (UC_Log) = "JOIN #b",
+                "reconnect skips the kicked channel: " & Last_Line (UC_Log));
+         --  Joining it by hand (here: our own JOIN arriving) clears the
+         --  kick, so it is part of the next autojoin again.
+         Down (":alice_!u@h JOIN #a", 1, "rejoined by hand");
+         Check (not Net.Kicked.Has ("#a"), "an own JOIN clears the kick");
+         Ok (":irc 001 alice_ :Welcome again");
+         Check (Wait (UC_Log, K + 3)
+                and then Last_Line (UC_Log) = "JOIN #a,#b k",
+                "autojoin includes it again: " & Last_Line (UC_Log));
+      end;
+      Net.Kicked.Del ("#chan");
+
       --  Parted: the channel is forgotten and its idle timer stopped.
       Down (":alice_!u@h JOIN #p", 1, "JOIN #p");
       Check (UC.Channels.Get ("#p") /= null, "joined #p");
@@ -821,6 +863,251 @@ begin
              "our nick and the desired-nick flag");
       Check (To_String (DC.Nick) = "alice", "the downstream follows our nick");
       Check (DC_Log.Has (" NICK alice"), "downstream sees the NICK");
+   end;
+
+   -------------------------------------------------------------------
+   --  4c: chat messages, highlights, detached channels, auto-detach.
+   -------------------------------------------------------------------
+   declare
+      Store : constant Soja.Msgstore.Store_Access :=
+        Soja.Msgstore.Memory.New_Memory_Store;
+
+      procedure Down (Line : String; K : Natural; What : String) is
+         N : constant Natural := DC_Log.Count;
+      begin
+         Ok (Line);
+         Check (Wait (DC_Log, N + K), What & ": expected" & Natural'Image (K)
+                & " downstream lines");
+         delay 0.1;
+         Check (DC_Log.Count = N + K, What & ": exactly" & Natural'Image (K)
+                & " downstream lines, got"
+                & Natural'Image (DC_Log.Count - N));
+      end Down;
+
+      Saved_B : constant Channel_Access := Net.Channels.Get ("#b");
+      Event   : Event_Access;
+      Done    : Boolean;
+   begin
+      U.Msg_Store := Store;
+      --  A client with a delivery receipt for some other target, so that
+      --  first messages from a target are noticed.
+      Soja.User.Store_ID (Net.Delivered, "#old", "phone", "x");
+      --  chathistory clients get no PINGs, which keeps the line counts simple.
+      Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "draft/chathistory", True);
+      Saved_B.Detached := False;
+
+      Down (":alice!u@h JOIN #t", 1, "join #t");
+
+      --  A plain channel message.
+      Down (":carol!c@h PRIVMSG #t :hello everyone", 1, "channel message");
+      Check (DC_Log.Has (" PRIVMSG #t :hello everyone"), "delivered");
+      Check (not Net.Push_Targets.Has ("#t"), "not a highlight");
+
+      --  Highlights are only noticed in channels the user saved.
+      Check (UC.Channels.Get ("#b") /= null, "joined #b");
+      Down (":carol!c@h PRIVMSG #b :no mention here", 1, "plain in #b");
+      Check (not Net.Push_Targets.Has ("#b"), "no push target without mention");
+      Down (":carol!c@h PRIVMSG #b :hey alice, look", 1, "highlight in #b");
+      Check (Net.Push_Targets.Has ("#b"), "highlight sets the push target");
+      Down (":alice!u@h PRIVMSG #b :I mention alice myself", 1, "own message");
+      Down (":carol!c@h NOTICE #b :alicea is not alice", 1, "NOTICE");
+
+      --  Direct messages are filed under the sender.
+      Down (":carol!c@h PRIVMSG alice :psst", 1, "direct message");
+      Check (Net.Push_Targets.Has ("carol") and then Soja.User.Has_Target
+               (Net.Delivered, "carol"), "direct message buffer is the sender");
+      Check (Net.Push_Targets.Get ("carol") /= Zero_Time, "push time recorded");
+
+      --  Soju's own service is never relayed.
+      declare
+         N : constant Natural := DC_Log.Count;
+      begin
+         Ok (":BouncerServ!BouncerServ@BouncerServ PRIVMSG alice :hi");
+         Ok (":carol!c@h PRIVMSG bouncerserv :network status");
+         delay 0.2;
+         Check (DC_Log.Count = N, "messages from or to the service are skipped");
+      end;
+
+      --  Server messages (server prefix, "*" and "$mask" targets).
+      Down (":irc NOTICE alice :server notice", 1, "server notice");
+      Down ("NOTICE * :*** Looking up your hostname", 1, "NOTICE *");
+      Down (":carol!c@h PRIVMSG $*.example :broadcast", 1, "server mask");
+      Check (not Soja.User.Has_Target (Net.Delivered, "$*.example"),
+             "server masks are not stored");
+
+      --  STATUSMSG sigils are stripped from the target.
+      UC.Available_Status_Msg := To_Unbounded_String ("@+");
+      Net.Push_Targets.Del ("#b");
+      Down (":carol!c@h PRIVMSG @#b :ops, alice?", 1, "STATUSMSG");
+      Check (Net.Push_Targets.Has ("#b"), "buffer is the channel, not @#b");
+      UC.Available_Status_Msg := Null_Unbounded_String;
+
+      --  TAGMSG needs one parameter; PRIVMSG two.
+      Down ("@+typing=active :carol!c@h TAGMSG #t", 1, "TAGMSG");
+      Check (H (":carol!c@h TAGMSG").Failed, "TAGMSG without a target");
+      Check (H (":carol!c@h PRIVMSG #t").Failed, "PRIVMSG without text");
+
+      --  +draft/channel-context files a direct message under the channel.
+      Down (":alice!u@h JOIN #ctx", 1, "join #ctx");
+      UC.Channels.Get ("#ctx").Members.Set
+        ("dave", new Soja.Irc.Members.Membership_Vectors.Vector);
+      Down ("@+draft/channel-context=#ctx :dave!d@h PRIVMSG alice :aside",
+            1, "channel context");
+      Check (Soja.User.Has_Target (Net.Delivered, "#ctx")
+             and then not Soja.User.Has_Target (Net.Delivered, "dave"),
+             "context buffer is the channel");
+
+      --  Our own messages: a client without echo-message does not get its
+      --  message back; one with it does.
+      declare
+         N : constant Natural := DC_Log.Count;
+      begin
+         Ok ("@label=sd-5-0 :alice!u@h PRIVMSG #t :mine");
+         delay 0.2;
+         Check (DC_Log.Count = N, "no echo without echo-message");
+         Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "echo-message", True);
+         Down ("@label=sd-5-1 :alice!u@h PRIVMSG #t :mine again", 1, "echo");
+         Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "echo-message", False);
+      end;
+      Down ("@label=sd-99-0 :alice!u@h PRIVMSG #t :from elsewhere", 1,
+            "another client's message is shown here");
+
+      ----------------------------------------------------------------
+      --  Detached channels
+      ----------------------------------------------------------------
+      Saved_B.Detached := True;
+      Saved_B.Reattach_On := Soja.Database.Filter_None;
+
+      --  Not relayed unless it is a highlight (the default relay filter).
+      declare
+         N : constant Natural := DC_Log.Count;
+      begin
+         Ok (":carol!c@h PRIVMSG #b :quiet in a detached channel");
+         delay 0.2;
+         Check (DC_Log.Count = N, "plain message in a detached channel");
+      end;
+      Down (":carol!c@h PRIVMSG #b :alice, are you there?", 1,
+            "highlight in a detached channel");
+      Check (DC_Log.Has ("BouncerServ")
+             and then DC_Log.Has
+                        ("highlight in #b: <carol> alice, are you there?"),
+             "relayed as a service notice");
+      Saved_B.Relay_Detached := Soja.Database.Filter_Message;
+      Down (":carol!c@h PRIVMSG #b :now everything is relayed", 1, "relay all");
+      Check (DC_Log.Has ("message in #b: <carol> now everything is relayed"),
+             "message relay text");
+      Saved_B.Relay_Detached := Soja.Database.Filter_None;
+      declare
+         N : constant Natural := DC_Log.Count;
+      begin
+         Ok (":carol!c@h PRIVMSG #b :alice, relay is off");
+         delay 0.2;
+         Check (DC_Log.Count = N, "relay off");
+      end;
+      --  Other commands are never relayed.
+      Check (not Soja.Core.Network_Ops.Detached_Message_Needs_Relay
+                   (Net, Saved_B, Parse_Message (":x!y@z JOIN #b")),
+             "only chat is relayed");
+
+      --  A highlight reattaches when configured to.
+      Saved_B.Reattach_On := Soja.Database.Filter_Highlight;
+      Saved_B.Relay_Detached := Soja.Database.Filter_None;
+      declare
+         N : constant Natural := DC_Log.Count;
+      begin
+         Ok (":carol!c@h PRIVMSG #b :not a highlight");
+         delay 0.2;
+         Check (Saved_B.Detached and then DC_Log.Count = N,
+                "no reattach without a highlight");
+      end;
+      Down (":carol!c@h PRIVMSG #b :alice wake up", 2,
+            "reattach on highlight (JOIN, then the message)");
+      Check (not Saved_B.Detached and then DC_Log.Has (" JOIN #b"),
+             "reattached; clients rejoin");
+
+      --  Explicit detach / attach, with the backlog of what was missed.
+      Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "draft/chathistory", False);
+      Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "batch", True);
+      Saved_B.Reattach_On := Soja.Database.Filter_None;
+      declare
+         N : Natural := DC_Log.Count;
+      begin
+         Soja.Core.Network_Ops.Detach (Net, Saved_B);
+         Check (Saved_B.Detached and then Length (Saved_B.Detached_Internal_Msg_ID) > 0,
+                "detached, with the history position remembered");
+         Check (Wait (DC_Log, N + 1) and then DC_Log.Has (" PART #b Detach"),
+                "clients see a PART");
+         Soja.Core.Network_Ops.Detach (Net, Saved_B);   --  no-op
+         delay 0.15;
+         Check (DC_Log.Count = N + 1, "detaching twice does nothing");
+
+         Ok (":carol!c@h PRIVMSG #b :missed one");
+         Ok (":dave!d@h PRIVMSG #b :missed two");
+         delay 0.2;
+         N := DC_Log.Count;
+         Soja.Core.Network_Ops.Attach (Net, Saved_B);
+         --  JOIN, BATCH +, two messages, BATCH -.
+         Check (Wait (DC_Log, N + 5), "attach replays the backlog");
+         Check (DC_Log.Has (" JOIN #b") and then DC_Log.Has ("BATCH +")
+                and then DC_Log.Has ("chathistory #b")
+                and then DC_Log.Has ("batch=")
+                and then DC_Log.Has ("PRIVMSG #b :missed one")
+                and then DC_Log.Has ("PRIVMSG #b :missed two")
+                and then DC_Log.Has ("BATCH -"), "backlog contents");
+         Check (not Saved_B.Detached
+                and then Length (Saved_B.Detached_Internal_Msg_ID) = 0,
+                "attached");
+         Soja.Core.Network_Ops.Attach (Net, Saved_B);   --  no-op
+         delay 0.15;
+         Check (DC_Log.Count = N + 5, "attaching twice does nothing");
+      end;
+      Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "batch", False);
+
+      ----------------------------------------------------------------
+      --  Highlight detection
+      ----------------------------------------------------------------
+      declare
+         use Soja.Core.Network_Ops;
+      begin
+         Check (Is_Highlight (Net, Parse_Message (":carol!c PRIVMSG #t :hi alice")),
+                "mentions the nick");
+         Check (not Is_Highlight (Net, Parse_Message (":alice!c PRIVMSG #t :hi alice")),
+                "our own message is never a highlight");
+         Check (not Is_Highlight (Net, Parse_Message (":carol!c JOIN #t")),
+                "only chat can be a highlight");
+         Check (not Is_Highlight (Net, Parse_Message (":carol!c PRIVMSG #t :hi")),
+                "no mention");
+      end;
+
+      ----------------------------------------------------------------
+      --  Auto-detach after inactivity
+      ----------------------------------------------------------------
+      Net.Channels.Set
+        ("#c", new Soja.Database.Channel'
+           (Name => To_Unbounded_String ("#c"), Detach_After => 0.1,
+            Detach_On => Soja.Database.Filter_Message, others => <>));
+      Ok (":alice!u@h JOIN #c");   --  arms the idle timer
+      select
+         U.Events.Dequeue (Event, Done);
+         Check (not Done and then Event.all in Channel_Detach_Event
+                and then To_String (Channel_Detach_Event (Event.all).Name)
+                         = "#c", "idle channel detaches after a while");
+      or
+         delay 2.0;
+         Check (False, "the idle timer never fired");
+      end select;
+      Ok (":carol!c@h PRIVMSG #c :activity");   --  re-arms it
+      select
+         U.Events.Dequeue (Event, Done);
+         Check (not Done and then Event.all in Channel_Detach_Event,
+                "a message re-arms the idle timer");
+      or
+         delay 2.0;
+         Check (False, "the re-armed idle timer never fired");
+      end select;
+      Update_Auto_Detach (UC.Channels.Get ("#c"), 0.0);
+
+      Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "draft/chathistory", False);
    end;
 
    -------------------------------------------------------------------

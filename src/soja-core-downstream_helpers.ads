@@ -1,5 +1,6 @@
 pragma Ada_2022;
 
+with Soja.Irc.Genmsg;
 with Soja.Irc.Messages;
 
 --  The downstreamConn methods the upstream message handler calls to keep
@@ -81,5 +82,46 @@ package Soja.Core.Downstream_Helpers is
    procedure Forward_Channel
      (DC : not null Downstream_Conn_Access;
       Ch : not null Upstream_Channel_Access);
+
+
+   ------------------------------------------------------------------
+   --  Service notices, batches, backlog
+   ------------------------------------------------------------------
+
+   --  sendServiceNOTICE / sendServicePRIVMSG: a message from BouncerServ.
+   procedure Send_Service_Notice
+     (DC : not null Downstream_Conn_Access; Text : String);
+   procedure Send_Service_Privmsg
+     (DC : not null Downstream_Conn_Access; Text : String);
+
+   --  Tell a client, as BouncerServ notices, about the channels we were kicked
+   --  from and stayed out of, so it can decide to rejoin them.  Called when a
+   --  client connects (the welcome burst).
+   procedure Send_Kicked_Notices (DC : not null Downstream_Conn_Access);
+
+   --  dc.relayDetachedMessage: tell the client, as a service notice, about a
+   --  message that arrived in a detached channel.
+   procedure Relay_Detached_Message
+     (DC  : not null Downstream_Conn_Access;
+      Net : not null Network_Access;
+      M   : Soja.Irc.Messages.Message);
+
+   --  dc.SendBatch: run Process between BATCH +ref / BATCH -ref (the BATCH
+   --  lines are only sent to clients with the batch cap; Process always
+   --  runs).
+   procedure Send_Batch
+     (DC      : not null Downstream_Conn_Access;
+      Typ     : String;
+      Params  : Soja.Irc.Genmsg.String_Vectors.Vector;
+      Process : not null access procedure (Batch_Ref : String);
+      Tags    : Soja.Irc.Messages.Tag_Map := (others => <>));
+
+   --  dc.sendTargetBacklog: replay, as a chathistory batch, the messages
+   --  stored for Target after Msg_ID (for clients without chathistory).
+   procedure Send_Target_Backlog
+     (DC     : not null Downstream_Conn_Access;
+      Net    : not null Network_Access;
+      Target : String;
+      Msg_ID : String);
 
 end Soja.Core.Downstream_Helpers;

@@ -11,6 +11,7 @@ with Interfaces.C;
 
 with Soja.Base64;
 with Soja.Core.Downstream_Helpers;
+with Soja.Core.Network_Ops;
 with Soja.Downstream;
 with Soja.Irc.Cap_Registry;
 with Soja.Irc.Case_Mapping;
@@ -1070,6 +1071,7 @@ package body Soja.Core.Upstream_Dispatch is
       for Name of Split_Commas (Param (Msg, 0)) loop
          if Is_Our_Nick (UC, To_String (Msg.Prefix.Name)) then
             UC.Logger.Print ("joined channel " & Quote (Name));
+            UC.Network.Kicked.Del (Name);   --  back in: no longer "kicked"
             UC.Channels.Set (Name, New_Upstream_Channel (UC, Name));
             Update_Channel_Auto_Detach (UC, Name);
 
@@ -1169,12 +1171,21 @@ package body Soja.Core.Upstream_Dispatch is
          Victim  : constant String := Param (Msg, 1);
       begin
          if Is_Our_Nick (UC, Victim) then
-            --  We are not rejoining: the channel stays in the network's saved
-            --  list (so it is joined again on the next connection), but
-            --  nothing here sends a JOIN.
+            --  We are not rejoining: nothing here sends a JOIN, and the kick
+            --  is remembered so that neither the 001 autojoin of a later
+            --  connection nor anything else rejoins on its own; clients are
+            --  told when they connect (Send_Kicked_Notices).  The channel
+            --  stays in the saved list so a manual JOIN works as usual.
             UC.Logger.Print
               ("kicked from channel " & Quote (Channel) & " by "
                & To_String (Msg.Prefix.Name));
+            UC.Network.Kicked.Set
+              (Channel,
+               new Kick_Info'
+                 (Kicked_By => Msg.Prefix.Name,
+                  Reason    => (if Msg.Params.Length > 2 then Msg.Params (3)
+                                else Null_Unbounded_String),
+                  At_Time   => Ada.Calendar.Clock));
             declare
                Uch : constant Upstream_Channel_Access :=
                  UC.Channels.Get (Channel);
@@ -1612,6 +1623,161 @@ package body Soja.Core.Upstream_Dispatch is
       return Success;
    end Handle_End_Of_Names;
 
+   ----------------------------------------------------------------------
+   --  Chat messages (4c)
+   ----------------------------------------------------------------------
+
+   --  A message arrived in a detached channel: relay it as a service notice
+   --  when asked to, and reattach on the configured trigger.
+   procedure Handle_Detached_Message
+     (UC : not null Upstream_Conn_Access;
+      Ch : not null Channel_Access;
+      Msg : Message)
+   is
+      use Soja.Core.Downstream_Helpers;
+      use Soja.Database;
+      Net : constant Network_Access := UC.Network;
+   begin
+      if Soja.Core.Network_Ops.Detached_Message_Needs_Relay (Net, Ch, Msg) then
+         for DC of Downstreams (Net) loop
+            Relay_Detached_Message (DC, Net, Msg);
+         end loop;
+      end if;
+
+      if Ch.Reattach_On = Filter_Message
+        or else (Ch.Reattach_On = Filter_Highlight
+                 and then Soja.Core.Network_Ops.Is_Highlight (Net, Msg))
+      then
+         Soja.Core.Network_Ops.Attach (Net, Ch);
+         declare
+            DB : constant Soja.Database.Database_Access :=
+              Soja.Server.DB (UC.Srv.all);
+         begin
+            if DB /= null then
+               Soja.Database.Store_Channel
+                 (DB.all, Net.Network_Record.ID, Ch.all);
+            end if;
+         exception
+            when E : others =>
+               UC.Logger.Print
+                 ("failed to update channel " & Quote (To_String (Ch.Name))
+                  & ": " & Ada.Exceptions.Exception_Message (E));
+         end;
+      end if;
+   end Handle_Detached_Message;
+
+   --  strings.TrimLeft(s, cutset).
+   function Trim_Left (S, Cutset : String) return String is
+   begin
+      for I in S'Range loop
+         if Ada.Strings.Fixed.Index (Cutset, [1 => S (I)]) = 0 then
+            return S (I .. S'Last);
+         end if;
+      end loop;
+      return "";
+   end Trim_Left;
+
+   function Handle_Chat
+     (UC : not null Upstream_Conn_Access;
+      Msg : Message;
+      Downstream_ID : Long_Long_Integer) return Handle_Result
+   is
+      use Soja.Database;
+      Cmd : constant String := To_String (Msg.Command);
+      Net : constant Network_Access := UC.Network;
+      Bad : Boolean;
+      R   : constant Handle_Result :=
+        Check_Params (Msg, (if Cmd /= "TAGMSG" then 2 else 1), Bad);
+   begin
+      if Bad then
+         return R;
+      end if;
+
+      declare
+         --  Remove statusmsg sigils from the target.
+         Target : constant String :=
+           Trim_Left (Param (Msg, 0), To_String (UC.Available_Status_Msg));
+         Sender : constant String := To_String (Msg.Prefix.Name);
+      begin
+         if Equal_Casemap (Net, Sender, Service_Nick) then
+            UC.Logger.Print
+              ("skipping " & Cmd & " from soju's service: " & Text_Of (Msg));
+            return Success;
+         end if;
+         if Equal_Casemap (Net, Target, Service_Nick) then
+            UC.Logger.Print
+              ("skipping " & Cmd & " to soju's service: " & Text_Of (Msg));
+            return Success;
+         end if;
+
+         if not UC.Registered
+           or else Equal_Casemap
+                     (Net, Sender, To_String (UC.Server_Prefix.Name))
+           or else Target = "*"
+           or else (Target'Length > 0 and then Target (Target'First) = '$')
+         then
+            --  This is a server message.
+            Produce (UC, "", Msg, 0);
+            return Success;
+         end if;
+
+         declare
+            Direct      : Boolean := Is_Our_Nick (UC, Target);
+            Buffer_Name : Unbounded_String :=
+              To_Unbounded_String (if Direct then Sender else Target);
+            Self        : constant Boolean := Is_Our_Nick (UC, Sender);
+            Highlight   : Boolean := False;
+         begin
+            if Has_Tag (Msg.Tags, "+draft/channel-context") then
+               declare
+                  Ctx : constant Upstream_Channel_Access :=
+                    UC.Channels.Get (Get_Tag (Msg.Tags, "+draft/channel-context"));
+               begin
+                  if Ctx /= null and then Ctx.Members.Has (Sender) then
+                     Buffer_Name := Ctx.Name;
+                     Direct := False;
+                  end if;
+               end;
+            end if;
+
+            declare
+               Buffer : constant String := To_String (Buffer_Name);
+               Ch     : constant Channel_Access := Net.Channels.Get (Buffer);
+            begin
+               if Ch /= null and then Cmd /= "TAGMSG" and then not Self then
+                  if Ch.Detached then
+                     Handle_Detached_Message (UC, Ch, Msg);
+                  end if;
+
+                  Highlight := Soja.Core.Network_Ops.Is_Highlight (Net, Msg);
+                  if Ch.Detach_On = Filter_Message
+                    or else Ch.Detach_On = Filter_Default
+                    or else (Ch.Detach_On = Filter_Highlight and then Highlight)
+                  then
+                     Update_Channel_Auto_Detach (UC, Buffer);
+                  end if;
+               end if;
+
+               if not Self and then (Highlight or else Direct) then
+                  --  TODO: Web Push (broadcastWebPush) is not ported yet.
+                  declare
+                     Valid : Boolean;
+                     T     : constant Ada.Calendar.Time :=
+                       Parse_Server_Time (Get_Tag (Msg.Tags, "time"), Valid);
+                  begin
+                     if Valid then
+                        Net.Push_Targets.Set (Buffer, T);
+                     end if;
+                  end;
+               end if;
+
+               Produce (UC, Buffer, Msg, Downstream_ID);
+            end;
+         end;
+      end;
+      return Success;
+   end Handle_Chat;
+
    function Handle_Cap
      (UC : not null Upstream_Conn_Access; Msg : Message) return Handle_Result
    is
@@ -1787,8 +1953,16 @@ package body Soja.Core.Upstream_Dispatch is
             Channels, Keys : String_Vectors.Vector;
 
             procedure Collect (Name : String; Ch : Channel_Access) is
-               pragma Unreferenced (Name);
+               Kick : constant Kick_Info_Access := UC.Network.Kicked.Get (Name);
             begin
+               if Kick /= null then
+                  --  We were kicked from this channel and have not rejoined
+                  --  it by hand: stay out.
+                  UC.Logger.Print
+                    ("not rejoining " & Quote (Name) & ": kicked by "
+                     & To_String (Kick.Kicked_By));
+                  return;
+               end if;
                Channels.Append (To_String (Ch.Name));
                Keys.Append (To_String (Ch.Key));
             end Collect;
@@ -2206,6 +2380,9 @@ package body Soja.Core.Upstream_Dispatch is
 
       elsif Cmd = ERR_NOMOTD or else Cmd = RPL_ENDOFMOTD then
          return Handle_End_Of_Motd (UC, Msg, Downstream_ID);
+
+      elsif Cmd = "NOTICE" or else Cmd = "PRIVMSG" or else Cmd = "TAGMSG" then
+         return Handle_Chat (UC, Msg, Downstream_ID);
 
       elsif Cmd = "BATCH" then
          return Handle_Batch (UC, Msg, Label, Msg_Batch);

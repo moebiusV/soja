@@ -273,8 +273,23 @@ begin
                (1, "#c", Msg_ID_Memory, [Character'Val (1)])
              and then To_String (A) /= To_String (B), "append ids");
       Check (S.Last_Msg_ID (Net, "#c", Ada.Calendar.Clock) = Format_Msg_ID
-               (1, "#c", Msg_ID_Memory, [Character'Val (4)]),
-             "last id is the next sequence number");
+               (1, "#c", Msg_ID_Memory, [Character'Val (3)]),
+             "last id is the newest message's sequence number");
+      --  A message stored after taking a last id is part of the history
+      --  after it (Go lost it).
+      declare
+         Fix  : Load_Message_Options := Opts;
+         Seed : constant String := S.Append (Net, "#fix", Msg ("seed"));
+         Last : constant String :=
+           S.Last_Msg_ID (Net, "#fix", Ada.Calendar.Clock);
+         Next : constant String := S.Append (Net, "#fix", Msg ("four"));
+         pragma Unreferenced (Seed, Next);
+      begin
+         Fix.Entity := To_Unbounded_String ("#fix");
+         L := S.Load_Latest_ID (Last, Fix);
+         Check (L.Length = 1 and then Trailing (L (1)) = "four",
+                "the first message after a last id is not lost");
+      end;
 
       --  From before the first message: everything, oldest first.
       L := S.Load_Latest_ID (To_String (Before), Opts);

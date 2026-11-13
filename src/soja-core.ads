@@ -95,6 +95,20 @@ package Soja.Core is
 
    type Backoff_Access is access all Soja.Backoff.Backoffer;
 
+   --  A channel we were kicked from and have not rejoined: who did it, why
+   --  and when.  Kept per network so that soja does not rejoin on its own
+   --  (not even when the upstream connection is re-established), and so that
+   --  clients that connect later can be told and rejoin by hand.
+   type Kick_Info is record
+      Kicked_By : Unbounded_String;
+      Reason    : Unbounded_String;
+      At_Time   : Ada.Calendar.Time := Zero_Time;
+   end record;
+   type Kick_Info_Access is access all Kick_Info;
+
+   package Kick_Maps is new Soja.Irc.Case_Mapping_Maps
+     (Element => Kick_Info_Access, Null_Element => null);
+
    ---------------------------
    --  downstreamRegistration --
    ---------------------------
@@ -295,6 +309,7 @@ package Soja.Core is
       Casemap   : Kind;
 
       Push_Targets   : Time_Maps.Map;
+      Kicked         : Kick_Maps.Map;   --  channels we were kicked from
       Has_Last_Error : Boolean := False;   --  Go's lastError != nil
       Last_Error     : Unbounded_String;
    end record;

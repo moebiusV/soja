@@ -202,6 +202,7 @@ package body Soja.Core is
       end loop;
       Net.Delivered := Soja.User.New_Delivered_Store (CM);
       Net.Push_Targets := Time_Maps.New_Map (CM);
+      Net.Kicked := Kick_Maps.New_Map (CM);
       Net.Casemap := Case_RFC1459;   --  stdCaseMapping
       return Net;
    end New_Network;
@@ -1037,6 +1038,7 @@ package body Soja.Core is
       Net.Channels.Set_Case_Mapping (CM);
       Soja.User.Set_Case_Mapping (Net.Delivered, CM);
       Net.Push_Targets.Set_Case_Mapping (CM);
+      Net.Kicked.Set_Case_Mapping (CM);
 
       if Net.Conn /= null then
          declare

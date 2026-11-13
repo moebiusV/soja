@@ -342,6 +342,11 @@ this rule is written explicitly, not assumed. Reference anchors:
     `len(subParams)-2` (missing the offset of two), which only worked for the
     usual `CAP * LS * :caps` form.  Soja tests the sub-parameter before the
     last.
+  - The memory message store's `LastMsgID` returned the *next* sequence
+    number, which `LoadLatestID` then excluded as if it were the last one
+    seen, so the first message stored after a `LastMsgID` call (a detach, a
+    delivery receipt) was missing from the backlog.  Soja returns the newest
+    message's number (0 when empty).
 
 - **Upstream message handling, slice 4b: channel state.**  `Soja.Core.
   Upstream_Dispatch` now handles BATCH (definition, nesting, label
@@ -359,6 +364,33 @@ this rule is written explicitly, not assumed. Reference anchors:
   after it), and the saved channel list is untouched, so it is joined again
   only on the next connection; a PART likewise.  Joining happens only in the
   001 handler.
+
+- **Upstream message handling, slice 4c: chat messages and detached
+  channels.**  PRIVMSG / NOTICE / TAGMSG (status-message sigils stripped,
+  BouncerServ's own traffic skipped, server messages, direct-message and
+  `+draft/channel-context` buffers, highlight detection, push targets,
+  idle-timer re-arming, echo handling through `produce`) and the detached
+  channel machinery: `Soja.Core.Network_Ops` (`isHighlight`,
+  `detachedMessageNeedsRelay`, `detach`, `attach`) plus, in `Downstream_
+  Helpers`, `sendServiceNOTICE`/`PRIVMSG`, `relayDetachedMessage`,
+  `SendBatch` and `sendTargetBacklog` (the chathistory-batch replay).
+  Deviations: Web Push (`broadcastWebPush`) is not ported yet, so highlights
+  and direct messages only record the push target; `isHighlight` treats an
+  empty nick as "no highlight" instead of panicking; `attach` replays a
+  channel only once its NAMES are complete (Go panics otherwise).
+
+- **Kicked channels (user requirement, 2026-11-12).**  When we are kicked
+  from a channel, `network.Kicked` records who kicked us, the reason and the
+  time.  Soja does not rejoin it by itself, **not even when the upstream
+  connection is established again**: the 001 autojoin skips kicked channels
+  (it logs "not rejoining ...").  The state is cleared when we join the
+  channel again (a client's JOIN, once the downstream command handler exists,
+  must forward it upstream; our own JOIN coming back clears the kick).
+  Clients are told with a BouncerServ NOTICE per kicked channel
+  (`Downstream_Helpers.Send_Kicked_Notices`, to be called from the welcome
+  burst) so they can decide to rejoin.  The state lives in memory: a restart
+  of soja forgets it, so the channel is joined at startup like any saved
+  channel.  (Persisting it would need a schema change; not done.)
 
 - **Ordering**: `downstream.go`, `upstream.go`, `user.go` and `service.go`
   form one mutually-dependent core (the `network` type in `user.go` holds both
