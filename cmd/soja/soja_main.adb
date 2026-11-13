@@ -155,8 +155,11 @@ procedure Soja_Main is
 
          Cfg.Hostname := Raw.Hostname;
          Cfg.Title := Raw.Title;
-         --  Only the in-memory message store is ported so far.
-         if To_String (Raw.Msg_Store.Driver) /= "memory" then
+         --  The in-memory and the database stores are ported; the file one
+         --  is not.
+         if To_String (Raw.Msg_Store.Driver) /= "memory"
+           and then To_String (Raw.Msg_Store.Driver) /= "db"
+         then
             Log.Print ("warning: the "
                        & Quote (To_String (Raw.Msg_Store.Driver))
                        & " message store is not supported by soja yet; "

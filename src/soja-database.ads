@@ -10,6 +10,8 @@ with Ada.Containers.Indefinite_Vectors;
 with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded;
 
+with Soja.Irc.Messages;
+
 package Soja.Database is
 
    use Ada.Strings.Unbounded;
@@ -168,14 +170,17 @@ package Soja.Database is
 
    type Message_Target is record
       Name           : Unbounded_String;
-      Latest_Message : Time;
+      Latest_Message : Time := Null_Time;
    end record;
 
+   --  What ListMessages and ListMessageLastPerTarget filter and order by.
+   --  A zero field (Null_Time, "", 0) means no such filter.  Take_Last keeps
+   --  the newest Limit rows (still returned oldest first).
    type Message_Options is record
       After_ID   : Long_Long_Integer := 0;
-      After_Time : Time;
-      Before_Time : Time;
-      Limit      : Integer := 0;
+      After_Time : Time := Null_Time;
+      Before_Time : Time := Null_Time;
+      Limit      : Natural := 0;
       Events     : Boolean := False;
       Sender     : Unbounded_String;
       Text       : Unbounded_String;
@@ -213,6 +218,12 @@ package Soja.Database is
      new Ada.Containers.Vectors (Positive, WebPush_Subscription);
    package Username_Lists is
      new Ada.Containers.Indefinite_Vectors (Positive, Unbounded_String);
+
+   package Message_Target_Lists is
+     new Ada.Containers.Vectors (Positive, Message_Target);
+
+   package Id_Lists is
+     new Ada.Containers.Vectors (Positive, Long_Long_Integer);
 
    Not_Found : exception;   --  a lookup returned no row (sql.ErrNoRows)
 
@@ -277,6 +288,27 @@ package Soja.Database is
    function List_Kicks (DB : in out Database_Interface;
       Network_ID : Long_Long_Integer; Active_Only : Boolean)
       return Kick_Lists.Vector is abstract;
+
+   --  The message store (database/sqlite.go).  The ID of a stored message is
+   --  its row ID.
+   --  GetMessageLastID: the newest message of Name on the network, 0 if none.
+   function Get_Message_Last_ID (DB : in out Database_Interface;
+      Network_ID : Long_Long_Integer; Name : String)
+      return Long_Long_Integer is abstract;
+   --  StoreMessages: all or none; returns the new messages' IDs.
+   function Store_Messages (DB : in out Database_Interface;
+      Network_ID : Long_Long_Integer; Name : String;
+      Msgs : Soja.Irc.Messages.Message_Vectors.Vector)
+      return Id_Lists.Vector is abstract;
+   --  ListMessageLastPerTarget: the targets of the network with the time of
+   --  their latest message (or latest non-event message).
+   function List_Message_Last_Per_Target (DB : in out Database_Interface;
+      Network_ID : Long_Long_Integer; Options : Message_Options)
+      return Message_Target_Lists.Vector is abstract;
+   --  ListMessages.
+   function List_Messages (DB : in out Database_Interface;
+      Network_ID : Long_Long_Integer; Name : String; Options : Message_Options)
+      return Soja.Irc.Messages.Message_Vectors.Vector is abstract;
 
    function Get_Read_Receipt (DB : in out Database_Interface;
       Network_ID : Long_Long_Integer; Name : String)

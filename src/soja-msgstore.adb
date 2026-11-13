@@ -88,4 +88,47 @@ package body Soja.Msgstore is
       end;
    end Parse_Msg_ID;
 
+   --  The operations a store may not have (see Supports_*).
+
+   function List_Targets
+     (S : in out Store; Network : Soja.Database.Network;
+      Start, End_Time : Ada.Calendar.Time; Limit : Natural; Events : Boolean)
+      return Target_Vectors.Vector
+   is
+      pragma Unreferenced (S, Network, Start, End_Time, Limit, Events);
+   begin
+      raise Store_Error with "this store has no chat history";
+      return Target_Vectors.Empty_Vector;
+   end List_Targets;
+
+   function Load_Before_Time
+     (S : in out Store; Start, End_Time : Ada.Calendar.Time;
+      Options : Load_Message_Options) return Message_Vector
+   is
+      pragma Unreferenced (S, Start, End_Time, Options);
+   begin
+      raise Store_Error with "this store has no chat history";
+      return Soja.Irc.Messages.Message_Vectors.Empty_Vector;
+   end Load_Before_Time;
+
+   function Load_After_Time
+     (S : in out Store; Start, End_Time : Ada.Calendar.Time;
+      Options : Load_Message_Options) return Message_Vector
+   is
+      pragma Unreferenced (S, Start, End_Time, Options);
+   begin
+      raise Store_Error with "this store has no chat history";
+      return Soja.Irc.Messages.Message_Vectors.Empty_Vector;
+   end Load_After_Time;
+
+   function Search
+     (S : in out Store; Network : Soja.Database.Network;
+      Options : Search_Options) return Message_Vector
+   is
+      pragma Unreferenced (S, Network, Options);
+   begin
+      raise Store_Error with "this store cannot search";
+      return Soja.Irc.Messages.Message_Vectors.Empty_Vector;
+   end Search;
+
 end Soja.Msgstore;

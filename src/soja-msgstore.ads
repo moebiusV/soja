@@ -1,6 +1,7 @@
 pragma Ada_2022;
 
 with Ada.Calendar;
+with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded;
 
 with Soja.Database;
@@ -9,10 +10,11 @@ with Soja.Irc.Messages;
 --  Soja.Msgstore — msgstore/msgstore.go: the per-user store of IRC messages
 --  and the internal message-ID codec shared by its implementations.
 --
---  Go's optional interfaces (ChatHistoryStore, SearchStore,
---  RenameNetworkStore, discovered by type assertion) arrive with the stores
---  that implement them (the filesystem and database stores).  Go's `error`
---  returns are Store_Error exceptions here.
+--  Go's optional interfaces (ChatHistoryStore, SearchStore), which Go finds by
+--  type assertion, are operations of Store here with Supports_* functions that
+--  say whether a store has them; a store that does not raises Store_Error if
+--  they are called anyway.  (RenameNetworkStore comes with the filesystem
+--  store.)  Go's `error` returns are Store_Error exceptions here.
 package Soja.Msgstore is
 
    Store_Error : exception;
@@ -31,8 +33,11 @@ package Soja.Msgstore is
    procedure Close (S : in out Store) is abstract;
 
    --  Whether the store implements Go's ChatHistoryStore (a type assertion in
-   --  Go).  None of the stores ported so far does.
+   --  Go): ListTargets, LoadBeforeTime and LoadAfterTime below.
    function Supports_Chat_History (S : Store) return Boolean is (False);
+
+   --  Whether it implements SearchStore: Search below.
+   function Supports_Search (S : Store) return Boolean is (False);
 
    --  LastMsgID: the last message ID for the given network, entity and date.
    --  It may not refer to a valid message, but can be used in history
@@ -53,9 +58,58 @@ package Soja.Msgstore is
      (S : in out Store; Network : Soja.Database.Network; Entity : String;
       Msg : Soja.Irc.Messages.Message) return String is abstract;
 
+   ----------------------------
+   --  Chat history and search --
+   ----------------------------
+
+   type Chat_History_Target is record
+      Name           : Ada.Strings.Unbounded.Unbounded_String;
+      Latest_Message : Ada.Calendar.Time;
+   end record;
+   package Target_Vectors is
+     new Ada.Containers.Vectors (Positive, Chat_History_Target);
+
+   subtype Message_Vector is Soja.Irc.Messages.Message_Vectors.Vector;
+
+   --  ListTargets: channels and nicknames by time of the latest message, up
+   --  to Limit of them, between Start and End_Time, both excluded; End_Time
+   --  may be before or after Start.  If Events is False only PRIVMSG/NOTICE
+   --  count.
+   function List_Targets
+     (S : in out Store; Network : Soja.Database.Network;
+      Start, End_Time : Ada.Calendar.Time; Limit : Natural; Events : Boolean)
+      return Target_Vectors.Vector;
+
+   --  LoadBeforeTime: up to Options.Limit messages before Start down to
+   --  End_Time (which is before Start), both excluded, oldest first.  The
+   --  zero time (Soja.Database.Null_Time) is no bound.
+   function Load_Before_Time
+     (S : in out Store; Start, End_Time : Ada.Calendar.Time;
+      Options : Load_Message_Options) return Message_Vector;
+
+   --  LoadAfterTime: up to Options.Limit messages after Start up to
+   --  End_Time (which is after Start), both excluded, oldest first.
+   function Load_After_Time
+     (S : in out Store; Start, End_Time : Ada.Calendar.Time;
+      Options : Load_Message_Options) return Message_Vector;
+
+   --  SearchMessageOptions.  A zero field is no such filter.
+   type Search_Options is record
+      Start     : Ada.Calendar.Time := Soja.Database.Null_Time;
+      End_Time  : Ada.Calendar.Time := Soja.Database.Null_Time;
+      Limit     : Natural := 0;
+      From      : Ada.Strings.Unbounded.Unbounded_String;
+      In_Target : Ada.Strings.Unbounded.Unbounded_String;
+      Text      : Ada.Strings.Unbounded.Unbounded_String;
+   end record;
+
+   --  Search: the newest Options.Limit messages matching, oldest first.
+   function Search
+     (S : in out Store; Network : Soja.Database.Network;
+      Options : Search_Options) return Message_Vector;
+
    ----------------
    --  Message IDs --
-   ----------------
 
    --  msgIDType (iota: none, memory, fs, db).  A plain number so that an ID
    --  carrying an unknown type still parses (and is rejected only when a

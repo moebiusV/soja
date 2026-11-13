@@ -51,6 +51,7 @@ listen unix://$D/irc.sock
 listen ircs://127.0.0.1:6698
 tls $D/tls.crt $D/tls.key
 hostname soja.example.net
+message-store db
 accept-proxy-ip localhost
 db sqlite3 $D/soja.db
 EOT

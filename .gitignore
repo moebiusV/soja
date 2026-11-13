@@ -66,3 +66,5 @@ cmd/sojuctl/sojuctl
 cmd/sojuctl/obj/
 tests/proxy_check
 tests/sqlite_features_check
+tests/dbmsg_check
+tests/dbstore_check

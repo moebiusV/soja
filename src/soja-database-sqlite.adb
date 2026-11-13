@@ -7,7 +7,13 @@ with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Ada.Unchecked_Deallocation;
 
+with Ada.Strings.UTF_Encoding.Wide_Wide_Strings;
+with Ada.Wide_Wide_Characters.Handling;
+
 with GNATCOLL.SQL.Sqlite;
+
+with Soja.Irc.Helpers;
+with Soja.Irc.Messages;
 
 package body Soja.Database.Sqlite is
 
@@ -118,11 +124,27 @@ package body Soja.Database.Sqlite is
        ("CREATE TABLE MessageTarget (id INTEGER PRIMARY KEY, network " &
        "INTEGER " &
         "NOT NULL, target TEXT NOT NULL, FOREIGN KEY(network) REFERENCES " &
-        "Network(id), UNIQUE(network, target))")];
+        "Network(id), UNIQUE(network, target))"),
+      11 => To_Unbounded_String
+       ("CREATE VIRTUAL TABLE MessageFTS USING fts5 (text, " &
+        "content=Message, content_rowid=id)"),
+      12 => To_Unbounded_String
+       ("CREATE TRIGGER MessageFTSInsert AFTER INSERT ON Message " &
+        "BEGIN INSERT INTO MessageFTS(rowid, text) VALUES (new.id, " &
+        "new.text); END"),
+      13 => To_Unbounded_String
+       ("CREATE TRIGGER MessageFTSDelete AFTER DELETE ON Message " &
+        "BEGIN INSERT INTO MessageFTS(MessageFTS, rowid, text) " &
+        "VALUES ('delete', old.id, old.text); END"),
+      14 => To_Unbounded_String
+       ("CREATE TRIGGER MessageFTSUpdate AFTER UPDATE ON Message " &
+        "BEGIN INSERT INTO MessageFTS(MessageFTS, rowid, text) " &
+        "VALUES ('delete', old.id, old.text); INSERT INTO " &
+        "MessageFTS(rowid, text) VALUES (new.id, new.text); END")];
 
-   --  The MessageFTS virtual table and its triggers are deferred: they only
-   --  serve the message store (StoreMessages/ListMessages), and
-   --  gnatcoll-sqlite bundles a sqlite3 built without FTS5.  See PORTING.md.
+   --  MessageFTS and its triggers (the full-text index over Message.text,
+   --  for `SEARCH`) are part of the schema and of the last migration; they
+   --  need the FTS5 of the system SQLite (see PORTING.md).
 
    --  The migrations, flattened into individual statements.  Migration_Start
    --  (V) is the index into Migration_Stmts of migration V's first statement;
@@ -261,11 +283,27 @@ package body Soja.Database.Sqlite is
        ("CREATE TABLE MessageTarget (id INTEGER PRIMARY KEY, network " &
        "INTEGER " &
         "NOT NULL, target TEXT NOT NULL, FOREIGN KEY(network) REFERENCES " &
-        "Network(id), UNIQUE(network, target))")];
+        "Network(id), UNIQUE(network, target))"),
+      41 => To_Unbounded_String
+       ("CREATE VIRTUAL TABLE MessageFTS USING fts5 (text, " &
+        "content=Message, content_rowid=id)"),
+      42 => To_Unbounded_String
+       ("CREATE TRIGGER MessageFTSInsert AFTER INSERT ON Message " &
+        "BEGIN INSERT INTO MessageFTS(rowid, text) VALUES (new.id, " &
+        "new.text); END"),
+      43 => To_Unbounded_String
+       ("CREATE TRIGGER MessageFTSDelete AFTER DELETE ON Message " &
+        "BEGIN INSERT INTO MessageFTS(MessageFTS, rowid, text) " &
+        "VALUES ('delete', old.id, old.text); END"),
+      44 => To_Unbounded_String
+       ("CREATE TRIGGER MessageFTSUpdate AFTER UPDATE ON Message " &
+        "BEGIN INSERT INTO MessageFTS(MessageFTS, rowid, text) " &
+        "VALUES ('delete', old.id, old.text); INSERT INTO " &
+        "MessageFTS(rowid, text) VALUES (new.id, new.text); END")];
 
    Migration_Start : constant array (1 .. Migration_Count) of Positive :=
      [1, 2, 3, 4, 5, 6, 10, 14, 18, 19, 20, 21, 22, 26, 27, 29, 31, 32, 33,
-      34, 36, 37, 38, 40, 41];
+      34, 36, 37, 38, 40, 45];
 
    -----------------
    --  Time helpers
@@ -473,6 +511,31 @@ package body Soja.Database.Sqlite is
    --  upgrade and without touching PRAGMA user_version, so that upstream
    --  soju (which refuses a database whose version it does not know) keeps
    --  working on the same file, and simply ignores the table.
+   --  A database that soja created before it had FTS5 (or that is missing
+   --  the index for any reason) has the Message tables but no MessageFTS:
+   --  create it and its triggers, and index what is there, so that SEARCH
+   --  works and the same file stays valid for soju (whose triggers and index
+   --  these are, to the letter).
+   procedure Ensure_Message_FTS (DB : access Sqlite_DB) is
+      C : Forward_Cursor;
+      Missing : Boolean := False;
+   begin
+      Fetch (C, DB.DB,
+        "SELECT COUNT(*) FROM sqlite_master WHERE name = 'MessageFTS'");
+      Check (DB);
+      Missing := Has_Row (C) and then Bigint_Value (C, 0) = 0;
+      if not Missing then
+         return;
+      end if;
+      for I in Schema_Stmts'Last - 3 .. Schema_Stmts'Last loop
+         Execute (DB.DB, To_String (Schema_Stmts (I)));
+         Check (DB);
+      end loop;
+      Execute (DB.DB, "INSERT INTO MessageFTS(MessageFTS) VALUES ('rebuild')");
+      Check (DB);
+      Commit_Check (DB);
+   end Ensure_Message_FTS;
+
    procedure Ensure_Soja_Tables (DB : access Sqlite_DB) is
    begin
       Execute (DB.DB,
@@ -486,6 +549,7 @@ package body Soja.Database.Sqlite is
         "KickRecord(network, rejoined_at)");
       Check (DB);
       Commit_Check (DB);
+      Ensure_Message_FTS (DB);
    end Ensure_Soja_Tables;
 
    overriding procedure Store_Kick (DB : in out Sqlite_DB;
@@ -1190,6 +1254,300 @@ package body Soja.Database.Sqlite is
       end loop;
       Commit_Check (DB'Access);
    end Store_Client_Delivery_Receipts;
+
+   ----------------------------------------------------------------------
+   --  The message store
+   ----------------------------------------------------------------------
+
+   function Img (N : Integer) return String is
+     (Ada.Strings.Fixed.Trim (Integer'Image (N), Ada.Strings.Left));
+
+   --  quoteFTSQuery: FTS5 would read the user's text as a query with
+   --  operators; quote each token ("foo" "bar") so that it is matched as
+   --  words.  A token is a run of letters, digits and private-use characters
+   --  (the unicode61 tokenizer's definition); the rest separates.  The
+   --  characters of a token that matter for the quoting (") are doubled.
+   function Quote_FTS_Query (Query : String) return String is
+      use Ada.Strings.UTF_Encoding.Wide_Wide_Strings;
+      use Ada.Wide_Wide_Characters.Handling;
+      Wide : constant Wide_Wide_String := Decode (Query);
+      Result : Unbounded_String;
+      Token  : Wide_Wide_String (1 .. Wide'Length) := [others => ' '];
+      Count  : Natural := 0;
+
+      procedure Flush is
+      begin
+         if Count = 0 then
+            return;
+         end if;
+         if Length (Result) > 0 then
+            Append (Result, ' ');
+         end if;
+         Append (Result, '"');
+         declare
+            Bytes : constant String := Encode (Token (1 .. Count));
+         begin
+            for C of Bytes loop
+               if C = '"' then
+                  Append (Result, '"');   --  a doubled quote, SQL-style
+               end if;
+               Append (Result, C);
+            end loop;
+         end;
+         Append (Result, '"');
+         Count := 0;
+      end Flush;
+
+      function Is_Token_Char (C : Wide_Wide_Character) return Boolean is
+        (Is_Letter (C) or else Is_Digit (C)
+         or else Wide_Wide_Character'Pos (C) in 16#E000# .. 16#F8FF#
+              | 16#F0000# .. 16#FFFFD# | 16#100000# .. 16#10FFFD#);
+   begin
+      for C of Wide loop
+         if Is_Token_Char (C) then
+            Count := Count + 1;
+            Token (Count) := C;
+         else
+            Flush;
+         end if;
+      end loop;
+      Flush;
+      return To_String (Result);
+   end Quote_FTS_Query;
+
+   --  A growing list of positional parameters: Add returns "?<n>".
+   type Param_List is record
+      Items : SQL_Parameters (1 .. 12);
+      Count : Natural := 0;
+   end record;
+
+   procedure Add (P : in out Param_List; Item : SQL_Parameter;
+                  Ref : out Unbounded_String) is
+   begin
+      P.Count := P.Count + 1;
+      P.Items (P.Count) := Item;
+      Ref := To_Unbounded_String ("?" & Img (P.Count));
+   end Add;
+
+   function Ref_Of (P : in out Param_List; Item : SQL_Parameter) return String
+   is
+      Ref : Unbounded_String;
+   begin
+      Add (P, Item, Ref);
+      return To_String (Ref);
+   end Ref_Of;
+
+   overriding function Get_Message_Last_ID (DB : in out Sqlite_DB;
+      Network_ID : Long_Long_Integer; Name : String) return Long_Long_Integer
+   is
+      G : Guard;
+      C : Forward_Cursor;
+   begin
+      Acquire (G, DB.Lock);
+      Fetch (C, DB.DB,
+        "SELECT m.id FROM Message AS m, MessageTarget AS t " &
+        "WHERE t.network = ?1 AND t.target = ?2 AND m.target = t.id " &
+        "ORDER BY m.time DESC LIMIT 1",
+        [1 => As_Bigint (Network_ID), 2 => +Name]);
+      Check (DB'Access);
+      return (if Has_Row (C) then Bigint_Value (C, 0) else 0);
+   end Get_Message_Last_ID;
+
+   overriding function Store_Messages (DB : in out Sqlite_DB;
+      Network_ID : Long_Long_Integer; Name : String;
+      Msgs : Soja.Irc.Messages.Message_Vectors.Vector)
+      return Id_Lists.Vector
+   is
+      use Soja.Irc.Messages;
+      G   : Guard;
+      Ids : Id_Lists.Vector;
+   begin
+      if Msgs.Is_Empty then
+         return Ids;
+      end if;
+      Acquire (G, DB.Lock);
+      begin
+         Execute (DB.DB,
+           "INSERT INTO MessageTarget(network, target) VALUES (?1, ?2) " &
+           "ON CONFLICT DO NOTHING",
+           [1 => As_Bigint (Network_ID), 2 => +Name]);
+         Check (DB'Access);
+
+         for Msg of Msgs loop
+            declare
+               Stamp : Time := Ada.Calendar.Clock;
+               Cmd   : constant String := To_String (Msg.Command);
+               Text  : SQL_Parameter := Null_Parameter;
+            begin
+               if Has_Tag (Msg.Tags, "time") then
+                  declare
+                     Valid : Boolean;
+                     T     : constant Time :=
+                       Soja.Irc.Helpers.Parse_Server_Time
+                         (Get_Tag (Msg.Tags, "time"), Valid);
+                  begin
+                     if not Valid then
+                        raise Database_Error with
+                          "failed to parse message time tag";
+                     end if;
+                     Stamp := T;
+                  end;
+               end if;
+
+               if (Cmd = "PRIVMSG" or else Cmd = "NOTICE")
+                 and then Natural (Msg.Params.Length) > 1
+               then
+                  Text := +To_String (Msg.Params (2));
+               end if;
+
+               Execute (DB.DB,
+                 "INSERT INTO Message(target, raw, time, sender, text) " &
+                 "SELECT id, ?1, ?2, ?3, ?4 FROM MessageTarget AS t " &
+                 "WHERE network = ?5 AND target = ?6",
+                 [1 => +Image (Msg),
+                  2 => +Format_Time (Stamp),
+                  3 => +(if Msg.Prefix = null then ""
+                         else To_String (Msg.Prefix.Name)),
+                  4 => Text,
+                  5 => As_Bigint (Network_ID),
+                  6 => +Name]);
+               Check (DB'Access);
+               Ids.Append (Last_ID (DB'Access));
+            end;
+         end loop;
+         Commit_Check (DB'Access);
+      exception
+         when others =>
+            Rollback (DB.DB);   --  all or none
+            raise;
+      end;
+      return Ids;
+   end Store_Messages;
+
+   overriding function List_Message_Last_Per_Target (DB : in out Sqlite_DB;
+      Network_ID : Long_Long_Integer; Options : Message_Options)
+      return Message_Target_Lists.Vector
+   is
+      G : Guard;
+      C : Forward_Cursor;
+      P : Param_List;
+      Q : Unbounded_String;
+      V : Message_Target_Lists.Vector;
+   begin
+      Acquire (G, DB.Lock);
+      Q := To_Unbounded_String
+        ("SELECT target, (SELECT time FROM Message " &
+         "WHERE target = MessageTarget.id ");
+      if not Options.Events then
+         Append (Q, "AND text IS NOT NULL ");
+      end if;
+      Append (Q, "ORDER BY time DESC LIMIT 1) latest FROM MessageTarget " &
+                 "WHERE network = "
+                 & Ref_Of (P, As_Bigint (Network_ID)) & " ");
+      --  A target with no message to report has no latest time: leave it
+      --  out (soju lists it, with the zero time, SOJU-BUGS.md).
+      Append (Q, "AND latest IS NOT NULL ");
+      --  (time strings compare in lexicographic order)
+      if Options.After_Time /= Null_Time then
+         Append (Q, "AND latest > "
+                 & Ref_Of (P, +Format_Time (Options.After_Time)) & " ");
+      end if;
+      if Options.Before_Time /= Null_Time then
+         Append (Q, "AND latest < "
+                 & Ref_Of (P, +Format_Time (Options.Before_Time)) & " ");
+      end if;
+      Append (Q, (if Options.Take_Last then "ORDER BY latest DESC "
+                  else "ORDER BY latest ASC "));
+      Append (Q, "LIMIT "
+              & Ref_Of (P, As_Bigint (Long_Long_Integer (Options.Limit))));
+
+      Fetch (C, DB.DB, To_String (Q), P.Items (1 .. P.Count));
+      Check (DB'Access);
+      while Has_Row (C) loop
+         V.Append
+           (Message_Target'(Name => Unbounded_Value (C, 0),
+                            Latest_Message => Col_Time (C, 1)));
+         Next (C);
+      end loop;
+
+      if Options.Take_Last then
+         V.Reverse_Elements;   --  we ordered DESC to limit to the last ones
+      end if;
+      return V;
+   end List_Message_Last_Per_Target;
+
+   overriding function List_Messages (DB : in out Sqlite_DB;
+      Network_ID : Long_Long_Integer; Name : String; Options : Message_Options)
+      return Soja.Irc.Messages.Message_Vectors.Vector
+   is
+      G : Guard;
+      C : Forward_Cursor;
+      P : Param_List;
+      Q : Unbounded_String;
+      V : Soja.Irc.Messages.Message_Vectors.Vector;
+   begin
+      Acquire (G, DB.Lock);
+      Q := To_Unbounded_String
+        ("SELECT m.raw FROM Message AS m, MessageTarget AS t " &
+         "WHERE m.target = t.id AND t.network = "
+         & Ref_Of (P, As_Bigint (Network_ID)) & " AND t.target = "
+         & Ref_Of (P, +Name) & " ");
+      if Options.After_ID > 0 then
+         Append (Q, "AND m.id > "
+                 & Ref_Of (P, As_Bigint (Options.After_ID)) & " ");
+      end if;
+      if Options.After_Time /= Null_Time then
+         Append (Q, "AND m.time > "
+                 & Ref_Of (P, +Format_Time (Options.After_Time)) & " ");
+      end if;
+      if Options.Before_Time /= Null_Time then
+         Append (Q, "AND m.time < "
+                 & Ref_Of (P, +Format_Time (Options.Before_Time)) & " ");
+      end if;
+      if Length (Options.Sender) > 0 then
+         Append (Q, "AND m.sender = "
+                 & Ref_Of (P, +To_String (Options.Sender)) & " ");
+      end if;
+      if Length (Options.Text) > 0 then
+         declare
+            Quoted : constant String :=
+              Quote_FTS_Query (To_String (Options.Text));
+         begin
+            --  Text without a single word in it (only punctuation, say)
+            --  matches nothing; FTS5 would refuse the empty query, and soju
+            --  fails the whole request on it (SOJU-BUGS.md).
+            if Quoted = "" then
+               return V;
+            end if;
+            Append (Q, "AND m.id IN (SELECT ROWID FROM MessageFTS WHERE " &
+                       "MessageFTS MATCH " & Ref_Of (P, +Quoted) & ") ");
+         end;
+      end if;
+      if not Options.Events then
+         Append (Q, "AND m.text IS NOT NULL ");
+      end if;
+      Append (Q, (if Options.Take_Last then "ORDER BY m.time DESC "
+                  else "ORDER BY m.time ASC "));
+      Append (Q, "LIMIT "
+              & Ref_Of (P, As_Bigint (Long_Long_Integer (Options.Limit))));
+
+      Fetch (C, DB.DB, To_String (Q), P.Items (1 .. P.Count));
+      Check (DB'Access);
+      while Has_Row (C) loop
+         begin
+            V.Append (Soja.Irc.Messages.Parse_Message (Value (C, 0)));
+         exception
+            when Soja.Irc.Messages.Parse_Error =>
+               raise Database_Error with "invalid stored message";
+         end;
+         Next (C);
+      end loop;
+
+      if Options.Take_Last then
+         V.Reverse_Elements;
+      end if;
+      return V;
+   end List_Messages;
 
    --------------------
    --  Get_Read_Receipt --

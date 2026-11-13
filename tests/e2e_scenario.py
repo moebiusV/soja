@@ -59,6 +59,32 @@ def bouncer(nick="alice", user="alice", password="secret"):
     return c
 
 
+def bouncer_history(nick="alice", user="alice/test", password="secret"):
+    """A client that asked for chat history (and what it needs)."""
+    c = Client(BOUNCER, f"history:{user}")
+    c.send("CAP REQ :draft/chathistory batch server-time")
+    c.expect(r"CAP \S+ ACK")
+    c.send(f"PASS {password}")
+    c.send(f"NICK {nick}")
+    c.send(f"USER {user} 0 * :Test")
+    c.send("CAP END")
+    c.expect(r" 001 ")
+    return c
+
+
+def history_texts(c, query, timeout=10):
+    """The PRIVMSG texts of the chathistory batch that answers a query."""
+    c.send(query)
+    c.expect(r"BATCH \+\S+ chathistory")
+    texts = []
+    while True:
+        line = c.expect(r"PRIVMSG|BATCH -", timeout)
+        if "BATCH -" in line:
+            return texts
+        texts.append(line.split(" :", 2)[-1] if " :" in line.split("PRIVMSG", 1)[1]
+                     else line.rsplit(" ", 1)[-1])
+
+
 def direct(nick):
     c = Client(SERVER, f"ngircd:{nick}")
     c.register(nick, nick)
@@ -294,6 +320,29 @@ def main():
            and "alice" in l for l in extra):
         raise Fail("bob saw alice leave or join #u again: " + repr(extra))
 
+    # --- chat history (database store), also across a restart ---
+    log("chat history")
+    b.send("PRIVMSG #u :history one")
+    b.send("PRIVMSG #u :history two")
+    time.sleep(1.0)
+    h = bouncer_history()
+    got = history_texts(h, "CHATHISTORY LATEST #u * 50")
+    for want in ("while you were away", "history one", "history two"):
+        if want not in got:
+            raise Fail(f"history lacks {want!r}: {got}")
+    if got.index("history one") > got.index("history two"):
+        raise Fail(f"history is not oldest first: {got}")
+    one = history_texts(h, "CHATHISTORY LATEST #u * 1")
+    if one != ["history two"]:
+        raise Fail(f"LATEST * 1 should be the newest message: {one}")
+    h.send("CHATHISTORY TARGETS timestamp=2000-01-01T00:00:00.000Z "
+           "timestamp=2100-01-01T00:00:00.000Z 10")
+    h.expect(r"BATCH \+\S+ draft/chathistory-targets")
+    h.expect(r"CHATHISTORY TARGETS #u ")
+    h.send("SEARCH in=#u;text=history")
+    h.expect(r"BATCH \+\S+ soju.im/search")
+    h.close()
+
     # --- 7: restart: reconnect and rejoin the saved channels once ---
     log("restart soja")
     a.close()
@@ -304,6 +353,12 @@ def main():
     again = b.drain(3)
     if any(":alice!" in l and " JOIN" in l for l in again):
         raise Fail("soja joined #u twice after the restart")
+    # the history is still there after the restart: it is in the database
+    h = bouncer_history()
+    got = history_texts(h, "CHATHISTORY LATEST #u * 50")
+    if "history one" not in got or "history two" not in got:
+        raise Fail(f"history was lost across the restart: {got}")
+    h.close()
     log("all good: " + joined)
 
 

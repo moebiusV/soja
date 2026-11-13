@@ -22,6 +22,7 @@ with Soja.Irc.Members;
 with Soja.Irc.Numerics;
 with Soja.Irc.Whox;
 with Soja.Irc.Xirc;
+with Soja.Msgstore;
 with Soja.Server;
 
 package body Soja.Core.Downstream_Commands is
@@ -35,6 +36,7 @@ package body Soja.Core.Downstream_Commands is
    use type Soja.Database.Database_Access;
    use type Ada.Containers.Count_Type;
    use type Soja.Irc.Members.Membership_Set_Access;
+   use type Soja.Msgstore.Store_Access;
 
    ----------------------------------------------------------------------
    --  Results and small helpers
@@ -1753,6 +1755,391 @@ package body Soja.Core.Downstream_Commands is
    end Cmd_Bouncer;
 
    ----------------------------------------------------------------------
+   --  CHATHISTORY, SEARCH
+   ----------------------------------------------------------------------
+
+   --  strconv.Atoi: an optional sign and digits; Ok is False for anything
+   --  else or a value that does not fit.
+   procedure Parse_Atoi (S : String; Value : out Integer; Ok : out Boolean) is
+      Pos : Natural := S'First;
+      Neg : Boolean := False;
+      Acc : Long_Long_Integer := 0;
+   begin
+      Value := 0;
+      Ok := False;
+      if S'Length = 0 then
+         return;
+      end if;
+      if S (Pos) = '+' or else S (Pos) = '-' then
+         Neg := S (Pos) = '-';
+         Pos := Pos + 1;
+      end if;
+      if Pos > S'Last then
+         return;
+      end if;
+      for I in Pos .. S'Last loop
+         if S (I) not in '0' .. '9' then
+            return;
+         end if;
+         Acc := Acc * 10 + Long_Long_Integer (Character'Pos (S (I)) - 48);
+         if Acc > Long_Long_Integer (Integer'Last) then
+            return;
+         end if;
+      end loop;
+      Value := Integer (if Neg then -Acc else Acc);
+      Ok := True;
+   end Parse_Atoi;
+
+   function FAIL (Params : String_Vectors.Vector) return Irc_Error_Result is
+     (IRC_Fail ("FAIL", Params));
+
+   function Cmd_Chat_History
+     (DC : not null Downstream_Conn_Access; M : Message)
+      return Irc_Error_Result
+   is
+      PR : Params_Result := Parse_Message_Params (M, 1);
+      Nick : constant String := Nick_Of (DC);
+   begin
+      if not PR.Ok then
+         return Need_More (PR);
+      end if;
+
+      declare
+         Sub    : constant String := Param (M, 0);
+         Target : Unbounded_String;
+         Bound0, Bound1, Limit_Str : Unbounded_String;
+
+         procedure Empty_Batch (Typ : String; Params : String_Vectors.Vector)
+         is
+            procedure None (Batch_Ref : String) is
+               pragma Unreferenced (Batch_Ref);
+            begin
+               null;
+            end None;
+         begin
+            Send_Batch (DC, Typ, Params, None'Access);
+         end Empty_Batch;
+      begin
+         if Sub = "AFTER" or else Sub = "BEFORE" or else Sub = "LATEST" then
+            PR := Parse_Message_Params (M, 4);
+            if not PR.Ok then
+               return Need_More (PR);
+            end if;
+            Target := To_Unbounded_String (Param (M, 1));
+            Bound0 := To_Unbounded_String (Param (M, 2));
+            Limit_Str := To_Unbounded_String (Param (M, 3));
+         elsif Sub = "BETWEEN" then
+            PR := Parse_Message_Params (M, 5);
+            if not PR.Ok then
+               return Need_More (PR);
+            end if;
+            Target := To_Unbounded_String (Param (M, 1));
+            Bound0 := To_Unbounded_String (Param (M, 2));
+            Bound1 := To_Unbounded_String (Param (M, 3));
+            Limit_Str := To_Unbounded_String (Param (M, 4));
+         elsif Sub = "TARGETS" then
+            if DC.Network = null then
+               Empty_Batch ("draft/chathistory-targets",
+                            String_Vectors.Empty_Vector);
+               return Success;
+            end if;
+            PR := Parse_Message_Params (M, 4);
+            if not PR.Ok then
+               return Need_More (PR);
+            end if;
+            Bound0 := To_Unbounded_String (Param (M, 1));
+            Bound1 := To_Unbounded_String (Param (M, 2));
+            Limit_Str := To_Unbounded_String (Param (M, 3));
+         else
+            --  TODO (Go): support AROUND.
+            return FAIL (["CHATHISTORY", "INVALID_PARAMS", Sub,
+                          "Unknown command"]);
+         end if;
+
+         --  We don't save history for our service.
+         if Fold (DC, To_String (Target)) = Service_Nick_CM then
+            Empty_Batch ("chathistory", [To_String (Target)]);
+            return Success;
+         end if;
+
+         declare
+            Store : constant Soja.Msgstore.Store_Access := DC.User.Msg_Store;
+         begin
+            if Store = null or else not Store.Supports_Chat_History then
+               return IRC_Fail
+                 (ERR_UNKNOWNCOMMAND,
+                  [Nick, "CHATHISTORY", "Chat history disabled"]);
+            end if;
+
+            if DC.Network = null then
+               return FAIL (["CHATHISTORY", "MESSAGE_ERROR", Sub,
+                             To_String (Target),
+                             "Cannot fetch chat history on bouncer "
+                             & "connection"]);
+            end if;
+
+            declare
+               Net     : constant Network_Access := DC.Network;
+               Entity  : constant String := Soja.Irc.Case_Mapping.Fold
+                 (Net.Casemap, To_String (Target));
+               Bounds  : array (0 .. 1) of Ada.Calendar.Time :=
+                 [others => Soja.Database.Null_Time];
+               Valid   : Boolean;
+               Limit   : Integer;
+               Limit_Ok : Boolean;
+            begin
+               --  TODO (Go): support msgid criteria.
+               Bounds (0) := Soja.Irc.Helpers.Parse_Chat_History_Bound
+                 (To_String (Bound0), Valid);
+               if Sub = "LATEST" and then To_String (Bound0) = "*" then
+                  Bounds (0) := Soja.Database.Null_Time;
+               elsif not Valid then
+                  return FAIL (["CHATHISTORY", "INVALID_PARAMS", Sub,
+                                To_String (Bound0), "Invalid first bound"]);
+               end if;
+
+               if Length (Bound1) > 0 then
+                  Bounds (1) := Soja.Irc.Helpers.Parse_Chat_History_Bound
+                    (To_String (Bound1), Valid);
+                  if not Valid then
+                     return FAIL
+                       (["CHATHISTORY", "INVALID_PARAMS", Sub,
+                         To_String (Bound1), "Invalid second bound"]);
+                  end if;
+               end if;
+
+               Parse_Atoi (To_String (Limit_Str), Limit, Limit_Ok);
+               if not Limit_Ok or else Limit < 0
+                 or else Limit > Soja.Server.Chat_History_Limit
+               then
+                  return FAIL (["CHATHISTORY", "INVALID_PARAMS", Sub,
+                                To_String (Limit_Str), "Invalid limit"]);
+               end if;
+
+               declare
+                  use type Ada.Calendar.Time;
+                  Events  : constant Boolean :=
+                    Soja.Irc.Cap_Registry.Is_Enabled
+                      (DC.Caps, "draft/event-playback");
+                  Options : constant Soja.Msgstore.Load_Message_Options :=
+                    (Network => Net.Network_Record,
+                     Entity  => To_Unbounded_String (Entity),
+                     Limit   => Limit, Events => Events);
+                  History : Soja.Msgstore.Message_Vector;
+               begin
+                  if Sub = "TARGETS" then
+                     declare
+                        Targets : Soja.Msgstore.Target_Vectors.Vector;
+
+                        procedure Each (Batch_Ref : String) is
+                        begin
+                           for T of Targets loop
+                              declare
+                                 Ch : constant Channel_Access :=
+                                   Net.Channels.Get (To_String (T.Name));
+                              begin
+                                 if Ch = null or else not Ch.Detached then
+                                    declare
+                                       Out_Msg : Message := Make
+                                         ("CHATHISTORY",
+                                          ["TARGETS", To_String (T.Name),
+                                           Soja.Irc.Xirc.Format_Server_Time
+                                             (T.Latest_Message)]);
+                                    begin
+                                       Set_Tag (Out_Msg.Tags, "batch",
+                                                Batch_Ref);
+                                       Send_Message (DC, Out_Msg);
+                                    end;
+                                 end if;
+                              end;
+                           end loop;
+                        end Each;
+                     begin
+                        begin
+                           Targets := Store.List_Targets
+                             (Net.Network_Record, Bounds (0), Bounds (1),
+                              Limit, Events);
+                        exception
+                           when E : Soja.Msgstore.Store_Error =>
+                              DC.Logger.Print
+                                ("failed fetching targets for chathistory: "
+                                 & Ada.Exceptions.Exception_Message (E));
+                              return FAIL (["CHATHISTORY", "MESSAGE_ERROR",
+                                            Sub,
+                                            "Failed to retrieve targets"]);
+                        end;
+                        Send_Batch (DC, "draft/chathistory-targets",
+                                    String_Vectors.Empty_Vector, Each'Access);
+                        return Success;
+                     end;
+                  end if;
+
+                  begin
+                     if Sub = "BEFORE" then
+                        History := Store.Load_Before_Time
+                          (Bounds (0), Soja.Database.Null_Time, Options);
+                     elsif Sub = "LATEST" then
+                        History := Store.Load_Before_Time
+                          (Ada.Calendar.Clock, Bounds (0), Options);
+                     elsif Sub = "AFTER" then
+                        History := Store.Load_After_Time
+                          (Bounds (0), Ada.Calendar.Clock, Options);
+                     else   --  BETWEEN
+                        if Bounds (0) < Bounds (1) then
+                           History := Store.Load_After_Time
+                             (Bounds (0), Bounds (1), Options);
+                        else
+                           History := Store.Load_Before_Time
+                             (Bounds (0), Bounds (1), Options);
+                        end if;
+                     end if;
+                  exception
+                     when E : Soja.Msgstore.Store_Error =>
+                        DC.Logger.Print
+                          ("failed fetching " & Soja.Irc.Helpers.Quote (Entity)
+                           & " messages for chathistory: "
+                           & Ada.Exceptions.Exception_Message (E));
+                        return FAIL (["CHATHISTORY", "MESSAGE_ERROR", Sub,
+                                      Entity,
+                                      "Messages could not be retrieved"]);
+                  end;
+
+                  declare
+                     procedure Each (Batch_Ref : String) is
+                     begin
+                        for Stored of History loop
+                           declare
+                              Out_Msg : Message := Copy (Stored);
+                           begin
+                              Set_Tag (Out_Msg.Tags, "batch", Batch_Ref);
+                              Send_Message (DC, Out_Msg);
+                           end;
+                        end loop;
+                     end Each;
+                  begin
+                     Send_Batch (DC, "chathistory", [Entity], Each'Access);
+                  end;
+               end;
+            end;
+         end;
+      end;
+      return Success;
+   end Cmd_Chat_History;
+
+   function Cmd_Search
+     (DC : not null Downstream_Conn_Access; M : Message)
+      return Irc_Error_Result
+   is
+      Search_Max_Limit : constant := 100;
+      Store : constant Soja.Msgstore.Store_Access := DC.User.Msg_Store;
+      PR    : Params_Result;
+   begin
+      if Store = null or else not Store.Supports_Search then
+         return IRC_Fail
+           (ERR_UNKNOWNCOMMAND, [Nick_Of (DC), "SEARCH", "Unknown command"]);
+      end if;
+      PR := Parse_Message_Params (M, 1);
+      if not PR.Ok then
+         return Need_More (PR);
+      end if;
+
+      declare
+         Attrs   : constant Tag_Map := Parse_Tags (Param (M, 0));
+         Net     : Network_Access := null;
+         Opts    : Soja.Msgstore.Search_Options :=
+           (Limit => Search_Max_Limit, others => <>);
+      begin
+         for C in Attrs.Data.Iterate loop
+            declare
+               Name  : constant String := Soja.Irc.Messages.Tag_Maps.Key (C);
+               Value : constant String :=
+                 Soja.Irc.Messages.Tag_Maps.Element (C);
+            begin
+               if Name = "before" or else Name = "after" then
+                  declare
+                     Valid : Boolean;
+                     T     : constant Ada.Calendar.Time :=
+                       Soja.Irc.Helpers.Parse_Server_Time (Value, Valid);
+                  begin
+                     if not Valid then
+                        return FAIL (["SEARCH", "INVALID_PARAMS", Name,
+                                      "Invalid criteria"]);
+                     end if;
+                     if Name = "after" then
+                        Opts.Start := T;
+                     else
+                        Opts.End_Time := T;
+                     end if;
+                  end;
+               elsif Name = "from" then
+                  Opts.From := To_Unbounded_String (Value);
+               elsif Name = "in" then
+                  Net := DC.Network;
+                  if Net = null then
+                     return FAIL (["SEARCH", "INVALID_PARAMS", Name,
+                                   "Cannot search on bouncer connection"]);
+                  end if;
+                  Opts.In_Target := To_Unbounded_String
+                    (Soja.Irc.Case_Mapping.Fold (Net.Casemap, Value));
+               elsif Name = "text" then
+                  Opts.Text := To_Unbounded_String (Value);
+               elsif Name = "limit" then
+                  declare
+                     Limit : Integer;
+                     Ok    : Boolean;
+                  begin
+                     Parse_Atoi (Value, Limit, Ok);
+                     if not Ok or else Limit <= 0 then
+                        return FAIL (["SEARCH", "INVALID_PARAMS", Name,
+                                      "Invalid limit"]);
+                     end if;
+                     Opts.Limit := Limit;
+                  end;
+               end if;
+            end;
+         end loop;
+
+         if Net = null then
+            return FAIL (["SEARCH", "INVALID_PARAMS", "in",
+                          "The in parameter is mandatory"]);
+         end if;
+         if Opts.Limit > Search_Max_Limit then
+            Opts.Limit := Search_Max_Limit;
+         end if;
+
+         declare
+            Found : Soja.Msgstore.Message_Vector;
+
+            procedure Each (Batch_Ref : String) is
+            begin
+               for Stored of Found loop
+                  declare
+                     Out_Msg : Message := Copy (Stored);
+                  begin
+                     Set_Tag (Out_Msg.Tags, "batch", Batch_Ref);
+                     Send_Message (DC, Out_Msg);
+                  end;
+               end loop;
+            end Each;
+         begin
+            begin
+               Found := Store.Search (Net.Network_Record, Opts);
+            exception
+               when E : Soja.Msgstore.Store_Error =>
+                  DC.Logger.Print
+                    ("failed fetching messages for search: "
+                     & Ada.Exceptions.Exception_Message (E));
+                  return FAIL (["SEARCH", "INTERNAL_ERROR",
+                                "Messages could not be retrieved"]);
+            end;
+            Send_Batch (DC, "soju.im/search", String_Vectors.Empty_Vector,
+                        Each'Access);
+         end;
+      end;
+      return Success;
+   end Cmd_Search;
+
+   ----------------------------------------------------------------------
    --  The dispatch
    ----------------------------------------------------------------------
 
@@ -1809,6 +2196,10 @@ package body Soja.Core.Downstream_Commands is
          return Cmd_Monitor (DC, M);
       elsif Cmd = "BOUNCER" then
          return Cmd_Bouncer (DC, M);
+      elsif Cmd = "CHATHISTORY" then
+         return Cmd_Chat_History (DC, M);
+      elsif Cmd = "SEARCH" then
+         return Cmd_Search (DC, M);
       end if;
 
       DC.Logger.Debug ("unhandled message: " & Image (M));

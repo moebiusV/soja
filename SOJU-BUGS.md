@@ -28,6 +28,8 @@ one Go test per bug).  Add an entry the moment a bug is found; do not batch.
 | SB-10 | `service.go:1157` | `user delete <own name>` waits for the user's own goroutine and never returns | high |
 | SB-11 | `service.go:1408` | `channel update` with a bad value half-applies the change in memory | low |
 | SB-12 | `service.go:677` | `network delete -x` deletes the current network | low |
+| SB-15 | `database/sqlite.go:1130` | `CHATHISTORY TARGETS` lists a target that has only events, with the zero time | low |
+| SB-16 | `database/sqlite.go:1242` | `SEARCH` fails when its text has no word in it | low |
 | SB-14 | `server.go:725` | the inactive-user loop re-disables disabled users, says "deleted", and stops at the first failure | low |
 | SB-13 | `downstream.go:140` | `BOUNCER ADDNETWORK`/`CHANGENETWORK` build an unusable address from an IPv6 host | low |
 
@@ -584,3 +586,46 @@ for _, u := range users {
 `AND enabled` in the query), say "disabled inactive user", and log and continue
 on a per-user error instead of returning.
 
+## SB-15: targets with only events are listed, with the zero time
+
+`database/sqlite.go:1130`, `ListMessageLastPerTarget`:
+
+```go
+innerQuery := `SELECT time FROM Message WHERE target = MessageTarget.id `
+if !options.Events { innerQuery += `AND text IS NOT NULL ` }
+innerQuery += `ORDER BY time DESC LIMIT 1`
+query := `SELECT target, (` + innerQuery + `) latest FROM MessageTarget WHERE network = :network `
+```
+
+**Effect.**  A target whose messages are all events (a channel with only JOIN or
+PART lines stored) has no `PRIVMSG`/`NOTICE`, so `latest` is `NULL`.  Without
+bounds nothing filters it out, and with `ORDER BY latest ASC` NULL sorts first:
+`CHATHISTORY TARGETS` (from a client without `draft/event-playback`) lists the
+target as the very oldest, with the zero time `0001-01-01T00:00:00.000Z`.  With
+a bound (`latest > :after`) it disappears, so the answer also depends on
+whether the client sent a bound.
+
+**Suggested patch.**  `query += "AND latest IS NOT NULL "` after the `network`
+condition.
+
+## SB-16: `SEARCH` fails when the text contains no word
+
+`database/sqlite.go:1242` with `quoteFTSQuery` (`:1301`):
+
+```go
+if options.Text != "" {
+	query += `AND m.id IN (SELECT ROWID FROM MessageFTS WHERE MessageFTS MATCH :text) `
+}
+... sql.Named("text", quoteFTSQuery(options.Text)),
+```
+
+`quoteFTSQuery` splits on everything that is not a letter, number or private-use
+character, and quotes each token; text made only of separators (`!!!`, `?`,
+`:)`) has no token, so it returns `""`.
+
+**Effect.**  `MATCH ''` is a syntax error in FTS5 (`fts5: syntax error near ""`),
+so `SEARCH text=!!!;in=#chan` is answered `FAIL SEARCH INTERNAL_ERROR Messages
+could not be retrieved` (and logged as a failure) instead of an empty result.
+
+**Suggested patch.**  Text with no word cannot match anything: return an empty
+list when `quoteFTSQuery` gives `""`.

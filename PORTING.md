@@ -329,6 +329,38 @@ sockets are never proxied, as in Go.  Version 1 goes through
 - Fixed on the way: `Soja.Config`'s CIDR parser returned at the first `:`, so
   every IPv6 `accept-proxy-ip` / `upstream-user-ip` network was stored as `::`.
 
+### The database message store, `CHATHISTORY` and `SEARCH`
+
+`message-store db` keeps each user's messages in the soju database
+(`msgstore/db.go`): `Soja.Msgstore.Db` over the new `Message` methods of
+`Soja.Database` (`Get_Message_Last_ID`, `Store_Messages`, `List_Messages`,
+`List_Message_Last_Per_Target`, with the FTS5 search).  The store interface
+gained `List_Targets`, `Load_Before_Time`, `Load_After_Time` and `Search`
+(Go's optional `ChatHistoryStore` / `SearchStore`, found by type assertion;
+here `Supports_Chat_History` / `Supports_Search` say which a store has).  The
+registered-client commands are `CHATHISTORY` (TARGETS, LATEST, BEFORE, AFTER,
+BETWEEN; not AROUND, as in Go) and `SEARCH`, in
+`Soja.Core.Downstream_Commands`, with Go's order of checks and replies.
+
+- The schema creates `MessageFTS` and its three triggers (soju's, to the
+  letter), and a database that soja made before FTS5 was available gets them,
+  with its existing messages indexed, when it is opened; the file stays valid
+  for soju.
+- Search text is quoted word by word, as soju does; "word" is a Unicode
+  letter, digit or private-use character (via `Ada.Wide_Wide_Characters`, not
+  Go's `unicode.In`: marks and the odd number category differ).
+- The file store (`message-store fs`) is not ported: it falls back to the
+  memory store, with a warning.  `READ`/`MARKREAD` (the read-marker commands)
+  are still to do.
+- `gnatcoll-db` needed a fix first: `Close` finalized every statement SQLite
+  listed on the connection, including those an FTS5 table owns, so closing any
+  connection with an FTS5 table crashed.  The aport carries the patch
+  (`testing/gnatcoll-db/close-virtual-table-statements.patch`, written up in
+  `docs/bugs/gnatcoll-db-close-vtab/` of ada-on-alpine) and soja's tests need
+  that package.
+- Fixed soju quirks: SB-15 (targets with only events listed with the zero
+  time) and SB-16 (`SEARCH` fails when its text has no word).
+
 ### Executables (`cmd/soja`, `cmd/sojadb`) and the end-to-end check
 
 Step 10.  `soja` (main unit `Soja_Main`, since `Soja` is the library's root
@@ -345,7 +377,8 @@ What it refuses or changes, loudly:
   startup error.  `accept-proxy-ip` (PROXY protocol) works on the TCP listeners.
 - Auth drivers other than `internal` (pam, oauth2) are a startup error: a
   bouncer that cannot check passwords must not start as if it could.
-- Message stores other than `memory` fall back to memory, with a warning;
+- The `fs` message store falls back to memory, with a warning (`memory` and
+  `db` work);
   `file-upload` is ignored, with a warning; only the SQLite database driver.
 - SIGHUP re-reads the TLS certificate and key (`Server.Reload_TLS`): new TLS
   connections use the new pair, open ones keep theirs.  A pair that does not

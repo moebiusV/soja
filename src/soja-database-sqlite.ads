@@ -8,7 +8,8 @@
 --  makes ":memory:" usable and keeps multi-statement operations (DeleteUser,
 --  DeleteNetwork, StoreClientDeliveryReceipts) atomic.
 --
---  The message-store methods are deferred until Soja.Irc.Message is ported.
+--  The message store's methods (StoreMessages, ListMessages, ...) are here
+--  too; their full-text search needs the FTS5 of the system SQLite.
 pragma Ada_2022;
 
 private with Ada.Finalization;
@@ -65,6 +66,20 @@ package Soja.Database.Sqlite is
    overriding procedure Store_Client_Delivery_Receipts (DB : in out Sqlite_DB;
       Network_ID : Long_Long_Integer; Client : String;
       Receipts : in out Delivery_Receipt_Lists.Vector);
+
+   overriding function Get_Message_Last_ID (DB : in out Sqlite_DB;
+      Network_ID : Long_Long_Integer; Name : String)
+      return Long_Long_Integer;
+   overriding function Store_Messages (DB : in out Sqlite_DB;
+      Network_ID : Long_Long_Integer; Name : String;
+      Msgs : Soja.Irc.Messages.Message_Vectors.Vector)
+      return Id_Lists.Vector;
+   overriding function List_Message_Last_Per_Target (DB : in out Sqlite_DB;
+      Network_ID : Long_Long_Integer; Options : Message_Options)
+      return Message_Target_Lists.Vector;
+   overriding function List_Messages (DB : in out Sqlite_DB;
+      Network_ID : Long_Long_Integer; Name : String; Options : Message_Options)
+      return Soja.Irc.Messages.Message_Vectors.Vector;
 
    overriding function Get_Read_Receipt (DB : in out Sqlite_DB;
       Network_ID : Long_Long_Integer; Name : String)
