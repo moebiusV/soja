@@ -9,6 +9,7 @@ with AWS.Net;
 with Soja.Config;
 with Soja.Conn;
 with Soja.Database;
+with Soja.Identd;
 with Soja.Logging;
 
 package Soja.Server is
@@ -79,6 +80,11 @@ package Soja.Server is
 
    procedure Set_Handler (S : in out Server; H : Handler);
 
+   --  Server.Identd: the ident server upstream connections are registered
+   --  with; null (the default) when no `ident://` listener is configured.
+   procedure Set_Identd (S : in out Server; I : Soja.Identd.Identd_Access);
+   function Identd (S : Server) return Soja.Identd.Identd_Access;
+
    --  The accept loop: blocks the caller, spawning one task per connection
    --  that runs the handler.  When TLS_Cert/TLS_Key are non-empty, each
    --  accepted socket is wrapped in TLS.  Returns when Shutdown is requested
@@ -132,6 +138,7 @@ private
       Logger   : Soja.Logging.Logger_Access;
       DB       : Soja.Database.Database_Access;
       H        : Handler;
+      Ident    : Soja.Identd.Identd_Access;
       Listener : AWS.Net.Socket_Access;
       Flag     : Shutdown_Flag;
    end record;

@@ -1,5 +1,6 @@
 """The Milestone A scenario: soja between a client and a real ngircd."""
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -61,6 +62,29 @@ def direct(nick):
     return c
 
 
+def upstream_ports(known):
+    """Our end of soja's connection to ngircd: local ports of established
+    127.0.0.1 -> :6667 connections that are not the test's own."""
+    out = []
+    for line in open("/proc/net/tcp").read().splitlines()[1:]:
+        f = line.split()
+        lip, lport = f[1].split(":")
+        rip, rport = f[2].split(":")
+        if f[3] == "01" and int(rport, 16) == SERVER and lip == "0100007F":
+            port = int(lport, 16)
+            if port not in known:
+                out.append(port)
+    return out
+
+
+def ask_identd(local, remote):
+    s = socket.create_connection(("127.0.0.1", 1130), timeout=5)
+    s.sendall(f"{local}, {remote}\r\n".encode())
+    data = s.recv(512).decode()
+    s.close()
+    return data.strip()
+
+
 def main():
     wait_port(SERVER)
     start_soja()
@@ -84,6 +108,18 @@ def main():
     a.expect(r":alice!\S+ JOIN :?#t")
     a.expect(r" 366 ")
     b.expect(r":alice!\S+ JOIN :?#t")
+
+    log("identd answers for the upstream connection")
+    mine = {b.sock.getsockname()[1]}
+    ports = upstream_ports(mine)
+    if len(ports) != 1:
+        raise Fail(f"expected one upstream connection, found {ports}")
+    answer = ask_identd(ports[0], SERVER)
+    if not re.fullmatch(rf"{ports[0]}, {SERVER} : USERID : UNKNOWN : [0-9a-f]{{32}}",
+                        answer):
+        raise Fail(f"unexpected identd answer: {answer!r}")
+    if "NO-USER" not in ask_identd(ports[0] + 1, SERVER):
+        raise Fail("identd answered for an unknown connection")
 
     log("messages both ways")
     b.send("PRIVMSG #t :hello from bob")

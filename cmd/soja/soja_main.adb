@@ -17,6 +17,7 @@ with Soja.Config;
 with Soja.Database;
 with Soja.Database.Sqlite;
 with Soja.Flags;
+with Soja.Identd;
 with Soja.Irc.Genmsg;
 with Soja.Irc.Helpers;
 with Soja.Logging;
@@ -225,6 +226,26 @@ procedure Soja_Main is
    end Listener_Task;
    type Listener_Task_Access is access Listener_Task;
 
+   --  Identd.Serve on its own task (created by the first `ident://`
+   --  listener; upstream connections are registered with it).
+   Ident : aliased Soja.Identd.Identd;
+   Ident_In_Use : Boolean := False;
+
+   task type Ident_Task
+     (L : not null AWS.Net.Socket_Access; Name : not null String_Access);
+
+   task body Ident_Task is
+   begin
+      Soja.Identd.Serve (Ident, L);
+      Serving.Done;
+   exception
+      when E : others =>
+         Log.Print ("serving " & Quote (Name.all) & ": "
+                    & Ada.Exceptions.Exception_Message (E));
+         Serving.Done;
+   end Ident_Task;
+   type Ident_Task_Access is access Ident_Task;
+
    --  withDefaultPort for a "host[:port]" (or "[v6]:port") string; Host and
    --  Port are what is left after the default.
    procedure Split_Host_Port
@@ -282,6 +303,7 @@ procedure Soja_Main is
       Host   : Unbounded_String;
       Port   : Natural;
       TLS    : Boolean;
+      Is_Ident : Boolean := False;
    begin
       if Scheme = "ircs" or else Scheme = "" then
          if Raw.TLS = null then
@@ -293,6 +315,10 @@ procedure Soja_Main is
       elsif Scheme = "irc+insecure" then
          Split_Host_Port (Host_Port, "6667", Host, Port);
          TLS := False;
+      elsif Scheme = "ident" then
+         Split_Host_Port (Host_Port, "113", Host, Port);
+         TLS := False;
+         Is_Ident := True;
       else
          Fatal ("failed to listen on " & Quote (Listen) & ": the scheme "
                 & Quote (Scheme) & " is not supported by soja yet");
@@ -313,19 +339,33 @@ procedure Soja_Main is
                       & Ada.Exceptions.Exception_Message (E));
          end;
 
-         declare
-            Runner : Listener_Task_Access;
-            pragma Unreferenced (Runner);
-         begin
-            Serving.Add;
-            Runner := new Listener_Task
-              (L    => Sock,
-               Cert => new String'
-                 (if TLS then To_String (Raw.TLS.Cert_Path) else ""),
-               Key  => new String'
-                 (if TLS then To_String (Raw.TLS.Key_Path) else ""),
-               Name => new String'(Listen));
-         end;
+         if Is_Ident then
+            declare
+               Runner : Ident_Task_Access;
+               pragma Unreferenced (Runner);
+            begin
+               if not Ident_In_Use then
+                  Ident_In_Use := True;
+                  Srv.Set_Identd (Ident'Unchecked_Access);
+               end if;
+               Serving.Add;
+               Runner := new Ident_Task (Sock, new String'(Listen));
+            end;
+         else
+            declare
+               Runner : Listener_Task_Access;
+               pragma Unreferenced (Runner);
+            begin
+               Serving.Add;
+               Runner := new Listener_Task
+                 (L    => Sock,
+                  Cert => new String'
+                    (if TLS then To_String (Raw.TLS.Cert_Path) else ""),
+                  Key  => new String'
+                    (if TLS then To_String (Raw.TLS.Key_Path) else ""),
+                  Name => new String'(Listen));
+            end;
+         end if;
       end;
       Log.Print ("server listening on " & Quote (Listen));
    end Start_Listener;
@@ -431,6 +471,9 @@ begin
             end;
          when Soja_Signals.Stop =>
             Soja.Server.Shutdown (Srv);
+            if Ident_In_Use then
+               Soja.Identd.Stop (Ident);
+            end if;
             Serving.Wait_None;   --  the accept loops have ended
             Soja.Bouncer.Shutdown (B);
             return;

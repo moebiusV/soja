@@ -252,6 +252,19 @@ CHANGENETWORK, DELNETWORK, with `updateNetworkAttrs` /
 handshake; the caps and the state notifications existed.)  One deviation:
 an IPv6 host is bracketed when the address is rebuilt (SB-13).
 
+### identd (`Soja.Identd`, `ident://` listener)
+
+`identd/identd.go`: a store of (server host, server port, our port) -> ident,
+and an RFC 1413 server answering `<port>, <port>` queries.  `Soja.Core` registers
+each upstream connection right after the TCP connect and before the TLS
+handshake (the server may query at once) and removes it when the connection
+ends; the ident is the hash of the user ID (`userIdent`).  The query line is
+tokenised by `grammars/ident-query.hbnf`; the walker checks it is
+`number , number` (a flat token grammar again: hbnf's lexer cannot tell two
+uses of one token class apart).  Deviations: a signed port such as `+80` is
+refused (Go's `Atoi` takes it); the PROXY protocol wrapper Go puts on the ident
+listener is not ported (no PROXY support yet).
+
 ### Executables (`cmd/soja`, `cmd/sojadb`) and the end-to-end check
 
 Step 10.  `soja` (main unit `Soja_Main`, since `Soja` is the library's root
@@ -263,7 +276,7 @@ SIGHUP reloads the configuration (`pragma Interrupt_State (SIGINT, User)` in
 without echo through `stty`).  The default config path is `/etc/soju/config`.
 What it refuses or changes, loudly:
 
-- Listeners: `ircs://` and `irc+insecure://` only; any other scheme (unix,
+- Listeners: `ircs://`, `irc+insecure://` and `ident://` only; any other scheme (unix,
   ws, http, ident, prometheus, pprof, unix+admin) is a startup error.
 - Auth drivers other than `internal` (pam, oauth2) are a startup error: a
   bouncer that cannot check passwords must not start as if it could.

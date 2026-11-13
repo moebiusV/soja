@@ -60,3 +60,4 @@ cmd/soja/obj/
 cmd/sojadb/sojadb
 cmd/sojadb/obj/
 tests/__pycache__/
+tests/identd_check

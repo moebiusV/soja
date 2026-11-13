@@ -417,7 +417,16 @@ package Soja.Core is
       Monitored : Flag_Maps.Map;
    end record;
 
+   --  What an upstream connection registered with identd (host and ports as
+   --  Identd.Store wants them); Local_Port 0 when nothing was registered.
+   type Ident_Entry is record
+      Host        : Unbounded_String;
+      Remote_Port : Natural := 0;
+      Local_Port  : Natural := 0;
+   end record;
+
    type Upstream_Conn is tagged record
+      Ident : Ident_Entry;
       Conn   : Soja.Conn.Conn_Access;
       Srv    : Soja.Server.Server_Access;
       Logger : Soja.Logging.Logger_Access;

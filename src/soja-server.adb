@@ -77,6 +77,16 @@ package body Soja.Server is
       S.Logger := Logger;
    end Initialize;
 
+   procedure Set_Identd (S : in out Server; I : Soja.Identd.Identd_Access) is
+   begin
+      S.Ident := I;
+   end Set_Identd;
+
+   function Identd (S : Server) return Soja.Identd.Identd_Access is
+   begin
+      return S.Ident;
+   end Identd;
+
    procedure Set_Handler (S : in out Server; H : Handler) is
    begin
       S.H := H;

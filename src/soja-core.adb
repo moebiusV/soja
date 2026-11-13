@@ -17,6 +17,7 @@ with Soja.Core.Downstream_Commands;
 with Soja.Core.Downstream_Handshake;
 with Soja.Core.Upstream_Dispatch;
 with Soja.Core.User_Events;
+with Soja.Identd;
 with Soja.Irc.Cap_Registry;
 with Soja.Irc.Genmsg;
 with Soja.Irc.Helpers;
@@ -369,18 +370,6 @@ package body Soja.Core is
    end Split_Host_Port;
 
    --  dialTCP: a plain TCP connection to the URL's host:port.
-   function Dial_TCP (U : Soja.Database.Network_URL; Default_Port : Positive)
-      return AWS.Net.Socket_Access
-   is
-      Host : Unbounded_String;
-      Port : Positive;
-      Sock : constant AWS.Net.Socket_Access := AWS.Net.Socket (False);
-   begin
-      Split_Host_Port (To_String (U.Host), Default_Port, Host, Port);
-      AWS.Net.Std.Socket_Type (Sock.all).Connect (To_String (Host), Port);
-      return Sock;
-   end Dial_TCP;
-
    --  Hex-encode one byte (lowercase, two characters).
    Hex_Digits : constant String := "0123456789abcdef";
 
@@ -389,6 +378,79 @@ package body Soja.Core is
    begin
       return Hex_Digits (V / 16 + 1) & Hex_Digits (V mod 16 + 1);
    end Hex;
+
+   --  userIdent: the ident string sent to upstream servers in clear text.  It
+   --  must not expose user metadata, so it is a hash of the user's ID.
+   use type Soja.Identd.Identd_Access;
+
+   function User_Ident (U : not null User_Access) return String is
+      use Ada.Streams;
+      Raw : Stream_Element_Array (1 .. 64) := (others => 0);
+      V   : Long_Long_Integer := U.User_Record.ID;
+   begin
+      for I in 1 .. 8 loop   --  little-endian uint64
+         Raw (Stream_Element_Offset (I)) :=
+           Stream_Element (V mod 256);
+         V := V / 256;
+      end loop;
+      declare
+         Sum : constant CryptoLib.Hashes.SHA256_Digest :=
+           CryptoLib.Hashes.SHA256 (Raw);
+         R   : String (1 .. 32);
+      begin
+         for I in 1 .. 16 loop
+            R (2 * I - 1 .. 2 * I) := Hex (Sum (I));
+         end loop;
+         return R;
+      end;
+   end User_Ident;
+
+   --  Register a freshly connected socket with identd, if there is one.
+   --  (Before the TLS handshake: the server may query right away.)
+   procedure Register_Ident
+     (Net  : not null Network_Access; Sock : AWS.Net.Socket_Type'Class;
+      Ent  : out Ident_Entry)
+   is
+      I : constant Soja.Identd.Identd_Access :=
+        Soja.Server.Identd (Net.User.Srv.all);
+   begin
+      Ent := (others => <>);
+      if I = null then
+         return;
+      end if;
+      Ent := (Host => To_Unbounded_String (Sock.Peer_Addr),
+              Remote_Port => Sock.Peer_Port, Local_Port => Sock.Get_Port);
+      Soja.Identd.Store
+        (I.all, Sock.Peer_Addr, Ent.Remote_Port, Ent.Local_Port,
+         User_Ident (Net.User));
+   end Register_Ident;
+
+   procedure Forget_Ident
+     (Srv : not null Soja.Server.Server_Access; Ent : in out Ident_Entry)
+   is
+      I : constant Soja.Identd.Identd_Access := Soja.Server.Identd (Srv.all);
+   begin
+      if I /= null and then Ent.Local_Port > 0 then
+         Soja.Identd.Delete
+           (I.all, To_String (Ent.Host), Ent.Remote_Port, Ent.Local_Port);
+      end if;
+      Ent := (others => <>);
+   end Forget_Ident;
+
+   function Dial_TCP
+     (Net : not null Network_Access; U : Soja.Database.Network_URL;
+      Default_Port : Positive; Ent : out Ident_Entry)
+      return AWS.Net.Socket_Access
+   is
+      Host : Unbounded_String;
+      Port : Positive;
+      Sock : constant AWS.Net.Socket_Access := AWS.Net.Socket (False);
+   begin
+      Split_Host_Port (To_String (U.Host), Default_Port, Host, Port);
+      AWS.Net.Std.Socket_Type (Sock.all).Connect (To_String (Host), Port);
+      Register_Ident (Net, Sock.all, Ent);
+      return Sock;
+   end Dial_TCP;
 
    function Hex_SHA256 (D : CryptoLib.Hashes.SHA256_Digest) return String is
       R : String (1 .. 64);
@@ -449,7 +511,8 @@ package body Soja.Core is
    --  otherwise the peer is verified against the system CA bundle.  SASL
    --  EXTERNAL (client certificate) is deferred.
    function Dial_TLS
-     (Net : not null Network_Access; U : Soja.Database.Network_URL)
+     (Net : not null Network_Access; U : Soja.Database.Network_URL;
+      Ent : out Ident_Entry)
       return AWS.Net.Socket_Access
    is
       Host     : Unbounded_String;
@@ -461,6 +524,7 @@ package body Soja.Core is
    begin
       Split_Host_Port (To_String (U.Host), 6697, Host, Port);
       AWS.Net.Std.Socket_Type (Plain.all).Connect (To_String (Host), Port);
+      Register_Ident (Net, Plain.all, Ent);
 
       if CertFP /= "" then
          AWS.Net.SSL.Initialize
@@ -477,6 +541,7 @@ package body Soja.Core is
             --  One-way close_notify, matching Go's tls.Client teardown on
             --  error (a bidirectional shutdown would wait for the peer).
             SSL_Sock.Shutdown (AWS.Net.Shut_Write);
+            Forget_Ident (Net.User.Srv, Ent);
             return null;
          end if;
       else
@@ -507,11 +572,12 @@ package body Soja.Core is
          "upstream " & Soja.Database.Get_Name (Net.Network_Record) & ": ");
       Sock   : AWS.Net.Socket_Access;
       IC     : Soja.Conn.IRC_Conn_Access;
+      Ent    : Ident_Entry;
    begin
       if Scheme = "ircs" then
-         Sock := Dial_TLS (Net, U);
+         Sock := Dial_TLS (Net, U, Ent);
       elsif Scheme = "irc+insecure" then
-         Sock := Dial_TCP (U, 6667);
+         Sock := Dial_TCP (Net, U, 6667, Ent);
       elsif Scheme = "irc+unix" or else Scheme = "unix" then
          Net.Logger.Print
            ("upstream unix-socket scheme not yet ported: " & Scheme);
@@ -529,6 +595,7 @@ package body Soja.Core is
       IC := new Soja.Conn.Net.Net_IRC_Conn'(Soja.Conn.Net.Create (Sock));
 
       return Upc : constant Upstream_Conn_Access := new Upstream_Conn do
+         Upc.Ident := Ent;
          Upc.Conn := Soja.Conn.New_Conn
            (IC, (Logger           => Logger,
                  Rate_Limit_Delay => Soja.Server.Upstream_Message_Delay,
@@ -712,6 +779,7 @@ package body Soja.Core is
       if not RR.Success then
          Soja.Conn.Close (UC.Conn);
          Net.Active_Conn := null;
+         Forget_Ident (UC.Srv, UC.Ident);
          return (Text => To_Unbounded_String
                    ("failed to register: " & To_String (RR.Reason)),
                  Temporary => RR.Temporary);
@@ -725,6 +793,7 @@ package body Soja.Core is
       Net.User.Events.Enqueue (new Upstream_Disconnected_Event'(UC => UC));
       Soja.Conn.Close (UC.Conn);
       Net.Active_Conn := null;
+      Forget_Ident (UC.Srv, UC.Ident);
       return (Text => Null_Unbounded_String, Temporary => True);
    end Run_Conn;
 
