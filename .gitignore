@@ -65,3 +65,4 @@ tests/admin_check
 cmd/sojuctl/sojuctl
 cmd/sojuctl/obj/
 tests/proxy_check
+tests/sqlite_features_check

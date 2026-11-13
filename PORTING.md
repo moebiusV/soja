@@ -95,33 +95,39 @@ prefixes are byte-identical. soja calls `Verify` directly — no shim. soja writ
 produced. bcrypt is internal-only — the hash is stored in the DB and compared
 in-process, never on the wire.
 
-### SQLite binding: `gnatcoll-db` (gnatcoll-sqlite), and its FTS5 gap
+### SQLite binding: `gnatcoll-db` (gnatcoll-sqlite), against the system SQLite
 
-The sqlite3 binding is **gnatcoll-sqlite**, shipped in the `gnatcoll-db` aport
-and already installed in the image.  It has two layers: `GNATCOLL.SQL.Sqlite`
-(the high-level driver over `gnatcoll-sql`'s `Execute`/`Fetch`) and
-`GNATCOLL.SQL.Sqlite.Gnade` (a thin binding to the raw sqlite3 C API, with the
-sqlite3 amalgamation bundled into the library).  No new binding or aport is
-needed.
+The sqlite3 binding is **gnatcoll-sqlite**, shipped in the `gnatcoll-db` aport.
+It has two layers: `GNATCOLL.SQL.Sqlite` (the high-level driver over
+`gnatcoll-sql`'s `Execute`/`Fetch`) and `GNATCOLL.SQL.Sqlite.Gnade` (a thin
+binding to the raw sqlite3 C API).  No new binding is needed.
 
-Two deviations from Go's `modernc.org/sqlite` store, both forced by
+**The aport builds it against Alpine's own `libsqlite3`**
+(`GNATCOLL_SQLITE=external`, `-lsqlite3`), not against the amalgamation that
+ships in the gnatcoll-db source.  That bundled copy is SQLite **3.21.0**
+(2017): no FTS5 (`CREATE VIRTUAL TABLE ... USING fts5` fails with "no such
+module: fts5"), no upsert (`ON CONFLICT`, which soju's `StoreMessages` uses),
+no window functions, `RETURNING`, `DROP COLUMN`, JSON or math functions, and no
+security fixes since.  With the system library soja has what soju's Go drivers
+have (FTS5 included) and every option Alpine enables, and it follows Alpine's
+updates.  `tests/sqlite_features_check` guards this: it runs FTS5, upsert,
+window functions, `RETURNING`, `DROP COLUMN`, JSON and math functions, checks
+the feature options of Alpine's library, and fails on the bundled build.  soja
+therefore needs `sqlite-libs` at run time (`sqlite-static` to link it
+statically).
+
+One deviation from Go's `modernc.org/sqlite` store remains, forced by
 gnatcoll-sqlite:
 
 - **No multi-statement `Execute`.**  gnatcoll prepares one statement per
   `Execute`; Go's driver runs the whole schema/migration blob.  The schema and
   the migrations are therefore split into individual statements (same on-disk
   result).
-- **FTS5 is missing.**  The bundled amalgamation is built without FTS5
-  (`CREATE VIRTUAL TABLE ... USING fts5` fails with "no such module: fts5").
-  soju's `MessageFTS` table + triggers serve only the message store
-  (`StoreMessages`/`ListMessages` search), so they are deferred along with
-  those methods.  When the message store is ported, FTS5 needs either a rebuilt
-  `gnatcoll-db` (`-DSQLITE_ENABLE_FTS5`) or a thin aport against Alpine's
-  FTS5-enabled `libsqlite3`.
 
-The message-store methods (`GetMessageLastID`, `StoreMessages`,
-`ListMessageLastPerTarget`, `ListMessages`) are deferred until `Soja.Irc`
-(`irc.go`) is ported, since they operate on `irc.Message`.
+soju's `MessageFTS` table + triggers serve only the message store
+(`StoreMessages`/`ListMessages` search); they are created with it.  The
+message-store methods (`GetMessageLastID`, `StoreMessages`,
+`ListMessageLastPerTarget`, `ListMessages`) are still to be ported.
 
 ## IRC wire-format quirks (irc.v4 vs RFC 2812 / IRCv3)
 
