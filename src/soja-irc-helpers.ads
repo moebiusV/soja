@@ -75,6 +75,12 @@ package Soja.Irc.Helpers is
    --  characters escaped.  Used in error messages.
    function Quote (S : String) return String;
 
+   --  time.ParseDuration: "300s", "22h30m", "1.5h", "0", with a sign and the
+   --  units ns, us (or the micro sign), ms, s, m and h.  Ok is False for
+   --  anything else (no unit, an unknown unit, no digits, overflow).
+   procedure Parse_Go_Duration
+     (S : String; Value : out Duration; Ok : out Boolean);
+
    --  parseChatHistoryBound: parse "timestamp=<server-time>"; Valid is False
    --  (Go returns the zero time) on any error.
    function Parse_Chat_History_Bound

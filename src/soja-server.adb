@@ -177,4 +177,30 @@ package body Soja.Server is
       end if;
    end Shutdown;
 
+   protected body Gauges is
+      procedure Add_Downstreams (By : Integer) is
+      begin
+         Value.Downstreams := Natural'Max (0, Value.Downstreams + By);
+      end Add_Downstreams;
+
+      procedure Add_Upstreams (By : Integer) is
+      begin
+         Value.Upstreams := Natural'Max (0, Value.Upstreams + By);
+      end Add_Upstreams;
+
+      function Get return Server_Stats is (Value);
+   end Gauges;
+
+   procedure Add_Downstreams (S : in out Server; By : Integer) is
+   begin
+      S.Gauge.Add_Downstreams (By);
+   end Add_Downstreams;
+
+   procedure Add_Upstreams (S : in out Server; By : Integer) is
+   begin
+      S.Gauge.Add_Upstreams (By);
+   end Add_Upstreams;
+
+   function Stats (S : Server) return Server_Stats is (S.Gauge.Get);
+
 end Soja.Server;

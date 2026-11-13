@@ -11,6 +11,7 @@ with Soja.Conn;
 with Soja.Database;
 with Soja.Downstream;
 with Soja.Irc.Cap_Registry;
+with Soja.Irc.Genmsg;
 with Soja.Irc.Case_Mapping;
 with Soja.Irc.Case_Mapping_Maps;
 with Soja.Irc.Members;
@@ -277,6 +278,31 @@ package Soja.Core is
       Result       : Update_Result_Access;
    end record;
 
+   --  eventUserRun: run a BouncerServ command as this user.  The sender
+   --  reads the lines the command prints, then its result, from Output.
+   protected type Run_Output is
+      procedure Put (Text : String);
+      --  Error is the text of Go's `error` ("" when the command worked).
+      procedure Finish (Failed : Boolean; Error : String);
+      --  The next printed line (Is_Line), or, once the command is over and
+      --  every line was taken, its result.
+      entry Next
+        (Is_Line : out Boolean; Text : out Unbounded_String;
+         Failed : out Boolean);
+   private
+      Lines      : Soja.Irc.Genmsg.String_Vectors.Vector;
+      Taken      : Natural := 0;
+      Is_Done    : Boolean := False;
+      Has_Failed : Boolean := False;
+      Reason     : Unbounded_String;
+   end Run_Output;
+   type Run_Output_Access is access all Run_Output;
+
+   type User_Run_Event is new Event with record
+      Params : Soja.Irc.Genmsg.String_Vectors.Vector;
+      Output : Run_Output_Access;
+   end record;
+
    --  A join retry timer fired (soja-specific: channel-full retries).
    type Retry_Join_Event is new Event with record
       UC   : Upstream_Conn_Access;
@@ -334,6 +360,9 @@ package Soja.Core is
 
       Events : Event_Queue_Access;
       Done   : Signal_Access;
+      --  `user delete` on one's own account (soja-specific, SB-10): the
+      --  record is deleted by Run once the user has stopped.
+      Delete_On_Stop : Boolean := False;
 
       --  user.msgStore: null when no store is configured.  Only the
       --  "memory" driver is ported; "fs" and "db" leave it null.

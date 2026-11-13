@@ -556,4 +556,95 @@ package body Soja.Irc.Helpers is
       return M;
    end Generate_Away_Reply;
 
+   procedure Parse_Go_Duration
+     (S : String; Value : out Duration; Ok : out Boolean)
+   is
+      Pos      : Positive := S'First;
+      Negative : Boolean := False;
+      Total    : Long_Long_Float := 0.0;
+   begin
+      Value := 0.0;
+      Ok := False;
+      if S'Length = 0 then
+         return;
+      end if;
+      if S (Pos) = '-' or else S (Pos) = '+' then
+         Negative := S (Pos) = '-';
+         Pos := Pos + 1;
+      end if;
+      if Pos > S'Last then
+         return;
+      end if;
+      if S (Pos .. S'Last) = "0" then
+         Ok := True;
+         return;
+      end if;
+
+      while Pos <= S'Last loop
+         declare
+            Whole, Frac : Long_Long_Float := 0.0;
+            Scale       : Long_Long_Float := 1.0;
+            Digits_Seen : Boolean := False;
+            Unit        : Long_Long_Float;
+            U_First     : Positive;
+         begin
+            while Pos <= S'Last and then S (Pos) in '0' .. '9' loop
+               Whole := Whole * 10.0
+                 + Long_Long_Float (Character'Pos (S (Pos)) - 48);
+               Digits_Seen := True;
+               Pos := Pos + 1;
+            end loop;
+            if Pos <= S'Last and then S (Pos) = '.' then
+               Pos := Pos + 1;
+               while Pos <= S'Last and then S (Pos) in '0' .. '9' loop
+                  Scale := Scale / 10.0;
+                  Frac := Frac
+                    + Long_Long_Float (Character'Pos (S (Pos)) - 48) * Scale;
+                  Digits_Seen := True;
+                  Pos := Pos + 1;
+               end loop;
+            end if;
+            if not Digits_Seen then
+               return;
+            end if;
+
+            U_First := Pos;
+            while Pos <= S'Last
+              and then S (Pos) /= '.' and then S (Pos) not in '0' .. '9'
+            loop
+               Pos := Pos + 1;
+            end loop;
+            declare
+               U : constant String := S (U_First .. Pos - 1);
+            begin
+               if U = "ns" then
+                  Unit := 1.0E-9;
+               elsif U = "us" or else U = Character'Val (16#C2#)
+                 & Character'Val (16#B5#)
+                 or else U = Character'Val (16#CE#) & Character'Val (16#BC#)
+               then
+                  Unit := 1.0E-6;
+               elsif U = "ms" then
+                  Unit := 1.0E-3;
+               elsif U = "s" then
+                  Unit := 1.0;
+               elsif U = "m" then
+                  Unit := 60.0;
+               elsif U = "h" then
+                  Unit := 3600.0;
+               else
+                  return;   --  missing or unknown unit
+               end if;
+            end;
+            Total := Total + (Whole + Frac) * Unit;
+            if Total > 9.0E9 then
+               return;   --  more than any sensible duration: overflow
+            end if;
+         end;
+      end loop;
+
+      Value := Duration (if Negative then -Total else Total);
+      Ok := True;
+   end Parse_Go_Duration;
+
 end Soja.Irc.Helpers;

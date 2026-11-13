@@ -226,6 +226,24 @@ state machine is in the walker.  Deviation: only ASCII white space separates
 words (Go's `unicode.IsSpace` also takes U+0085, U+00A0 and other Unicode
 spaces).
 
+### BouncerServ commands (`Soja.Core.Service`, `Soja.Flags`)
+
+Step 9: `service.go`.  The command tree is a table of nodes built at
+elaboration; prefix matching, `help`, the admin/global rules and the output
+(`BouncerServ` PRIVMSGs; errors as `error: ...`) are as in Go.  `Soja.Flags`
+ports the parts of Go's `flag` the commands use, with its error texts.
+Deviations:
+
+- `certfp generate` answers that it is not supported yet (needs X.509 creation,
+  Milestone B); `certfp fingerprint` works.
+- The user table is reached through `Service.Directory`, which `Soja.Bouncer`
+  implements, since the table lives above `Soja.Core`.
+- `user update -password ""` is refused (Go stores the hash of the empty
+  password); `user create` already required a non-empty one.
+- `user run` waits at most 30 s for the other user's task (Go waits for the
+  context, which has no deadline).
+- `server status` reads the gauges of `Soja.Server` (downstreams, upstreams).
+
 ## Open decisions
 
 - **v1 scope**: webpush, PAM, and PostgreSQL are the heavy items; ship
@@ -391,6 +409,13 @@ spaces).
     by testing the previous rune for white space, which also fired for an
     escaped space: a word ending in `\ ` was lost, or glued to the next one
     (SB-09).  Soja tracks whether a word has begun.
+  - `user delete` on one's own account waited for the user's own goroutine
+    to stop, from that goroutine: a deadlock (SB-10).  Soja queues the stop and
+    deletes the record once the user has stopped.
+  - `channel update` changed the live channel field by field, so a bad value
+    half-applied the change (SB-11); soja updates a copy.
+  - `network delete -x` deleted the current network, reading `-x` as "no name"
+    (SB-12); soja refuses it.
 
 - **Upstream message handling, slice 4b: channel state.**  `Soja.Core.
   Upstream_Dispatch` now handles BATCH (definition, nesting, label

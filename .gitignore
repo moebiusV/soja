@@ -53,3 +53,5 @@ tests/dbg/
 *~
 tests/bouncer_check
 tests/service_words_check
+tests/service_check
+tests/flags_check

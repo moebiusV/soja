@@ -7,6 +7,7 @@ with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with Soja.Core;             use Soja.Core;
 with Soja.Core.Downstream_Commands;
 with Soja.Core.Downstream_Handshake;
+with Soja.Core.Service;
 with Soja.Core.Downstream_Helpers; use Soja.Core.Downstream_Helpers;
 with Soja.Database;
 with Soja.Irc.Genmsg;       use Soja.Irc.Genmsg;
@@ -263,6 +264,73 @@ package body Soja.Bouncer is
    end Broadcast;
 
    ----------------------------------------------------------------------
+   --  What BouncerServ asks of the user table
+   ----------------------------------------------------------------------
+
+   type Directory_Impl is new Soja.Core.Service.Directory with record
+      B : Bouncer_Access;
+   end record;
+
+   overriding function Find (D : Directory_Impl; Name : String)
+      return User_Access;
+   overriding function Count (D : Directory_Impl) return Natural;
+   overriding function Snapshot (D : Directory_Impl; Limit : Natural)
+      return Soja.Core.Service.User_Vectors.Vector;
+   overriding function Create
+     (D : Directory_Impl; Rec : in out Soja.Database.User)
+      return User_Access;
+   overriding procedure Broadcast
+     (D : Directory_Impl; Msg : Message; Sent, Total : out Natural);
+
+   function Find (D : Directory_Impl; Name : String)
+      return User_Access is (D.B.Users.Get (Name));
+
+   function Count (D : Directory_Impl) return Natural is
+     (Natural (D.B.Users.All_Users.Length));
+
+   function Snapshot (D : Directory_Impl; Limit : Natural)
+      return Soja.Core.Service.User_Vectors.Vector
+   is
+      R : Soja.Core.Service.User_Vectors.Vector;
+   begin
+      for U of D.B.Users.All_Users loop
+         exit when Natural (R.Length) >= Limit;
+         R.Append (U);
+      end loop;
+      return R;
+   end Snapshot;
+
+   function Create
+     (D : Directory_Impl; Rec : in out Soja.Database.User)
+      return User_Access is
+   begin
+      return Create_User (D.B.all, Rec);
+   exception
+      when E : Bouncer_Error =>
+         raise Soja.Core.Service.Service_Error
+           with Ada.Exceptions.Exception_Message (E);
+   end Create;
+
+   procedure Broadcast
+     (D : Directory_Impl; Msg : Message; Sent, Total : out Natural) is
+   begin
+      Sent := 0;
+      Total := 0;
+      for U of D.B.Users.All_Users loop
+         Total := Total + 1;
+         begin
+            U.Events.Enqueue (new Broadcast_Event'(Msg => Copy (Msg)));
+            Sent := Sent + 1;
+         exception
+            when others =>
+               null;   --  that user is stopping
+         end;
+      end loop;
+   end Broadcast;
+
+   The_Directory : aliased Directory_Impl;
+
+   ----------------------------------------------------------------------
    --  Initialize, Handle, Shutdown
    ----------------------------------------------------------------------
 
@@ -271,6 +339,10 @@ package body Soja.Bouncer is
    begin
       B.Srv := Srv;
       Current := B'Unchecked_Access;
+      The_Directory.B := B'Unchecked_Access;
+      Soja.Core.Service.Users := The_Directory'Access;
+      Soja.Core.Downstream_Commands.Service_Handler :=
+        Soja.Core.Service.Handle_Client'Access;
       Srv.Set_Handler (Handle'Access);
       Soja.Core.Downstream_Commands.Broadcast_Hook := Broadcast'Access;
    end Initialize;
@@ -312,6 +384,7 @@ package body Soja.Bouncer is
    begin
       B.Ids.Next (ID);
       DC := New_Downstream_Conn (B.Srv, IC, ID);
+      B.Srv.Add_Downstreams (1);
 
       begin
          if B.Users.Is_Stopping then
@@ -343,6 +416,7 @@ package body Soja.Bouncer is
                & Ada.Exceptions.Exception_Information (E));
       end;
 
+      B.Srv.Add_Downstreams (-1);
       --  dc.Shutdown: flush what is queued (an ERROR, say), then close.
       Soja.Conn.Shutdown (DC.Conn);
    end Handle;

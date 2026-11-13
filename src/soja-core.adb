@@ -1103,6 +1103,37 @@ package body Soja.Core is
       end Wait;
    end Update_Result;
 
+   protected body Run_Output is
+      procedure Put (Text : String) is
+      begin
+         Lines.Append (Text);
+      end Put;
+
+      procedure Finish (Failed : Boolean; Error : String) is
+      begin
+         Is_Done := True;
+         Has_Failed := Failed;
+         Reason := To_Unbounded_String (Error);
+      end Finish;
+
+      entry Next
+        (Is_Line : out Boolean; Text : out Unbounded_String;
+         Failed : out Boolean)
+        when Natural (Lines.Length) > Taken or else Is_Done is
+      begin
+         if Natural (Lines.Length) > Taken then
+            Taken := Taken + 1;
+            Is_Line := True;
+            Text := To_Unbounded_String (Lines (Taken));
+            Failed := False;
+         else
+            Is_Line := False;
+            Text := Reason;
+            Failed := Has_Failed;
+         end if;
+      end Next;
+   end Run_Output;
+
    function Stop_User
      (U : not null User_Access; Timeout : Duration := 30.0) return Boolean
    is
@@ -1422,7 +1453,9 @@ package body Soja.Core is
          end if;
          Last_Try := Ada.Calendar.Clock;
 
+         Net.User.Srv.Add_Upstreams (1);
          Err := Run_Conn (Net);
+         Net.User.Srv.Add_Upstreams (-1);
          if Err.Text /= Null_Unbounded_String then
             Net.Logger.Print
               ("connection error to " & To_String (Net.Network_Record.Addr)
@@ -1482,6 +1515,19 @@ package body Soja.Core is
                when E : others =>
                   U.Logger.Print
                     ("failed to close message store for user "
+                     & Soja.Irc.Helpers.Quote
+                         (To_String (U.User_Record.Username)) & ": "
+                     & Ada.Exceptions.Exception_Message (E));
+            end;
+         end if;
+         if U.Delete_On_Stop then
+            begin
+               Soja.Database.Delete_User
+                 (Soja.Server.DB (U.Srv.all).all, U.User_Record.ID);
+            exception
+               when E : others =>
+                  U.Logger.Print
+                    ("failed to delete user "
                      & Soja.Irc.Helpers.Quote
                          (To_String (U.User_Record.Username)) & ": "
                      & Ada.Exceptions.Exception_Message (E));

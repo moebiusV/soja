@@ -5,6 +5,7 @@ with Ada.Exceptions;
 with Soja.Core.Downstream_Handshake;
 with Soja.Core.Downstream_Helpers;
 with Soja.Core.Network_Ops;
+with Soja.Core.Service;
 with Soja.Core.Upstream_Dispatch;
 with Soja.Core.User_Ops;
 with Soja.Irc.Cap_Registry;
@@ -296,7 +297,11 @@ package body Soja.Core.User_Events is
       procedure Apply (Rec : in out Soja.Database.User) is
       begin
          if E.Has_Password then
-            Soja.Database.Set_Password (Rec, To_String (E.Password));
+            if Length (E.Password) = 0 then
+               Rec.Password := Null_Unbounded_String;   --  -disable-password
+            else
+               Soja.Database.Set_Password (Rec, To_String (E.Password));
+            end if;
          end if;
          if E.Has_Admin then
             Rec.Admin := E.Admin;
@@ -400,6 +405,9 @@ package body Soja.Core.User_Events is
          Soja.Core.Upstream_Dispatch.Retry_Join
            (Retry_Join_Event (E.all).UC,
             To_String (Retry_Join_Event (E.all).Name));
+      elsif E.all in User_Run_Event then
+         Soja.Core.Service.Run_Event
+           (U, User_Run_Event (E.all).Params, User_Run_Event (E.all).Output);
       elsif E.all in Stop_Event then
          Stop_User (U);
          Stop := True;

@@ -25,6 +25,9 @@ one Go test per bug).  Add an entry the moment a bug is found; do not batch.
 | SB-07 | `downstream.go:3365` | `forwardChannel` panics on a channel whose NAMES are incomplete (reachable via `attach`) | medium |
 | SB-08 | `downstream.go:1710` | a failed authentication is never reported to the client | medium |
 | SB-09 | `service.go:74` | `splitWords` loses or glues a word that ends in an escaped space | low |
+| SB-10 | `service.go:1157` | `user delete <own name>` waits for the user's own goroutine and never returns | high |
+| SB-11 | `service.go:1408` | `channel update` with a bad value half-applies the change in memory | low |
+| SB-12 | `service.go:677` | `network delete -x` deletes the current network | low |
 
 ---
 
@@ -397,3 +400,111 @@ unnoticed.
 
 (The quote branches need `inWord = true` where a quote opens, so that `""` is
 still an empty word.)  Soja's `Soja.Service_Words.Split_Words` does this.
+
+## SB-10: `user delete` on one's own account deadlocks the user
+
+`service.go:1157`, in `handleUserDelete`:
+
+```go
+self := ctx.user != nil && ctx.user.Username == username
+...
+if err := u.stop(deleteCtx); err != nil {   // deleteCtx = context.TODO() when self
+```
+
+and `user.stop` (`user.go:1218`) sends `eventStop{}` to `u.events` and then
+waits for `u.done`.
+
+**Effect.**  A command sent to BouncerServ by a client runs on the **user's own
+goroutine** (`handleMessageRegistered` is called from the event loop).  When the
+target is the user itself, `stop` waits for the goroutine that is waiting: the
+event loop never gets to the `eventStop`, `u.done` is never closed, and the
+context is `context.TODO()` (never cancelled, as the comment about the closing
+connection explains).  The user's loop hangs for good: none of that user's
+clients or upstream networks are served any more, and the account is not
+deleted.  The same happens for an admin's `user run <name> user delete <name>
+<token>`, which runs the command on `<name>`'s goroutine.  Deleting *another*
+user works, since that runs on the caller's goroutine.
+
+**Suggested patch.**  When `self` (or `ctx.user == u`), do not wait: record that
+the account is to be deleted, queue the stop, and delete the row once `run` has
+returned (after the networks were stopped and the delivery receipts stored):
+
+```diff
+-	if err := u.stop(deleteCtx); err != nil {
+-		return fmt.Errorf("failed to stop user: %v", err)
+-	}
+-
+-	if err := ctx.srv.db.DeleteUser(deleteCtx, u.ID); err != nil {
++	if self {
++		u.deleteOnStop = true
++		select {
++		case u.events <- eventStop{}:
++		default:
++			return fmt.Errorf("failed to stop user: event queue is full")
++		}
++		return nil
++	}
++
++	if err := u.stop(deleteCtx); err != nil {
++		return fmt.Errorf("failed to stop user: %v", err)
++	}
++	if err := ctx.srv.db.DeleteUser(deleteCtx, u.ID); err != nil {
+```
+
+(with `if u.deleteOnStop { srv.db.DeleteUser(...) }` after the loop in
+`user.run`).  Check against current `master` first.
+
+## SB-11: `channel update` half-applies a change that is then refused
+
+`service.go:1408`.  `channelFlagSet.update(ch)` writes each option into the live
+`*database.Channel` as it goes, and returns on the first bad one:
+
+```go
+if fs.RelayDetached != nil { ...; channel.RelayDetached = filter }
+if fs.ReattachOn != nil   { ...; channel.ReattachOn = filter }
+if fs.DetachAfter != nil  { dur, err := ...; if err != nil || dur < 0 { return fmt.Errorf(...) }; ... }
+```
+
+**Effect.**  `channel update #c -relay-detached none -detach-after bogus` fails
+with an error, but `RelayDetached` of the in-memory channel is already `none`
+(the database is not written).  The bouncer then behaves differently from what
+is stored until the next restart, and from what the user was told.
+
+**Suggested patch.**  Update a copy and assign it only when everything parsed:
+
+```diff
+-	if err := fs.update(ch); err != nil {
++	updated := *ch
++	if err := fs.update(&updated); err != nil {
+ 		return err
+ 	}
++	*ch = updated
+```
+
+## SB-12: `network delete -x` deletes the current network
+
+`service.go:677`, `handleServiceNetworkDelete` (via `getNetworkFromArg`):
+
+```go
+name, params := popArg(params)     // a word starting with "-" is not a name
+if name == "" {
+	if ctx.network == nil { return ..., fmt.Errorf("no network selected, a name argument is required") }
+	return ctx.network, params, nil
+}
+```
+
+**Effect.**  `network delete` checks that it got exactly one parameter, but
+`popArg` treats a parameter that starts with `-` (`-x`, `-network`, a typo of a
+flag) as "no name given", so the network the client is connected to is deleted,
+without confirmation.
+
+**Suggested patch.**  After the parameter count check:
+
+```diff
+ 	if len(params) != 1 {
+ 		return fmt.Errorf("expected exactly one argument")
+ 	}
++	if strings.HasPrefix(params[0], "-") {
++		return fmt.Errorf("unexpected argument: %v", params[0])
++	}
+```

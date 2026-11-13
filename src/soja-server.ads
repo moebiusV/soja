@@ -91,6 +91,17 @@ package Soja.Server is
 
    procedure Shutdown (S : in out Server);
 
+   --  The gauges of server.go's metrics that BouncerServ's "server status"
+   --  reports: connected clients and running upstream connections.
+   type Server_Stats is record
+      Downstreams : Natural := 0;
+      Upstreams   : Natural := 0;
+   end record;
+
+   procedure Add_Downstreams (S : in out Server; By : Integer);
+   procedure Add_Upstreams (S : in out Server; By : Integer);
+   function Stats (S : Server) return Server_Stats;
+
 private
 
    protected type Shutdown_Flag is
@@ -107,7 +118,16 @@ private
       Value : Server_Config_Access := new Server_Config;
    end Config_Holder;
 
+   protected type Gauges is
+      procedure Add_Downstreams (By : Integer);
+      procedure Add_Upstreams (By : Integer);
+      function Get return Server_Stats;
+   private
+      Value : Server_Stats;
+   end Gauges;
+
    type Server is tagged limited record
+      Gauge    : Gauges;
       Cfg      : Config_Holder;
       Logger   : Soja.Logging.Logger_Access;
       DB       : Soja.Database.Database_Access;
