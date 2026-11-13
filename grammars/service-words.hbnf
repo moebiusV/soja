@@ -1,0 +1,20 @@
+; service-words.hbnf -- BouncerServ's command line (service.go splitWords).
+;
+; A line is a run of bytes, each in exactly one class: whitespace, backslash,
+; double quote, single quote, anything else.  hbnf's Ada lexer cannot carry
+; "inside a quote" state from one token to the next, so the quoting rules
+; live in the walker (soja-service-words.adb), which reads the classified
+; bytes exactly as splitWords reads runes.
+;
+; Deviation from Go (PORTING.md): only ASCII whitespace separates words; Go's
+; unicode.IsSpace also takes U+0085, U+00A0 and the other Unicode spaces.
+
+language Ada
+
+line = *( ws | bsl | dquote | squote | other )
+
+ws     = %x09-0D | %x20
+bsl    = %x5C
+dquote = %x22
+squote = %x27
+other  = %x00-08 | %x0E-1F | %x21 | %x23-26 | %x28-5B | %x5D-FF

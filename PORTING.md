@@ -217,6 +217,15 @@ Step 8: server.go's user table, `Handle`, `getOrCreateUser`, `createUser`,
 - The inactive-user loop, web push config and metrics from `Start` are not
   ported (Milestone B); `HandleAdmin` likewise.
 
+### BouncerServ's command line (`grammars/service-words.hbnf`)
+
+`splitWords` is `Soja.Service_Words.Split_Words`.  The hbnf grammar only
+classifies each byte (white space, backslash, `"`, `'`, other): hbnf's Ada
+lexer cannot carry "inside a quote" from one token to the next, so the quoting
+state machine is in the walker.  Deviation: only ASCII white space separates
+words (Go's `unicode.IsSpace` also takes U+0085, U+00A0 and other Unicode
+spaces).
+
 ## Open decisions
 
 - **v1 scope**: webpush, PAM, and PostgreSQL are the heavy items; ship
@@ -378,6 +387,10 @@ Step 8: server.go's user table, `Handle`, `getOrCreateUser`, `createUser`,
     seen, so the first message stored after a `LastMsgID` call (a detach, a
     delivery receipt) was missing from the backlog.  Soja returns the newest
     message's number (0 when empty).
+  - `splitWords` (BouncerServ's command line) decided that a word had ended
+    by testing the previous rune for white space, which also fired for an
+    escaped space: a word ending in `\ ` was lost, or glued to the next one
+    (SB-09).  Soja tracks whether a word has begun.
 
 - **Upstream message handling, slice 4b: channel state.**  `Soja.Core.
   Upstream_Dispatch` now handles BATCH (definition, nesting, label

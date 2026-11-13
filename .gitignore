@@ -52,3 +52,4 @@ tests/dbg/
 # Editor / OS
 *~
 tests/bouncer_check
+tests/service_words_check

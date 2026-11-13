@@ -24,6 +24,7 @@ one Go test per bug).  Add an entry the moment a bug is found; do not batch.
 | SB-06 | `msgstore/memory.go:79` | memory store `LastMsgID` loses the next message from the backlog | medium |
 | SB-07 | `downstream.go:3365` | `forwardChannel` panics on a channel whose NAMES are incomplete (reachable via `attach`) | medium |
 | SB-08 | `downstream.go:1710` | a failed authentication is never reported to the client | medium |
+| SB-09 | `service.go:74` | `splitWords` loses or glues a word that ends in an escaped space | low |
 
 ---
 
@@ -331,3 +332,68 @@ reported".
 - `irc.go:265`: `isHighlight` panics on an empty nick.  Not reachable in
   normal operation (the nick is never empty once configured); soja returns
   "not a highlight" instead.  Probably not worth a PR on its own.
+
+## SB-09: `splitWords` loses or glues a word that ends in an escaped space
+
+`service.go:74`.  `splitWords` decides that a word has ended by looking at the
+previous *rune*:
+
+```go
+} else if wordDelim == ' ' && unicode.IsSpace(r) {
+	// end of last word
+	if !unicode.IsSpace(prev) {
+		words = append(words, lastWord.String())
+		lastWord.Reset()
+	}
+}
+...
+prev = r                      // set for escaped runes too
+```
+
+and, at the end, `if !unicode.IsSpace(prev) { words = append(...) }`.
+
+**Effect.**  `prev` is also set for a rune that was escaped with a backslash,
+so an escaped space counts as white space:
+
+- `network create -addr x -name my\ ` (an escaped space last): the last word
+  is dropped.
+- `a\  b` (escaped space, then a real one): the real space does not end the
+  word, so the command sees one word `a b` instead of `a ` and `b`.
+
+Escaped spaces in the middle of a word (`my\ net`) work, which is why it goes
+unnoticed.
+
+**Suggested patch.**  Track "a word has begun" instead of inspecting `prev`:
+
+```diff
+-	prev := ' '
++	inWord := false
+ ...
+ 		if escape {
+ 			lastWord.WriteRune(r)
++			inWord = true
+ 			escape = false
+ 		} else if r == '\\' {
+ 			escape = true
++			inWord = true
+ 		} else if wordDelim == ' ' && unicode.IsSpace(r) {
+-			if !unicode.IsSpace(prev) {
++			if inWord {
+ 				words = append(words, lastWord.String())
+ 				lastWord.Reset()
++				inWord = false
+ 			}
+ ...
+ 		} else {
+ 			lastWord.WriteRune(r)
++			inWord = true
+ 		}
+-
+-		prev = r
+ 	}
+-	if !unicode.IsSpace(prev) {
++	if inWord {
+```
+
+(The quote branches need `inWord = true` where a quote opens, so that `""` is
+still an empty word.)  Soja's `Soja.Service_Words.Split_Words` does this.
