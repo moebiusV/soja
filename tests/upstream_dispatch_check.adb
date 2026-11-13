@@ -617,8 +617,10 @@ begin
 
       --  Run Line and wait for K more lines to reach the downstream.
       procedure Down (Line : String; K : Natural; What : String) is
-         N : constant Natural := DC_Log.Count;
+         N : Natural;
       begin
+         delay 0.1;   --  let earlier lines land: a quiet baseline
+         N := DC_Log.Count;
          Ok (Line);
          Check (Wait (DC_Log, N + K), What & ": expected" & Natural'Image (K)
                 & " downstream lines");
@@ -875,8 +877,10 @@ begin
         Soja.Msgstore.Memory.New_Memory_Store;
 
       procedure Down (Line : String; K : Natural; What : String) is
-         N : constant Natural := DC_Log.Count;
+         N : Natural;
       begin
+         delay 0.1;   --  let earlier lines land: a quiet baseline
+         N := DC_Log.Count;
          Ok (Line);
          Check (Wait (DC_Log, N + K), What & ": expected" & Natural'Image (K)
                 & " downstream lines");
@@ -1120,8 +1124,10 @@ begin
       Done  : Boolean;
 
       procedure Down (Line : String; K : Natural; What : String) is
-         N : constant Natural := DC_Log.Count;
+         N : Natural;
       begin
+         delay 0.1;   --  let earlier lines land: a quiet baseline
+         N := DC_Log.Count;
          Ok (Line);
          Check (Wait (DC_Log, N + K), What & ": expected" & Natural'Image (K)
                 & " downstream lines");

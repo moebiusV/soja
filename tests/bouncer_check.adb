@@ -1,6 +1,7 @@
 pragma Ada_2022;
 
 with Ada.Containers.Indefinite_Vectors;
+with Ada.Calendar;
 with Ada.Exceptions;
 with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
@@ -247,6 +248,45 @@ begin
    begin
       R.Join;
       Check (Wait_For (Bad.Log, " 464 "), "a wrong password is answered");
+   end;
+
+   --  Inactive users are disabled (`disable-inactive-user`).
+   declare
+      Old : constant Ada.Calendar.Time :=
+        Ada.Calendar."-" (Ada.Calendar.Clock, 86_400.0 * 30);
+      Carol_Rec, Dave_Rec, Erin_Rec : SD.User;
+      Carol, Dave : Soja.Core.User_Access;
+      Count : Natural;
+   begin
+      Carol_Rec := SD.New_User ("old1");
+      Carol_Rec.Downstream_Interacted_At := Old;
+      Dave_Rec := SD.New_User ("old2");
+      Dave_Rec.Downstream_Interacted_At := Old;
+      Erin_Rec := SD.New_User ("fresh");
+      Erin_Rec.Downstream_Interacted_At := Ada.Calendar.Clock;
+      Carol := Soja.Bouncer.Create_User (B, Carol_Rec);
+      Dave := Soja.Bouncer.Create_User (B, Dave_Rec);
+      declare
+         Erin : constant Soja.Core.User_Access :=
+           Soja.Bouncer.Create_User (B, Erin_Rec);
+      begin
+         Dave.Num_Downstream_Conns := 1;   --  has a client right now
+
+         Check (Soja.Bouncer.Disable_Inactive_Users (B) = 0,
+                "nothing happens without a delay");
+         Soja.Server.Config (Srv).Disable_Inactive_Users_Delay := 3600.0;
+         Count := Soja.Bouncer.Disable_Inactive_Users (B);
+         Check (Count = 1, "one user was inactive:" & Count'Image);
+         Check (not Carol.User_Record.Enabled
+                and then not SD.Get_User (DB.all, "old1").Enabled,
+                "the inactive user is disabled, in the database too");
+         Check (Dave.User_Record.Enabled, "a user with a client is kept");
+         Check (Erin.User_Record.Enabled, "a recent user is kept");
+         Check (Soja.Bouncer.Disable_Inactive_Users (B) = 0,
+                "a disabled user is not disabled again");
+         Soja.Server.Config (Srv).Disable_Inactive_Users_Delay := 0.0;
+         Dave.Num_Downstream_Conns := 0;
+      end;
    end;
 
    --  Shutdown stops the users; later clients are turned away.

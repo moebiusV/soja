@@ -52,6 +52,15 @@ package Soja.Bouncer is
    function Get_Or_Create_User (B : in out Bouncer; Username : String)
       return Soja.Core.User_Access;
 
+   --  disableInactiveUsersLoop's period (4 hours); tests shorten it.
+   Inactive_Check_Interval : Duration := 4.0 * 3600.0;
+
+   --  Server.disableInactiveUsers: disable the users that have not had a
+   --  client for the configured delay (`disable-inactive-user`), unless they
+   --  have clients now.  Does nothing when the delay is 0.  Returns how many
+   --  users were disabled.
+   function Disable_Inactive_Users (B : in out Bouncer) return Natural;
+
    --  Server.Handle: owns IC until the client goes away.
    procedure Handle (IC : not null Soja.Conn.IRC_Conn_Access);
 
@@ -98,7 +107,15 @@ private
       Active : Natural := 0;
    end Wait_Group;
 
+   protected type Stop_Gate is
+      procedure Request;
+      entry Wait;
+   private
+      Is_Set : Boolean := False;
+   end Stop_Gate;
+
    type Bouncer is tagged limited record
+      Stopped : Stop_Gate;
       Srv   : Soja.Server.Server_Access;
       Users : Table;
       Ids   : Id_Source;

@@ -357,7 +357,9 @@ package Soja.Core is
 
       Networks         : Network_Vectors.Vector;
       Downstream_Conns : Downstream_Conn_Vectors.Vector;
-      Num_Downstream_Conns : Long_Long_Integer := 0;
+      --  Written by the user's task, read by the server's inactive-user
+      --  loop (Go: an atomic).
+      Num_Downstream_Conns : Long_Long_Integer := 0 with Atomic;
 
       Events : Event_Queue_Access;
       Done   : Signal_Access;

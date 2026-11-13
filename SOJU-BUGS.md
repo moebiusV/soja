@@ -28,6 +28,7 @@ one Go test per bug).  Add an entry the moment a bug is found; do not batch.
 | SB-10 | `service.go:1157` | `user delete <own name>` waits for the user's own goroutine and never returns | high |
 | SB-11 | `service.go:1408` | `channel update` with a bad value half-applies the change in memory | low |
 | SB-12 | `service.go:677` | `network delete -x` deletes the current network | low |
+| SB-14 | `server.go:725` | the inactive-user loop re-disables disabled users, says "deleted", and stops at the first failure | low |
 | SB-13 | `downstream.go:140` | `BOUNCER ADDNETWORK`/`CHANGENETWORK` build an unusable address from an IPv6 host | low |
 
 ---
@@ -542,3 +543,44 @@ a bare IPv6 host:
 +		addr = "[" + host + "]"
 +	}
 ```
+
+## SB-14: `disableInactiveUsers` re-disables, mislabels and gives up early
+
+`server.go:725`.  Three things in the same function:
+
+```go
+usernames, err := s.db.ListInactiveUsernames(ctx, time.Now().Add(-delay))
+...
+for _, username := range usernames {
+	u := s.users[username]
+	...
+	if n := u.numDownstreamConns.Load(); n > 0 { continue }
+	users = append(users, u)
+}
+...
+for _, u := range users {
+	...
+	case err := <-done:
+		if err != nil {
+			return err
+		} else {
+			s.Logger.Printf("deleted inactive user %q", u.Username)
+		}
+```
+
+**Effect.**
+
+1. `ListInactiveUsernames` selects `coalesce(downstream_interacted_at,
+   created_at) < ?` without looking at `enabled`.  A user that was disabled
+   for inactivity stays "inactive" for ever (nothing bumps the time), so every
+   four hours it is sent another `eventUserUpdate{enabled: false}`, which
+   stores the record again and logs again.
+2. The log line says `deleted inactive user`, but the user is only disabled.
+3. `return err` on the first failing user means the users after it in the list
+   are not disabled in that round (and not until the failing one is fixed,
+   since it is first in line every time).
+
+**Suggested patch.**  Skip users that are already disabled (`!u.Enabled`, or
+`AND enabled` in the query), say "disabled inactive user", and log and continue
+on a per-user error instead of returning.
+

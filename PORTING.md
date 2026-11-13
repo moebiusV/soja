@@ -265,6 +265,16 @@ uses of one token class apart).  Deviations: a signed port such as `+80` is
 refused (Go's `Atoi` takes it); the PROXY protocol wrapper Go puts on the ident
 listener is not ported (no PROXY support yet).
 
+### Inactive users (`Soja.Bouncer`)
+
+`server.go`'s `disableInactiveUsersLoop` / `disableInactiveUsers`: a task started
+by `Bouncer.Start` wakes every `Inactive_Check_Interval` (4 h), and disables the
+users whose last client was longer ago than `disable-inactive-user`, unless they
+have a client now (`Num_Downstream_Conns`, now an atomic: the user's task writes
+it).  The disable goes through the user's own task (`User_Update_Event`).
+Deviations: already-disabled users are skipped, the log says "disabled", and a
+failure on one user does not stop the others (SB-14).
+
 ### Executables (`cmd/soja`, `cmd/sojadb`) and the end-to-end check
 
 Step 10.  `soja` (main unit `Soja_Main`, since `Soja` is the library's root

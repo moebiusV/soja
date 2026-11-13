@@ -1,5 +1,6 @@
 pragma Ada_2022;
 
+with Ada.Calendar;
 with Ada.Exceptions;
 with Ada.IO_Exceptions;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
@@ -85,6 +86,18 @@ package body Soja.Bouncer is
          null;
       end Wait;
    end Wait_Group;
+
+   protected body Stop_Gate is
+      procedure Request is
+      begin
+         Is_Set := True;
+      end Request;
+
+      entry Wait when Is_Set is
+      begin
+         null;
+      end Wait;
+   end Stop_Gate;
 
    function Log (B : Bouncer) return Soja.Logging.Logger_Access is
      (Soja.Server.Logger (B.Srv.all));
@@ -223,6 +236,122 @@ package body Soja.Bouncer is
       end;
    end Get_Or_Create_User;
 
+   ----------------------------------------------------------------------
+   --  Disabling inactive users
+   ----------------------------------------------------------------------
+
+   function Disable_Inactive_Users (B : in out Bouncer) return Natural is
+      Delay_For : constant Duration :=
+        Soja.Server.Config (B.Srv.all).Disable_Inactive_Users_Delay;
+      DB        : constant Soja.Database.Database_Access :=
+        Soja.Server.DB (B.Srv.all);
+      Disabled  : Natural := 0;
+      Inactive  : User_Vectors.Vector;
+   begin
+      if Delay_For = 0.0 then
+         return 0;
+      end if;
+
+      declare
+         Names : Soja.Database.Username_Lists.Vector;
+      begin
+         begin
+            Names := Soja.Database.List_Inactive_Usernames
+              (DB.all, Ada.Calendar."-" (Ada.Calendar.Clock, Delay_For));
+         exception
+            when E : others =>
+               Log (B).Print ("failed to list inactive users: "
+                              & Ada.Exceptions.Exception_Message (E));
+               return 0;
+         end;
+
+         --  Filter out users with clients.  (Go also asks the users that are
+         --  disabled already, every time: SOJU-BUGS.md.)
+         for Name of Names loop
+            declare
+               U : constant User_Access := B.Users.Get (To_String (Name));
+            begin
+               if U /= null
+                 and then U.Num_Downstream_Conns = 0
+                 and then U.User_Record.Enabled
+               then
+                  Inactive.Append (U);
+               end if;
+            end;
+         end loop;
+      end;
+
+      if Inactive.Is_Empty then
+         return 0;
+      end if;
+
+      Log (B).Print ("found" & Natural'Image (Natural (Inactive.Length))
+                     & " inactive users");
+      for U of Inactive loop
+         declare
+            Result : constant Update_Result_Access := new Update_Result;
+            Error  : Unbounded_String;
+            Name   : constant String := To_String (U.User_Record.Username);
+         begin
+            U.Events.Enqueue
+              (new User_Update_Event'
+                 (Has_Enabled => True, Enabled => False,
+                  Result => Result, others => <>));
+            select
+               Result.Wait (Error);
+               if Length (Error) > 0 then
+                  Log (B).Print ("failed to disable inactive user "
+                                 & Soja.Irc.Helpers.Quote (Name) & ": "
+                                 & To_String (Error));
+               else
+                  --  (Go says "deleted": the user is only disabled.)
+                  Log (B).Print ("disabled inactive user "
+                                 & Soja.Irc.Helpers.Quote (Name));
+                  Disabled := Disabled + 1;
+               end if;
+            or
+               delay 60.0;
+               Log (B).Print ("timeout disabling inactive user "
+                              & Soja.Irc.Helpers.Quote (Name));
+            end select;
+         exception
+            when others =>
+               null;   --  that user is stopping
+         end;
+      end loop;
+      return Disabled;
+   end Disable_Inactive_Users;
+
+   --  disableInactiveUsersLoop.
+   task type Inactive_Runner (B : Bouncer_Access);
+   type Inactive_Runner_Access is access Inactive_Runner;
+
+   task body Inactive_Runner is
+   begin
+      loop
+         select
+            B.Stopped.Wait;
+            exit;
+         or
+            delay Inactive_Check_Interval;
+         end select;
+
+         begin
+            declare
+               Count : constant Natural := Disable_Inactive_Users (B.all);
+               pragma Unreferenced (Count);
+            begin
+               null;
+            end;
+         exception
+            when E : others =>
+               Log (B.all).Print ("failed to disable inactive users: "
+                                  & Ada.Exceptions.Exception_Message (E));
+         end;
+      end loop;
+      B.Tasks.Done;
+   end Inactive_Runner;
+
    procedure Start (B : in out Bouncer) is
       DB    : constant Soja.Database.Database_Access :=
         Soja.Server.DB (B.Srv.all);
@@ -237,6 +366,14 @@ package body Soja.Bouncer is
             null;
          end;
       end loop;
+
+      declare
+         Runner : Inactive_Runner_Access;
+         pragma Unreferenced (Runner);
+      begin
+         B.Tasks.Add;
+         Runner := new Inactive_Runner (B'Unchecked_Access);
+      end;
    end Start;
 
    ----------------------------------------------------------------------
@@ -427,6 +564,7 @@ package body Soja.Bouncer is
    begin
       Log (B).Print ("shutting down server");
       B.Users.Stop_Accepting;
+      B.Stopped.Request;
 
       for U of B.Users.All_Users loop
          if not Soja.Core.Stop_User (U, Timeout) then
