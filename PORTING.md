@@ -275,6 +275,29 @@ it).  The disable goes through the user's own task (`User_Update_Event`).
 Deviations: already-disabled users are skipped, the log says "disabled", and a
 failure on one user does not stop the others (SB-14).
 
+### `sojuctl` and the admin socket (`Soja.Unix_Server`, `Soja.Conn.Unix`)
+
+`cmd/sojuctl` sends `BOUNCERSERV :<quoted words>` to the `unix+admin://[path]`
+listener (default `/run/soju/admin`) and prints the PRIVMSGs that come back;
+`Bouncer.Handle_Admin` is `Server.HandleAdmin`: the command runs as an
+administrator without a user (so `user run <name> ...` for per-user commands),
+and ends with `BOUNCERSERV OK` or `FAIL BOUNCERSERV :<error>`.  AWS.Net is TCP
+only, so unix sockets are `GNAT.Sockets` (`Soja.Conn.Unix` is the transport,
+`Soja.Unix_Server` the accept loop); the same pieces will serve `unix://`.
+Deviations:
+
+- Go chmods the admin socket to 0600 *after* listening ("TODO: this is racy");
+  soja creates it with 0600 (the umask is narrowed around `bind`), so it is
+  never reachable with other permissions.
+- The socket file is removed when serving ends, as closing a Go UnixListener
+  does; like Go, a leftover file from a crash makes the next start fail.
+- A unix descriptor is closed once, after both `Close` and the reader's
+  end-of-stream (closing it at the end of the stream alone let the later
+  `Close` hit a descriptor number reused by a new connection).
+- `sojuctl` quotes words with the same Go-style `%q` as Go; a word holding a
+  control character (a newline, a tab) comes out as the letter after the
+  backslash, because BouncerServ's word splitting has no `\n`.
+
 ### Executables (`cmd/soja`, `cmd/sojadb`) and the end-to-end check
 
 Step 10.  `soja` (main unit `Soja_Main`, since `Soja` is the library's root
@@ -286,8 +309,8 @@ SIGHUP reloads the configuration (`pragma Interrupt_State (SIGINT, User)` in
 without echo through `stty`).  The default config path is `/etc/soju/config`.
 What it refuses or changes, loudly:
 
-- Listeners: `ircs://`, `irc+insecure://` and `ident://` only; any other scheme (unix,
-  ws, http, ident, prometheus, pprof, unix+admin) is a startup error.
+- Listeners: `ircs://`, `irc+insecure://`, `ident://` and `unix+admin://` only;
+  any other scheme (unix, ws, http, prometheus, pprof) is a startup error.
 - Auth drivers other than `internal` (pam, oauth2) are a startup error: a
   bouncer that cannot check passwords must not start as if it could.
 - Message stores other than `memory` fall back to memory, with a warning;

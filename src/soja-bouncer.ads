@@ -64,6 +64,12 @@ package Soja.Bouncer is
    --  Server.Handle: owns IC until the client goes away.
    procedure Handle (IC : not null Soja.Conn.IRC_Conn_Access);
 
+   --  Server.HandleAdmin: the admin socket's connection handler.  A client
+   --  sends BOUNCERSERV :<command line>; the command runs as an administrator
+   --  without a user, its output comes back as PRIVMSGs from the server to
+   --  "*", then "BOUNCERSERV OK" or "FAIL BOUNCERSERV :<error>".
+   procedure Handle_Admin (IC : not null Soja.Conn.IRC_Conn_Access);
+
    --  Server.Shutdown's second half: refuse new clients, stop every user and
    --  wait for them (Timeout bounds each wait), then close the database.
    --  Stop listening first (Soja.Server.Shutdown).

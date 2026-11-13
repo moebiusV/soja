@@ -22,6 +22,7 @@ with Soja.Irc.Genmsg;
 with Soja.Irc.Helpers;
 with Soja.Logging;
 with Soja.Server;
+with Soja.Unix_Server;
 with Soja_Signals;
 
 procedure Soja_Main is
@@ -246,6 +247,53 @@ procedure Soja_Main is
    end Ident_Task;
    type Ident_Task_Access is access Ident_Task;
 
+   --  The admin socket (`unix+admin://[path]`): serves Handle_Admin.
+   Default_Admin_Path : constant String := "/run/soju/admin";
+
+   Unix_Listeners : array (1 .. 16) of Soja.Unix_Server.Listener_Access;
+   Unix_Count     : Natural := 0;
+
+   task type Unix_Task
+     (L : not null Soja.Unix_Server.Listener_Access;
+      Name : not null String_Access);
+
+   task body Unix_Task is
+   begin
+      Soja.Unix_Server.Serve (L, Soja.Bouncer.Handle_Admin'Access);
+      Serving.Done;
+   exception
+      when E : others =>
+         Log.Print ("serving " & Quote (Name.all) & ": "
+                    & Ada.Exceptions.Exception_Message (E));
+         Serving.Done;
+   end Unix_Task;
+   type Unix_Task_Access is access Unix_Task;
+
+   procedure Start_Admin_Listener (Listen, Rest : String) is
+      Path : constant String :=
+        (if Rest'Length > 0 and then Rest (Rest'First) = '/'
+         then Rest else Default_Admin_Path);
+      L    : Soja.Unix_Server.Listener_Access;
+      Runner : Unix_Task_Access;
+      pragma Unreferenced (Runner);
+   begin
+      if Unix_Count = Unix_Listeners'Last then
+         Fatal ("too many unix listeners");
+      end if;
+      begin
+         --  Only the owner may use it (rw-------): it is administrator access.
+         L := Soja.Unix_Server.Listen (Path, 8#600#);
+      exception
+         when E : Soja.Unix_Server.Listen_Error =>
+            Fatal ("failed to start listener on " & Quote (Listen) & ": "
+                   & Ada.Exceptions.Exception_Message (E));
+      end;
+      Unix_Count := Unix_Count + 1;
+      Unix_Listeners (Unix_Count) := L;
+      Serving.Add;
+      Runner := new Unix_Task (L, new String'(Listen));
+   end Start_Admin_Listener;
+
    --  withDefaultPort for a "host[:port]" (or "[v6]:port") string; Host and
    --  Port are what is left after the default.
    procedure Split_Host_Port
@@ -305,6 +353,11 @@ procedure Soja_Main is
       TLS    : Boolean;
       Is_Ident : Boolean := False;
    begin
+      if Scheme = "unix+admin" then
+         Start_Admin_Listener (Listen, Rest);
+         Log.Print ("server listening on " & Quote (Listen));
+         return;
+      end if;
       if Scheme = "ircs" or else Scheme = "" then
          if Raw.TLS = null then
             Fatal ("failed to listen on " & Quote (Listen)
@@ -474,6 +527,9 @@ begin
             if Ident_In_Use then
                Soja.Identd.Stop (Ident);
             end if;
+            for I in 1 .. Unix_Count loop
+               Soja.Unix_Server.Stop (Unix_Listeners (I));
+            end loop;
             Serving.Wait_None;   --  the accept loops have ended
             Soja.Bouncer.Shutdown (B);
             return;

@@ -14,6 +14,7 @@ with Soja.Database;
 with Soja.Irc.Genmsg;       use Soja.Irc.Genmsg;
 with Soja.Irc.Helpers;
 with Soja.Irc.Messages;     use Soja.Irc.Messages;
+with Soja.Irc.Numerics;     use Soja.Irc.Numerics;
 with Soja.Logging;
 
 package body Soja.Bouncer is
@@ -557,6 +558,101 @@ package body Soja.Bouncer is
       --  dc.Shutdown: flush what is queued (an ERROR, say), then close.
       Soja.Conn.Shutdown (DC.Conn);
    end Handle;
+
+   --  Where an admin command's output goes: PRIVMSGs to "*" from the server.
+   type Admin_Printer
+     (C : Soja.Conn.Conn_Access; Srv : Soja.Server.Server_Access)
+   is limited new Soja.Core.Service.Printer with null record;
+
+   overriding procedure Print (P : in out Admin_Printer; Text : String) is
+      M : Message := Make ("PRIVMSG", ["*", Text]);
+   begin
+      M.Prefix := Server_Prefix (P.Srv);
+      Soja.Conn.Send_Message (P.C, M);
+   end Print;
+
+   procedure Handle_Admin (IC : not null Soja.Conn.IRC_Conn_Access) is
+      B      : constant Bouncer_Access := Current;
+      Remote : constant String := Soja.Conn.Remote_Addr (IC.all);
+      Logger : constant Soja.Logging.Logger_Access :=
+        new Soja.Logging.Prefix_Logger'
+          (Base   => Log (B.all),
+           Prefix => To_Unbounded_String
+             ("admin " & Soja.Irc.Helpers.Quote (Remote) & ": "));
+      C      : constant Soja.Conn.Conn_Access := Soja.Conn.New_Conn
+        (IC, (Logger => Logger, Rate_Limit_Delay => 0.0,
+              Rate_Limit_Burst => 0));
+      Printer : aliased Admin_Printer (C, B.Srv);
+
+      procedure Reply (M : Message; With_Prefix : Boolean := True) is
+         R : Message := M;
+      begin
+         if With_Prefix then
+            R.Prefix := Server_Prefix (B.Srv);
+         end if;
+         Soja.Conn.Send_Message (C, R);
+      end Reply;
+   begin
+      begin
+         if B.Users.Is_Stopping then
+            Soja.Conn.Send_Message
+              (C, Make ("ERROR", ["Server is shutting down"]));
+         else
+            loop
+               declare
+                  M : Message;
+               begin
+                  begin
+                     M := Soja.Conn.Read_Message (C);
+                  exception
+                     when Ada.IO_Exceptions.End_Error =>
+                        exit;
+                     when E : others =>
+                        Logger.Print
+                          ("failed to read IRC command: "
+                           & Ada.Exceptions.Exception_Message (E));
+                        exit;
+                  end;
+
+                  if To_String (M.Command) = "BOUNCERSERV" then
+                     if M.Params.Is_Empty then
+                        Reply (Make (ERR_NEEDMOREPARAMS,
+                                     ["*", "BOUNCERSERV",
+                                      "Not enough parameters"]), False);
+                     else
+                        declare
+                           Ctx : constant Soja.Core.Service.Service_Context :=
+                             (Nick => Null_Unbounded_String, Network => null,
+                              User => null, Srv => B.Srv, Admin => True,
+                              Output => Printer'Unchecked_Access);
+                        begin
+                           Soja.Core.Service.Handle_Privmsg
+                             (Ctx, Param (M, 0));
+                           Reply (Make ("BOUNCERSERV", ["OK"]));
+                        exception
+                           when E : Soja.Core.Service.Service_Error =>
+                              Reply (Make ("FAIL",
+                                           ["BOUNCERSERV",
+                                            Ada.Exceptions.Exception_Message
+                                              (E)]));
+                        end;
+                     end if;
+                  else
+                     Reply (Make (ERR_UNKNOWNCOMMAND,
+                                  ["*", To_String (M.Command),
+                                   "Unknown command"]));
+                  end if;
+               end;
+            end loop;
+         end if;
+      exception
+         when E : others =>
+            Logger.Print
+              ("panic serving admin client: "
+               & Ada.Exceptions.Exception_Information (E));
+      end;
+      Soja.Conn.Shutdown (C);   --  flush the last replies, then close
+   end Handle_Admin;
 
    procedure Shutdown (B : in out Bouncer; Timeout : Duration := 30.0) is
       DB : constant Soja.Database.Database_Access :=
