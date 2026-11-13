@@ -1,0 +1,33 @@
+pragma Ada_2022;
+
+with Ada.Strings.Unbounded;
+
+with Soja.Database;
+
+--  soju's auth/ package: password authentication of a user.  Only the
+--  "internal" driver (the bcrypt hashes in the database) is ported; "pam"
+--  and "oauth2" are not, and always fail.
+package Soja.Auth is
+
+   use Ada.Strings.Unbounded;
+
+   --  The outcome of an authentication attempt.  Internal is for the log;
+   --  External is safe to show the user (auth.Error's ExternalMsg), and is
+   --  "Authentication failed" for errors that are not credential failures.
+   type Result is record
+      Ok       : Boolean := True;
+      Internal : Unbounded_String;
+      External : Unbounded_String;
+   end record;
+
+   --  Whether the driver can authenticate with a password (PlainAuthenticator).
+   function Supports_Plain (Driver : String) return Boolean;
+
+   --  AuthPlain.  DB may be null only for drivers that don't use it.
+   function Auth_Plain
+     (Driver   : String;
+      DB       : Soja.Database.Database_Access;
+      Username : String;
+      Password : String) return Result;
+
+end Soja.Auth;

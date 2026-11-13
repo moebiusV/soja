@@ -23,7 +23,8 @@ package Soja.Server is
    Upstream_Message_Burst            : constant Natural := 10;
    Backlog_Timeout                   : constant Duration := 10.0;
    Handle_Downstream_Message_Timeout : constant Duration := 10.0;
-   Downstream_Register_Timeout       : constant Duration := 30.0;
+   --  (A variable, so that tests can shorten it.)
+   Downstream_Register_Timeout       : Duration := 30.0;
    Webpush_Check_Subscription_Delay  : constant Duration := 86_400.0;
    Webpush_Prune_Subscription_Delay  : constant Duration := 2_592_000.0;
    Chat_History_Limit                : constant Natural := 1000;

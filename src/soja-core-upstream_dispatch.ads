@@ -2,6 +2,7 @@ pragma Ada_2022;
 
 with Ada.Strings.Unbounded;
 
+with Soja.Irc.Genmsg;
 with Soja.Irc.Members;
 with Soja.Irc.Messages;
 with Soja.Upstream;
@@ -39,6 +40,12 @@ package Soja.Core.Upstream_Dispatch is
      (UC : not null Upstream_Conn_Access;
       ID : Long_Long_Integer;
       M  : Soja.Irc.Messages.Message);
+
+   --  The ISUPPORT tokens the server sent that clients get as they are
+   --  ("NAME=value" or "NAME"), for the welcome burst.
+   function Passthrough_Isupport_Tokens
+     (UC : not null Upstream_Conn_Access)
+      return Soja.Irc.Genmsg.String_Vectors.Vector;
 
    --  uc.cacheUserInfo: remember (or merge) what is known about a user.
    procedure Cache_User_Info

@@ -15,6 +15,54 @@ package body Soja.Irc.Helpers is
    Rune_Error : constant Wide_Wide_Character :=
      Wide_Wide_Character'Val (16#FFFD#);
 
+   -----------------------------
+   -- Upper / Lower / Fields --
+   -----------------------------
+
+   function Upper (S : String) return String is
+      R : String := S;
+   begin
+      for C of R loop
+         if C in 'a' .. 'z' then
+            C := Character'Val (Character'Pos (C) - 32);
+         end if;
+      end loop;
+      return R;
+   end Upper;
+
+   function Lower (S : String) return String is
+      R : String := S;
+   begin
+      for C of R loop
+         if C in 'A' .. 'Z' then
+            C := Character'Val (Character'Pos (C) + 32);
+         end if;
+      end loop;
+      return R;
+   end Lower;
+
+   function Fields (S : String) return Soja.Irc.Genmsg.String_Vectors.Vector is
+      V     : Soja.Irc.Genmsg.String_Vectors.Vector;
+      Start : Natural := 0;
+   begin
+      for I in S'Range loop
+         if S (I) in ' ' | ASCII.HT | ASCII.LF | ASCII.VT | ASCII.FF
+           | ASCII.CR
+         then
+            if Start /= 0 then
+               V.Append (S (Start .. I - 1));
+               Start := 0;
+            end if;
+         elsif Start = 0 then
+            Start := I;
+         end if;
+      end loop;
+      if Start /= 0 then
+         V.Append (S (Start .. S'Last));
+      end if;
+      return V;
+   end Fields;
+
    --------------------------
    -- Format_Member_Prefix --
    --------------------------

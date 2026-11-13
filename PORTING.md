@@ -455,6 +455,29 @@ this rule is written explicitly, not assumed. Reference anchors:
   `eventUserRun` (step 9).  Not ported: the `UpstreamUserIPs` local-address
   selection, and the filesystem store's rename on `updateNetwork`.
 
+- **The downstream handshake and welcome (step 6).**
+  `Soja.Core.Downstream_Handshake`: `handleCap` (LS with versions, LIST, REQ
+  as one atomic ACK/NAK, END), `handleAuthenticate` (SASL PLAIN and ANONYMOUS,
+  multi-line responses, the same limits), `handleMessageUnregistered` (NICK,
+  USER, PASS, CAP, AUTHENTICATE, BOUNCER BIND, AWAY), `register`,
+  `loadNetwork` (BOUNCER BIND by id, or by name, creating an unknown network
+  after checking that a TLS connection to it works; `Sanity_Check` is a
+  variable so tests can replace it), `welcome` (001/002/004, ISUPPORT, user
+  modes, MOTD, the BOUNCER network list batch, the channel replay, the history
+  backlog for the first client of a name, and the kicked-channel notices) and
+  `runUntilRegistered` with its registration timeout.  `Soja.Auth` holds the
+  authentication (only the "internal" bcrypt driver; "pam" and "oauth2" are
+  recognised but always fail, and `main` must refuse to start with them until
+  they are ported); `Core.Register_Downstream` / `Handle_Message_Unregistered`
+  / `Run_Until_Registered_Downstream` are now wrappers.  `Irc_Error_Result`
+  can carry a plain (non-IRC) error: the connection is dropped, as Go does for
+  errors that are not `ircError`s.  Deviations / not ported: SASL OAUTHBEARER
+  (needs oauth2); Web Push `VAPID=` in ISUPPORT; `CHATHISTORY=` is only sent
+  for stores that support it (none yet); `welcome` no longer panics when
+  called with `dc.user` already set.  A failed PASS/registration is answered
+  (Go only logs it; SB-08).
+  NAMES and ISUPPORT replies use `*` as their target, as in Go.
+
 - **Ordering**: `downstream.go`, `upstream.go`, `user.go` and `service.go`
   form one mutually-dependent core (the `network` type in `user.go` holds both
   an `upstreamConn` and downstream connections), so they are ported together,

@@ -25,6 +25,15 @@ package Soja.Irc.Cap_Registry is
 
    procedure Delete (R : in out Registry; Name : String);
 
+   --  Iterate (in name order) over the available capabilities with their
+   --  values, and over the enabled ones.
+   procedure For_Each_Available
+     (R : Registry;
+      Process : not null access procedure (Name, Value : String));
+   procedure For_Each_Enabled
+     (R : Registry;
+      Process : not null access procedure (Name : String));
+
 private
 
    package Value_Maps is new Ada.Containers.Indefinite_Ordered_Maps

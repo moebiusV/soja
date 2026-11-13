@@ -48,4 +48,22 @@ package body Soja.Irc.Cap_Registry is
       R.Enabled.Exclude (Name);
    end Delete;
 
+   procedure For_Each_Available
+     (R : Registry;
+      Process : not null access procedure (Name, Value : String)) is
+   begin
+      for C in R.Available.Iterate loop
+         Process (Value_Maps.Key (C), Value_Maps.Element (C));
+      end loop;
+   end For_Each_Available;
+
+   procedure For_Each_Enabled
+     (R : Registry;
+      Process : not null access procedure (Name : String)) is
+   begin
+      for Name of R.Enabled loop
+         Process (Name);
+      end loop;
+   end For_Each_Enabled;
+
 end Soja.Irc.Cap_Registry;

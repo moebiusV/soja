@@ -2,6 +2,7 @@ pragma Ada_2022;
 
 with Ada.Exceptions;
 
+with Soja.Core.Downstream_Handshake;
 with Soja.Core.Downstream_Helpers;
 with Soja.Core.Network_Ops;
 with Soja.Core.Upstream_Dispatch;
@@ -195,17 +196,24 @@ package body Soja.Core.User_Events is
          return;
       end if;
 
-      Res := Welcome (DC, U);
+      Res := Soja.Core.Downstream_Handshake.Welcome (DC, U);
       if Res.Failed then
-         declare
-            M : Message := Copy (Res.Err.Message);
-         begin
-            M.Prefix := Server_Prefix (DC.Srv);
-            Send_Message (DC, M);
-         end;
-         DC.Logger.Print
-           ("failed to handle new registered connection: "
-            & Soja.Downstream.Image (Res.Err));
+         if Res.Is_IRC then
+            declare
+               M : Message := Copy (Res.Err.Message);
+            begin
+               M.Prefix := Server_Prefix (DC.Srv);
+               Send_Message (DC, M);
+            end;
+            DC.Logger.Print
+              ("failed to handle new registered connection: "
+               & Soja.Downstream.Image (Res.Err));
+         else
+            Send_Message (DC, Make ("ERROR", ["Internal server error"]));
+            DC.Logger.Print
+              ("failed to handle new registered connection: "
+               & To_String (Res.Text));
+         end if;
          --  TODO (Go): close DC after the error message is sent.
          return;
       end if;
@@ -264,12 +272,19 @@ package body Soja.Core.User_Events is
       end if;
       Res := Handle_Downstream_Message (DC, Msg);
       if Res.Failed then
-         declare
-            M : Message := Copy (Res.Err.Message);
-         begin
-            M.Prefix := Server_Prefix (DC.Srv);
-            Send_Message (DC, M);
-         end;
+         if Res.Is_IRC then
+            declare
+               M : Message := Copy (Res.Err.Message);
+            begin
+               M.Prefix := Server_Prefix (DC.Srv);
+               Send_Message (DC, M);
+            end;
+         else
+            DC.Logger.Print
+              ("failed to handle message " & Quote (Image (Msg)) & ": "
+               & To_String (Res.Text));
+            Soja.Conn.Close (DC.Conn);
+         end if;
       end if;
    end Downstream_Message;
 

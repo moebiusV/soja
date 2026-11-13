@@ -9,6 +9,16 @@ with Soja.Irc.Messages;
 --  connection types.
 package Soja.Core.Downstream_Helpers is
 
+   --  needAllDownstreamCaps: the capabilities that need support from every
+   --  upstream to be enabled (each with an empty value).
+   Need_All_Downstream_Caps :
+     constant array (1 .. 9) of access constant String :=
+     [new String'("account-notify"), new String'("account-tag"),
+      new String'("away-notify"), new String'("chghost"),
+      new String'("extended-join"), new String'("extended-monitor"),
+      new String'("message-tags"), new String'("multi-prefix"),
+      new String'("draft/extended-monitor")];
+
    --  dc.prefix(): nick!username@hostname.
    function Prefix_Of (DC : not null Downstream_Conn_Access)
       return Soja.Irc.Messages.Prefix;
@@ -93,13 +103,6 @@ package Soja.Core.Downstream_Helpers is
      (DC : not null Downstream_Conn_Access; Text : String);
    procedure Send_Service_Privmsg
      (DC : not null Downstream_Conn_Access; Text : String);
-
-   --  dc.welcome: the welcome burst of a newly registered client (001 ...,
-   --  ISUPPORT, MOTD, the network's channels and backlog).  Not ported yet
-   --  (downstream step): for now a client is accepted without any burst.
-   function Welcome
-     (DC : not null Downstream_Conn_Access; U : not null User_Access)
-      return Irc_Error_Result;
 
    --  Tell a client, as BouncerServ notices, about the channels we were kicked
    --  from and stayed out of, so it can decide to rejoin them.  Called when a

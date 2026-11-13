@@ -192,6 +192,7 @@ package Soja.Core is
    --  is underway).  OAUTHBEARER's options are deferred with oauth2 auth.
    type Downstream_SASL is record
       Mechanism      : Unbounded_String;
+      Challenged     : Boolean := False;   --  the server's first challenge is out
       Plain_Set      : Boolean := False;   --  Go's plain != nil
       Plain_Username : Unbounded_String;
       Plain_Password : Unbounded_String;
@@ -665,9 +666,14 @@ package Soja.Core is
    -------------------------
 
    --  A client-facing reply (an ircError to send) or success.
+   --  Is_IRC is False for an error that is not an IRC reply (Go's plain
+   --  `error`): Text says what went wrong and the connection is dropped.
    type Irc_Error_Result (Failed : Boolean := False) is record
       case Failed is
-         when True  => Err : Soja.Downstream.Irc_Error;
+         when True  =>
+            Is_IRC : Boolean := True;
+            Err    : Soja.Downstream.Irc_Error;
+            Text   : Unbounded_String;
          when False => null;
       end case;
    end record;

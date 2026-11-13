@@ -13,6 +13,7 @@ with AWS.Net.Std;
 with CryptoLib.Hashes;
 with Soja.Backoff;
 with Soja.Conn.Net;
+with Soja.Core.Downstream_Handshake;
 with Soja.Core.Upstream_Dispatch;
 with Soja.Core.User_Events;
 with Soja.Irc.Cap_Registry;
@@ -800,130 +801,26 @@ package body Soja.Core is
       Soja.Conn.Send_Message (DC.Conn, Msg);
    end Send_Message;
 
-   --  A numeric (or FAIL) reply carrying a nick and a reason.
-   function Make_Irc_Error (Command : String; Nick, Reason : String)
-      return Soja.Downstream.Irc_Error
-   is
-      M : Message := (others => <>);
-   begin
-      M.Command := To_Unbounded_String (Command);
-      M.Params.Append (To_Unbounded_String (Nick));
-      M.Params.Append (To_Unbounded_String (Reason));
-      return (Message => M);
-   end Make_Irc_Error;
-
    function Handle_Message_Unregistered
      (DC : not null Downstream_Conn_Access; M : Message)
       return Irc_Error_Result
    is
-      Cmd : constant String := To_String (M.Command);
    begin
-      if Cmd = "NICK" then
-         DC.Registration.Nick := M.Params (1);
-      elsif Cmd = "USER" then
-         DC.Registration.Username := M.Params (1);
-      elsif Cmd = "PASS" then
-         DC.Registration.Pass := M.Params (1);
-      elsif Cmd = "AWAY" then
-         null;   --  deferred: away state
-      else
-         --  CAP/AUTHENTICATE/BOUNCER and unknown commands are deferred.
-         return (Failed => True,
-                 Err => Soja.Downstream.New_Unknown_Command_Error (Cmd));
-      end if;
-      return (Failed => False);
+      return Soja.Core.Downstream_Handshake.Handle_Message_Unregistered (DC, M);
    end Handle_Message_Unregistered;
 
    function Register_Downstream (DC : not null Downstream_Conn_Access)
       return Irc_Error_Result
    is
-      use Soja.Irc.Numerics;
-      Username, Client, Network : Unbounded_String;
-      DB : constant Soja.Database.Database_Access := Soja.Server.DB (DC.Srv.all);
    begin
-      if DC.Registration.Auth_Username = Null_Unbounded_String then
-         if DC.Registration.Pass = Null_Unbounded_String then
-            return (Failed => True,
-                    Err => Make_Irc_Error
-                      (ERR_PASSWDMISMATCH, To_String (DC.Nick),
-                       "Authentication required"));
-         end if;
-
-         Soja.Downstream.Unmarshal_Username
-           (To_String (DC.Registration.Username), Username, Client, Network);
-
-         --  Internal auth (soju's default): fetch the user and verify the
-         --  bcrypt hash.  The upgrade-result of Check_Password is ignored.
-         declare
-            U : Soja.Database.User;
-         begin
-            U := Soja.Database.Get_User (DB.all, To_String (Username));
-            declare
-               Upgraded : Boolean := Soja.Database.Check_Password
-                 (U, To_String (DC.Registration.Pass));
-               pragma Unreferenced (Upgraded);
-            begin
-               null;
-            end;
-         exception
-            when Soja.Database.Not_Found | Soja.Database.Database_Error =>
-               return (Failed => True,
-                       Err => Make_Irc_Error
-                         (ERR_PASSWDMISMATCH, To_String (DC.Nick),
-                          "Authentication failed"));
-         end;
-
-         DC.Client_Name := Client;
-         DC.Registration.Auth_Username := Username;
-         DC.Registration.Network_Name := Network;
-      end if;
-
-      DC.Registered := True;
-      DC.Username := DC.Registration.Auth_Username;
-      DC.Logger.Print
-        ("registration complete for user " & To_String (DC.Username));
-      return (Failed => False);
+      return Soja.Core.Downstream_Handshake.Register (DC);
    end Register_Downstream;
 
    function Run_Until_Registered_Downstream
      (DC : not null Downstream_Conn_Access) return Boolean
    is
-      M : Message;
-      R : Irc_Error_Result;
    begin
-      while not DC.Registered loop
-         begin
-            M := Soja.Conn.Read_Message (DC.Conn);
-         exception
-            when Ada.IO_Exceptions.End_Error | AWS.Net.Socket_Error =>
-               return False;
-         end;
-
-         if To_String (M.Command) = "QUIT" then
-            Soja.Conn.Shutdown (DC.Conn);
-            return False;
-         end if;
-
-         R := Handle_Message_Unregistered (DC, M);
-         if R.Failed then
-            Send_Message (DC, R.Err.Message);
-         end if;
-
-         if DC.Registration.Nick /= Null_Unbounded_String
-           and then DC.Registration.Username /= Null_Unbounded_String
-           and then not DC.Registration.Negotiating_Caps
-         then
-            R := Register_Downstream (DC);
-            if R.Failed then
-               Send_Message (DC, R.Err.Message);
-               DC.Registration.Pass := Null_Unbounded_String;
-               DC.Registration.Username := Null_Unbounded_String;
-            else
-               return True;
-            end if;
-         end if;
-      end loop;
-      return True;
+      return Soja.Core.Downstream_Handshake.Run_Until_Registered (DC);
    end Run_Until_Registered_Downstream;
 
    --  One task per network (Go's `go network.run()`).
@@ -1249,9 +1146,10 @@ package body Soja.Core is
    is
       pragma Unreferenced (DC);
    begin
-      return (Failed => True,
+      return (Failed => True, Is_IRC => True,
               Err => Soja.Downstream.New_Unknown_Command_Error
-                       (To_String (M.Command)));
+                       (To_String (M.Command)),
+              Text => Null_Unbounded_String);
    end Handle_Message_Registered;
 
    function Handle_Downstream_Message

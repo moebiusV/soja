@@ -82,6 +82,26 @@ package body Soja.Core.Upstream_Dispatch is
       new String'("TOPICLEN"), new String'("USERLEN"),
       new String'("UTF8ONLY"), new String'("WHOX")];
 
+   function Passthrough_Isupport_Tokens
+     (UC : not null Upstream_Conn_Access)
+      return Soja.Irc.Genmsg.String_Vectors.Vector
+   is
+      V : Soja.Irc.Genmsg.String_Vectors.Vector;
+   begin
+      for T of Passthrough_Isupport loop
+         if UC.Isupport.Contains (T.all) then
+            declare
+               Item : constant Isupport_Value := UC.Isupport (T.all);
+            begin
+               V.Append
+                 (if Item.Has_Value then T.all & "=" & To_String (Item.Value)
+                  else T.all);
+            end;
+         end if;
+      end loop;
+      return V;
+   end Passthrough_Isupport_Tokens;
+
    function Is_Passthrough_Isupport (Name : String) return Boolean is
    begin
       for T of Passthrough_Isupport loop

@@ -23,6 +23,7 @@ one Go test per bug).  Add an entry the moment a bug is found; do not batch.
 | SB-05 | `upstream.go:713` | `CAP LS` continuation test indexes the wrong slice | low |
 | SB-06 | `msgstore/memory.go:79` | memory store `LastMsgID` loses the next message from the backlog | medium |
 | SB-07 | `downstream.go:3365` | `forwardChannel` panics on a channel whose NAMES are incomplete (reachable via `attach`) | medium |
+| SB-08 | `downstream.go:1710` | a failed authentication is never reported to the client | medium |
 
 ---
 
@@ -258,6 +259,59 @@ forwarded when its NAMES end anyway, `RPL_ENDOFNAMES`):
 **Soja fix.**  `Attach` in `src/soja-core-network_ops.adb` (replays only when
 `Uch.Complete`).  **Soja test.**  `upstream_dispatch_check` (reattach on
 highlight with an incomplete channel).
+
+## SB-08: a failed authentication is never reported to the client
+
+`downstream.go:1710`, in `runUntilRegistered`:
+
+```go
+err = dc.handleMessage(ctx, msg)
+if ircErr, ok := err.(ircError); ok {
+	ircErr.Message.Prefix = dc.srv.prefix()
+	dc.SendMessage(ctx, ircErr.Message)       // errors of handleMessage are sent ...
+} else if err != nil {
+	return fmt.Errorf("failed to handle IRC command %q: %v", msg, err)
+}
+
+if dc.registration.nick != "" && dc.registration.username != "" && !dc.registration.negotiatingCaps {
+	return dc.register(ctx)                    // ... but those of register are not
+}
+```
+
+`dc.register` returns `ircError`s (`ERR_PASSWDMISMATCH "Authentication
+failed"`, `FAIL * ACCOUNT_REQUIRED`, the client/network name mismatches).  They
+are returned as an `error` to `Server.Handle` (`server.go:485`), which only logs
+them and returns, so the deferred `dc.Shutdown` closes the connection **without
+the client ever receiving the reply**.  A client with a wrong password just sees
+the connection drop.  (`register` clears `dc.registration.pass` first, which
+suggests the client was meant to be able to try again after the error.)  Looks
+like a regression from when `register` stopped being called from
+`handleMessage`; check against current `master` first.
+
+**Suggested patch.**
+
+```diff
+ 		if dc.registration.nick != "" && dc.registration.username != "" && !dc.registration.negotiatingCaps {
+-			return dc.register(ctx)
++			err := dc.register(ctx)
++			if ircErr, ok := err.(ircError); ok {
++				ircErr.Message.Prefix = dc.srv.prefix()
++				dc.SendMessage(ctx, ircErr.Message)
++			} else if err != nil {
++				return err
++			}
+ 		}
+```
+
+(Then the loop continues and the client may retry, as before.  Returning the
+error instead after sending it would close the connection right after the
+reply.)
+
+**Soja fix.**  `Run_Until_Registered` in
+`src/soja-core-downstream_handshake.adb` sends the reply and lets the client
+retry.  **Soja test.**  `tests/handshake_check.adb`: "a wrong password is
+reported", "authentication required", "ACCOUNT_REQUIRED", "mismatch is
+reported".
 
 ---
 

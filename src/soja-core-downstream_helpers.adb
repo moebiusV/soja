@@ -109,15 +109,6 @@ package body Soja.Core.Downstream_Helpers is
    -- Update_Supported_Caps --
    ---------------------------
 
-   --  needAllDownstreamCaps: capabilities that require support from every
-   --  upstream to be enabled (each with an empty value).
-   Need_All_Downstream_Caps : constant array (1 .. 9) of access constant String
-     := [new String'("account-notify"), new String'("account-tag"),
-         new String'("away-notify"), new String'("chghost"),
-         new String'("extended-join"), new String'("extended-monitor"),
-         new String'("message-tags"), new String'("multi-prefix"),
-         new String'("draft/extended-monitor")];
-
    procedure Update_Supported_Caps (DC : not null Downstream_Conn_Access) is
       UC : constant Upstream_Conn_Access := Upstream_Of (DC);
    begin
@@ -568,15 +559,6 @@ package body Soja.Core.Downstream_Helpers is
       M.Prefix := Service_Prefix;
       Send_Message (DC, M);
    end Send_Service_Privmsg;
-
-   function Welcome
-     (DC : not null Downstream_Conn_Access; U : not null User_Access)
-      return Irc_Error_Result
-   is
-      pragma Unreferenced (DC, U);
-   begin
-      return (Failed => False);
-   end Welcome;
 
    procedure Send_Kicked_Notices (DC : not null Downstream_Conn_Access) is
       procedure Notice (Name : String; Kick : Kick_Info_Access) is

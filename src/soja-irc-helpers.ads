@@ -3,6 +3,7 @@ pragma Ada_2022;
 with Ada.Calendar;
 
 with Soja.Downstream;
+with Soja.Irc.Genmsg;
 with Soja.Irc.Case_Mapping;
 with Soja.Irc.Members;
 with Soja.Irc.Messages;
@@ -28,6 +29,12 @@ package Soja.Irc.Helpers is
    function Strip_Member_Prefixes
      (Flags     : String;
       Available : Soja.Irc.Members.Membership_Vectors.Vector) return String;
+
+   --  strings.ToUpper / ToLower for ASCII (UTF-8 bytes are left alone), and
+   --  strings.Fields (split on ASCII white space).
+   function Upper (S : String) return String;
+   function Lower (S : String) return String;
+   function Fields (S : String) return Soja.Irc.Genmsg.String_Vectors.Vector;
 
    --  parseMessageParams: Count is the number of parameters the caller is
    --  about to read; a message with fewer fails with ERR_NEEDMOREPARAMS.
