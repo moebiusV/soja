@@ -1451,6 +1451,308 @@ package body Soja.Core.Downstream_Commands is
    end Cmd_Monitor;
 
    ----------------------------------------------------------------------
+   --  BOUNCER (soju.im/bouncer-networks)
+   ----------------------------------------------------------------------
+
+   function Text_Fail (Text : String) return Irc_Error_Result is
+     (Failed => True, Is_IRC => False,
+      Err    => (Message => (others => <>)),
+      Text   => To_Unbounded_String (Text));
+
+   function Img (N : Long_Long_Integer) return String is
+     (Ada.Strings.Fixed.Trim (Long_Long_Integer'Image (N), Ada.Strings.Left));
+
+   --  fillNetworkAddrAttrs, for a record that is not a running network.
+   procedure Fill_Addr_Attrs
+     (Attrs : in out Tag_Map; Rec : Soja.Database.Network)
+   is
+      U      : constant Soja.Database.Network_URL := Soja.Database.URL (Rec);
+      Scheme : constant String := To_String (U.Scheme);
+      HP     : constant String := To_String (U.Host);
+      Colon  : Natural := 0;
+   begin
+      if Scheme = "ircs" then
+         Set_Tag (Attrs, "tls", "1");
+      elsif Scheme = "irc+insecure" then
+         Set_Tag (Attrs, "tls", "0");
+      else
+         return;   --  e.g. unix://: no host and port
+      end if;
+
+      --  net.SplitHostPort: the last ':' outside "[...]" starts the port.
+      for I in reverse HP'Range loop
+         exit when HP (I) = ']';
+         if HP (I) = ':' then
+            Colon := I;
+            exit;
+         end if;
+      end loop;
+      if Colon > 0 then
+         declare
+            Host : constant String := HP (HP'First .. Colon - 1);
+         begin
+            Set_Tag (Attrs, "host",
+                     (if Host'Length >= 2 and then Host (Host'First) = '['
+                        and then Host (Host'Last) = ']'
+                      then Host (Host'First + 1 .. Host'Last - 1) else Host));
+            Set_Tag (Attrs, "port", HP (Colon + 1 .. HP'Last));
+         end;
+      else
+         Set_Tag (Attrs, "host", HP);
+      end if;
+   end Fill_Addr_Attrs;
+
+   --  networkAddrFromAttrs.  (Go does not bracket an IPv6 host, which makes
+   --  "::1" + "6667" the unusable "::1:6667"; soja does, SOJU-BUGS.md.)
+   function Addr_From_Attrs (Attrs : Tag_Map) return String is
+      Host : constant String :=
+        (if Has_Tag (Attrs, "host") then Get_Tag (Attrs, "host") else "");
+   begin
+      if Host = "" then
+         return "";
+      end if;
+      declare
+         Port : constant String :=
+           (if Has_Tag (Attrs, "port") then Get_Tag (Attrs, "port") else "");
+         Addr : Unbounded_String := To_Unbounded_String
+           ((if Ada.Strings.Fixed.Index (Host, ":") > 0 then "[" & Host & "]"
+             else Host));
+      begin
+         if Port /= "" then
+            Append (Addr, ":" & Port);
+         end if;
+         if Has_Tag (Attrs, "tls") and then Get_Tag (Attrs, "tls") = "0" then
+            return "irc+insecure://" & To_String (Addr);
+         end if;
+         return To_String (Addr);
+      end;
+   end Addr_From_Attrs;
+
+   --  updateNetworkAttrs.
+   function Update_Network_Attrs
+     (Rec : in out Soja.Database.Network; Attrs : Tag_Map; Sub : String)
+      return Irc_Error_Result
+   is
+      Addr_Attrs  : Tag_Map;
+      Update_Addr : Boolean := False;
+   begin
+      Fill_Addr_Attrs (Addr_Attrs, Rec);
+      for C in Attrs.Data.Iterate loop
+         declare
+            K : constant String := Soja.Irc.Messages.Tag_Maps.Key (C);
+            V : constant String := Soja.Irc.Messages.Tag_Maps.Element (C);
+         begin
+            if K = "host" or else K = "port" or else K = "tls" then
+               Update_Addr := True;
+               Set_Tag (Addr_Attrs, K, V);
+            elsif K = "name" then
+               Rec.Name := To_Unbounded_String (V);
+            elsif K = "nickname" then
+               Rec.Nick := To_Unbounded_String (V);
+            elsif K = "username" then
+               Rec.Username := To_Unbounded_String (V);
+            elsif K = "realname" then
+               Rec.Realname := To_Unbounded_String (V);
+            elsif K = "pass" then
+               Rec.Pass := To_Unbounded_String (V);
+            else
+               return IRC_Fail
+                 ("FAIL", ["BOUNCER", "UNKNOWN_ATTRIBUTE", Sub, K,
+                           "Unknown attribute"]);
+            end if;
+         end;
+      end loop;
+
+      if Update_Addr then
+         Rec.Addr := To_Unbounded_String (Addr_From_Attrs (Addr_Attrs));
+         if Length (Rec.Addr) = 0 then
+            return IRC_Fail
+              ("FAIL", ["BOUNCER", "NEED_ATTRIBUTE", Sub, "host",
+                        "Missing required host attribute"]);
+         end if;
+      end if;
+      return Success;
+   end Update_Network_Attrs;
+
+   function Cmd_Bouncer
+     (DC : not null Downstream_Conn_Access; M : Message)
+      return Irc_Error_Result
+   is
+      PR  : Params_Result := Parse_Message_Params (M, 1);
+      U   : constant User_Access := DC.User;
+
+      --  The nick / realname of a record are stored empty when they are the
+      --  user's defaults.
+      procedure Drop_Defaults (Rec : in out Soja.Database.Network) is
+      begin
+         if Rec.Nick = U.User_Record.Username then
+            Rec.Nick := Null_Unbounded_String;
+         end if;
+         if Rec.Realname = U.User_Record.Realname then
+            Rec.Realname := Null_Unbounded_String;
+         end if;
+      end Drop_Defaults;
+   begin
+      if not PR.Ok then
+         return Need_More (PR);
+      end if;
+
+      declare
+         Sub : constant String := Param (M, 0);
+         USub : constant String := Soja.Irc.Helpers.Upper (Sub);
+      begin
+         if USub = "BIND" then
+            return IRC_Fail
+              ("FAIL", ["BOUNCER", "REGISTRATION_IS_COMPLETED", "BIND",
+                        "Cannot bind to a network after registration"]);
+
+         elsif USub = "LISTNETWORKS" then
+            declare
+               procedure Each (Batch_Ref : String) is
+               begin
+                  for Net of U.Networks loop
+                     declare
+                        Out_Msg : Message := Make
+                          ("BOUNCER",
+                           ["NETWORK", Img (Net.Network_Record.ID),
+                            Image (Soja.Core.User_Ops.Network_Attrs (Net))]);
+                     begin
+                        Set_Tag (Out_Msg.Tags, "batch", Batch_Ref);
+                        Send_Message (DC, Out_Msg);
+                     end;
+                  end loop;
+               end Each;
+            begin
+               Send_Batch (DC, "soju.im/bouncer-networks",
+                           String_Vectors.Empty_Vector, Each'Access);
+            end;
+
+         elsif USub = "ADDNETWORK" then
+            PR := Parse_Message_Params (M, 2);
+            if not PR.Ok then
+               return Need_More (PR);
+            end if;
+            declare
+               Rec : Soja.Database.Network := Soja.Database.New_Network ("");
+               R   : Irc_Error_Result;
+            begin
+               Rec.Nick := DC.Nick;
+               R := Update_Network_Attrs (Rec, Parse_Tags (Param (M, 1)), Sub);
+               if R.Failed then
+                  return R;
+               end if;
+               Drop_Defaults (Rec);
+               declare
+                  Net : Network_Access;
+               begin
+                  Net := Soja.Core.User_Ops.Create_Network (U, Rec);
+                  Send_Message
+                    (DC, Make ("BOUNCER",
+                               ["ADDNETWORK", Img (Net.Network_Record.ID)]));
+               exception
+                  when E : Soja.Core.User_Ops.Operation_Error =>
+                     return IRC_Fail
+                       ("FAIL", ["BOUNCER", "UNKNOWN_ERROR", Sub,
+                                 "Failed to create network: "
+                                 & Ada.Exceptions.Exception_Message (E)]);
+               end;
+            end;
+
+         elsif USub = "CHANGENETWORK" then
+            PR := Parse_Message_Params (M, 3);
+            if not PR.Ok then
+               return Need_More (PR);
+            end if;
+            declare
+               ID : constant Soja.Downstream.Parse_Net_ID_Result :=
+                 Soja.Downstream.Parse_Bouncer_Net_ID (Sub, Param (M, 1));
+            begin
+               if not ID.Ok then
+                  return From_Error (ID.Err);
+               end if;
+               declare
+                  Net : constant Network_Access :=
+                    Get_Network_By_ID (U, ID.ID);
+               begin
+                  if Net = null then
+                     return IRC_Fail
+                       ("FAIL", ["BOUNCER", "INVALID_NETID", Sub,
+                                 Param (M, 1), "Invalid network ID"]);
+                  end if;
+                  declare
+                     Rec : Soja.Database.Network := Net.Network_Record;
+                     R   : constant Irc_Error_Result :=
+                       Update_Network_Attrs
+                         (Rec, Parse_Tags (Param (M, 2)), Sub);
+                  begin
+                     if R.Failed then
+                        return R;
+                     end if;
+                     Drop_Defaults (Rec);
+                     declare
+                        Updated : constant Network_Access :=
+                          Soja.Core.User_Ops.Update_Network (U, Rec);
+                        pragma Unreferenced (Updated);
+                     begin
+                        Send_Message
+                          (DC, Make ("BOUNCER",
+                                     ["CHANGENETWORK", Param (M, 1)]));
+                     exception
+                        when E : Soja.Core.User_Ops.Operation_Error =>
+                           return IRC_Fail
+                             ("FAIL", ["BOUNCER", "UNKNOWN_ERROR", Sub,
+                                       "Failed to update network: "
+                                       & Ada.Exceptions.Exception_Message
+                                           (E)]);
+                     end;
+                  end;
+               end;
+            end;
+
+         elsif USub = "DELNETWORK" then
+            PR := Parse_Message_Params (M, 2);
+            if not PR.Ok then
+               return Need_More (PR);
+            end if;
+            declare
+               ID : constant Soja.Downstream.Parse_Net_ID_Result :=
+                 Soja.Downstream.Parse_Bouncer_Net_ID (Sub, Param (M, 1));
+            begin
+               if not ID.Ok then
+                  return From_Error (ID.Err);
+               end if;
+               declare
+                  Net : constant Network_Access :=
+                    Get_Network_By_ID (U, ID.ID);
+               begin
+                  if Net = null then
+                     return IRC_Fail
+                       ("FAIL", ["BOUNCER", "INVALID_NETID", Sub,
+                                 Param (M, 1), "Invalid network ID"]);
+                  end if;
+                  begin
+                     Soja.Core.User_Ops.Delete_Network
+                       (U, Net.Network_Record.ID);
+                  exception
+                     when E : Soja.Core.User_Ops.Operation_Error =>
+                        return Text_Fail
+                          (Ada.Exceptions.Exception_Message (E));
+                  end;
+                  Send_Message
+                    (DC, Make ("BOUNCER", ["DELNETWORK", Param (M, 1)]));
+               end;
+            end;
+
+         else
+            return IRC_Fail
+              ("FAIL", ["BOUNCER", "UNKNOWN_COMMAND", Sub,
+                        "Unknown subcommand"]);
+         end if;
+      end;
+      return Success;
+   end Cmd_Bouncer;
+
+   ----------------------------------------------------------------------
    --  The dispatch
    ----------------------------------------------------------------------
 
@@ -1505,6 +1807,8 @@ package body Soja.Core.Downstream_Commands is
          return Cmd_Info (DC, M);
       elsif Cmd = "MONITOR" then
          return Cmd_Monitor (DC, M);
+      elsif Cmd = "BOUNCER" then
+         return Cmd_Bouncer (DC, M);
       end if;
 
       DC.Logger.Debug ("unhandled message: " & Image (M));

@@ -244,6 +244,14 @@ Deviations:
   context, which has no deadline).
 - `server status` reads the gauges of `Soja.Server` (downstreams, upstreams).
 
+### `soju.im/bouncer-networks` (`BOUNCER` for registered clients)
+
+`Cmd_Bouncer` in `Soja.Core.Downstream_Commands`: LISTNETWORKS, ADDNETWORK,
+CHANGENETWORK, DELNETWORK, with `updateNetworkAttrs` /
+`networkAddrFromAttrs`.  (BIND before registration was already in the
+handshake; the caps and the state notifications existed.)  One deviation:
+an IPv6 host is bracketed when the address is rebuilt (SB-13).
+
 ### Executables (`cmd/soja`, `cmd/sojadb`) and the end-to-end check
 
 Step 10.  `soja` (main unit `Soja_Main`, since `Soja` is the library's root

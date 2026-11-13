@@ -195,6 +195,19 @@ procedure Commands_Check is
               else "plain: " & To_String (R.Text));
    end Error_Of;
 
+   function Seen (R : Recorder_Access; Needle : String) return Boolean is
+      Waited : Duration := 0.0;
+   begin
+      while not R.Has (Needle) and then Waited < 3.0 loop
+         delay 0.02;
+         Waited := Waited + 0.02;
+      end loop;
+      return R.Has (Needle);
+   end Seen;
+
+   function Has (Text, Needle : String) return Boolean is
+     (Ada.Strings.Fixed.Index (Text, Needle) > 0);
+
    U     : User_Access;
    Net   : Network_Access;
    UC    : Upstream_Conn_Access;
@@ -832,6 +845,81 @@ begin
       Check (Wait (DC_Log, D + 1) and then Last (DC_Log)(1 .. 20) /= ""
              and then DC.Monitored.Length = 0, "cleared");
       Check (Error_Of (DC, "MONITOR")(1 .. 3) = "461", "MONITOR needs more");
+   end;
+
+   -------------------------------------------------------------------
+   --  BOUNCER (soju.im/bouncer-networks)
+   -------------------------------------------------------------------
+   delay 0.3;
+   declare
+      B : Natural := Bnc_Log.Count;
+      function Id_Of (Name : String) return String is
+      begin
+         for Net of U.Networks loop
+            if SD.Get_Name (Net.Network_Record) = Name then
+               return Ada.Strings.Fixed.Trim
+                 (Long_Long_Integer'Image (Net.Network_Record.ID),
+                  Ada.Strings.Left);
+            end if;
+         end loop;
+         return "";
+      end Id_Of;
+   begin
+      Ok (Bnc, "BOUNCER LISTNETWORKS");
+      Check (Wait (Bnc_Log, B + 1)
+             and then Bnc_Log.Has ("BOUNCER NETWORK " & Id_Of ("net") & " ")
+             and then Bnc_Log.Has ("name=net")
+             and then Bnc_Log.Has ("host=irc.example")
+             and then Bnc_Log.Has ("tls=0"),
+             "LISTNETWORKS");
+
+      Check (Has (Error_Of (Bnc, "BOUNCER ADDNETWORK bogus=1"),
+                  "UNKNOWN_ATTRIBUTE ADDNETWORK bogus"), "unknown attribute");
+      Check (Has (Error_Of (Bnc, "BOUNCER ADDNETWORK port=6667"),
+                  "NEED_ATTRIBUTE ADDNETWORK host"), "host is needed");
+      Check (Has (Error_Of (Bnc, "BOUNCER ADDNETWORK name=x"),
+                  "UNKNOWN_ERROR ADDNETWORK"), "an empty address is refused");
+      Check (Error_Of (Bnc, "BOUNCER ADDNETWORK")(1 .. 3) = "461",
+             "needs attributes");
+      Check (Has (Error_Of (Bnc, "BOUNCER BIND 1"),
+                  "REGISTRATION_IS_COMPLETED"), "no bind after registering");
+      Check (Has (Error_Of (Bnc, "BOUNCER FROB"), "UNKNOWN_COMMAND FROB"),
+             "unknown subcommand");
+      Check (Has (Error_Of (Bnc, "BOUNCER DELNETWORK 0"), "INVALID_NETID"),
+             "bad id");
+      Check (Has (Error_Of (Bnc, "BOUNCER CHANGENETWORK 999 name=x"),
+                  "INVALID_NETID CHANGENETWORK 999"), "unknown id");
+
+      B := Bnc_Log.Count;
+      Ok (Bnc, "BOUNCER ADDNETWORK host=127.0.0.1;port=1;tls=0;name=second;"
+               & "nickname=zed");
+      declare
+         Id : constant String := Id_Of ("second");
+      begin
+         Check (Id /= "", "the network was created");
+         Check (Seen (Bnc_Log, "BOUNCER ADDNETWORK " & Id),
+                "ADDNETWORK is answered");
+         Check (To_String (Get_Network (U, "second").Network_Record.Addr)
+                = "irc+insecure://127.0.0.1:1"
+                and then To_String (Get_Network (U, "second")
+                                      .Network_Record.Nick) = "zed",
+                "from the attributes");
+
+         Ok (Bnc, "BOUNCER CHANGENETWORK " & Id & " host=::1;port=6667;tls=0");
+         Check (To_String (Get_Network (U, "second").Network_Record.Addr)
+                = "irc+insecure://[::1]:6667", "an IPv6 host is bracketed");
+         B := Bnc_Log.Count;
+         Ok (Bnc, "BOUNCER CHANGENETWORK " & Id & " name=third");
+         Check (Get_Network (U, "third") /= null, "renamed");
+         Check (Seen (Bnc_Log, "BOUNCER CHANGENETWORK " & Id),
+                "CHANGENETWORK is answered");
+
+         B := Bnc_Log.Count;
+         Ok (Bnc, "BOUNCER DELNETWORK " & Id);
+         Check (Get_Network (U, "third") = null, "deleted");
+         Check (Seen (Bnc_Log, "BOUNCER DELNETWORK " & Id),
+                "DELNETWORK is answered");
+      end;
    end;
 
    -------------------------------------------------------------------

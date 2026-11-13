@@ -28,6 +28,7 @@ one Go test per bug).  Add an entry the moment a bug is found; do not batch.
 | SB-10 | `service.go:1157` | `user delete <own name>` waits for the user's own goroutine and never returns | high |
 | SB-11 | `service.go:1408` | `channel update` with a bad value half-applies the change in memory | low |
 | SB-12 | `service.go:677` | `network delete -x` deletes the current network | low |
+| SB-13 | `downstream.go:140` | `BOUNCER ADDNETWORK`/`CHANGENETWORK` build an unusable address from an IPv6 host | low |
 
 ---
 
@@ -506,5 +507,38 @@ without confirmation.
  	}
 +	if strings.HasPrefix(params[0], "-") {
 +		return fmt.Errorf("unexpected argument: %v", params[0])
++	}
+```
+
+## SB-13: an IPv6 host from `bouncer-networks` attributes gives an unusable address
+
+`downstream.go:140`, `networkAddrFromAttrs`:
+
+```go
+addr := host
+if port := string(attrs["port"]); port != "" {
+	addr += ":" + port
+}
+```
+
+**Effect.**  `fillNetworkAddrAttrs` reports an IPv6 network as `host=::1`
+(brackets stripped by `net.SplitHostPort`), so a client that edits a network
+and sends `host=::1;port=6667` back makes the address `::1:6667`.  That does
+not parse as host and port, and the network can no longer connect.  Clients
+that round-trip the attributes of an IPv6 network hit this.
+
+**Suggested patch.**  Use `net.JoinHostPort` when there is a port, and bracket
+a bare IPv6 host:
+
+```diff
+-	addr := host
+-	if port := string(attrs["port"]); port != "" {
+-		addr += ":" + port
+-	}
++	addr := host
++	if port := string(attrs["port"]); port != "" {
++		addr = net.JoinHostPort(host, port)
++	} else if strings.Contains(host, ":") {
++		addr = "[" + host + "]"
 +	}
 ```
