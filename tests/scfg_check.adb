@@ -3,13 +3,14 @@ pragma Ada_2022;
 with Ada.Text_IO;
 with Ada.Strings.Unbounded;
 with Ada.Exceptions;
+with GNAT.OS_Lib;
 with Scfg;
 with Scfg.Parser;
 with Soja.Config;
 
 procedure Scfg_Check is
    use Ada.Strings.Unbounded;
-   use type Scfg.Directive_Access;
+   use type Scfg.Directive_line_Access;
 
    LF : constant Character := ASCII.LF;
 
@@ -39,19 +40,14 @@ begin
       Tree : constant Scfg.Config_Type := Scfg.Parser.Parse_Text (Config);
    begin
       for E of Tree loop
-         if E.Directive /= null then
+         if E.Directive_line /= null then
             Directives := Directives + 1;
             declare
-               D : Scfg.Directive_Type renames E.Directive.all;
+               D : Scfg.Directive_Type renames E.Directive_line.Directive.all;
             begin
-               Ada.Text_IO.Put (To_String (D.Word));
-               for P of D.Directive_1 loop
-                  Ada.Text_IO.Put (" ");
-                  if Length (P.Word) /= 0 then
-                     Ada.Text_IO.Put (To_String (P.Word));
-                  else
-                     Ada.Text_IO.Put (To_String (P.Str));
-                  end if;
+               Ada.Text_IO.Put (To_String (D.Name));
+               for P of D.Params loop
+                  Ada.Text_IO.Put (" " & To_String (P.Value));
                end loop;
                Ada.Text_IO.New_Line;
             end;
@@ -113,9 +109,70 @@ begin
 
       Ada.Text_IO.Put_Line ("OK");
    end;
+
+   --  3. The syntax: quotes, escapes, comments, line ends.
+   declare
+      function Title (Text : String) return String is
+        (To_String (Soja.Config.Parse (Text).Title));
+
+      function Fails (Text : String) return Boolean is
+      begin
+         declare
+            S : constant Soja.Config.Server := Soja.Config.Parse (Text);
+            pragma Unreferenced (S);
+         begin
+            return False;
+         end;
+      exception
+         when Soja.Config.Config_Error => return True;
+      end Fails;
+
+      procedure Check (Cond : Boolean; What : String) is
+      begin
+         if not Cond then
+            raise Program_Error with What;
+         end if;
+      end Check;
+   begin
+      Check (Title ("title plain") = "plain", "a bareword");
+      Check (Title ("title ""two words""") = "two words", "double quotes");
+      Check (Title ("title 'two words'") = "two words", "single quotes");
+      Check (Title ("title ""a\"" b""") = "a"" b", "an escaped quote");
+      Check (Title ("title ""a\\b""") = "a\b", "an escaped backslash");
+      Check (Title ("title 'a\b'") = "a\b", "single quotes keep a backslash");
+      Check (Title ("title ""it's""") = "it's", "a quote of the other kind");
+      Check (Title ("title a\ b") = "a b", "an escaped space in a bareword");
+      Check (Title ("title /var/lib/(x)/[y]~,;:!&^|<>{}") = "/var/lib/(x)/[y]~,;:!&^|<>{}",
+             "a bareword takes what a lexer of letters would not");
+      Check (Title ("title x   # a comment") = "x", "a trailing comment");
+      Check (Title ("title ""x # not a comment""") = "x # not a comment",
+             "# inside quotes");
+      Check (Title ("   title x" & LF) = "x", "an indented directive");
+      Check (Title ("title x") = "x", "no line end at the end of the file");
+      Check (Title ("title x" & ASCII.CR & LF & "hostname h" & ASCII.CR & LF) = "x",
+             "CR LF line ends");
+      Check (Title (LF & LF & "  " & LF & "# c" & LF & "title x" & LF & "#" ) = "x",
+             "blank lines and comments");
+      Check (Title ("title ""h" & Character'Val (16#E9#) & "llo""")
+             = "h" & Character'Val (16#E9#) & "llo", "bytes that are not UTF-8");
+      Check (Title ("title ""h" & Character'Val (16#C3#) & Character'Val (16#A9#) & "llo""")
+             = "h" & Character'Val (16#C3#) & Character'Val (16#A9#) & "llo", "UTF-8");
+
+      Check (Fails ("title ""open"), "an unterminated quote");
+      Check (Fails ("title 'open"), "an unterminated single quote");
+      Check (Fails ("title ""a""b"), "a word after a quoted string");
+      Check (Fails ("title a""b"""), "a quote in a bareword");
+      Check (Fails ("title a\"), "a backslash at the end of the line");
+      Check (Fails ("title ""a" & LF & "b"""), "a string over a line");
+      Check (Fails ("nonsense x"), "an unknown directive");
+      Check (Fails ("title"), "a missing parameter");
+   end;
+   Ada.Text_IO.Put_Line ("ALL PASS");
 exception
    when Scfg.Parser.Parse_Error =>
       Ada.Text_IO.Put_Line ("PARSE ERROR");
+      GNAT.OS_Lib.OS_Exit (1);
    when E : others =>
       Ada.Text_IO.Put_Line ("FAIL: " & Ada.Exceptions.Exception_Message (E));
+      GNAT.OS_Lib.OS_Exit (1);
 end Scfg_Check;

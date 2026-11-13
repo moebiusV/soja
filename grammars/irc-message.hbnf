@@ -1,0 +1,108 @@
+; irc-message.hbnf -- the IRC wire message (RFC 2812 2.3.1 and the IRCv3
+; message tags), as gopkg.in/irc.v4's ParseMessage reads it, without its CR LF:
+;
+;     @time=2026-01-01T00:00:00.000Z;+x :nick!user@host PRIVMSG #chan :hello world
+;
+; The line is, in order: an optional tags word (starting with "@", up to the
+; first space), an optional prefix word (starting with ":", up to the first
+; space), and the rest: the command, the middle parameters, and a trailing
+; parameter that starts at the first " :" and goes to the end of the line.
+; Runs of spaces separate the middle parameters (empty ones are dropped, and
+; spaces after the last one are nothing).  The
+; quirks of irc.v4 are kept: exactly one space ends the tags and the prefix words
+; (a second space is part of the rest), and a line whose rest begins with " :"
+; has no command of its own, the trailing text is the command.
+;
+; The tag values and the command's case are for the caller (soja-irc-hbnf.adb):
+; it takes the backslash escapes off a value and upper-cases the command.
+;
+; Two parsers come from this file: the whole message (the root `message`), and
+; a list of attributes alone (`--root=attrs`: the attributes of the BOUNCER
+; commands are written like tags, `name=value;other`; a blank may be in a value).
+;
+; Rules that start with `&` consume nothing; the lookahead makes the rule a
+; record in the tree, where a rule of text rules only would be one text.  (A
+; rule with a lookahead and a repetition of its own is read as one text, so the
+; repetitions are in rules of their own.)
+
+prefix none
+whitespace none
+include "common.hbnf"
+
+message    = tags-part after-tags | !"@" after-tags
+after-tags = prefix-part rest | !":" rest
+
+tags-part   = &"@" "@" tag-list SP
+prefix-part = &":" ":" [ prefix ] SP
+
+; The tags are items separated by ";", and an item may be empty (so "a;;b" and
+; ";" are lists of tags too).  A rule of the tree has to consume something, so
+; the list is read as units: an empty item and its ";", an item and its ";",
+; and a last item.  An empty list stands for one empty item, and a list that
+; ends with ";" has an empty item after it: the caller adds those.
+tag-list  = *tag-unit
+tag-unit  = empty-item | item-semi | item-final
+empty-item = &";" ";"
+item-semi  = tag ";"
+item-final = tag
+tag       = tag-pair | tag-key-only
+tag-pair     = &tag-end tag-key "=" tag-value
+tag-key-only = &tag-end tag-key-1
+tag-end   = *~( ";" | SP )
+tag-key   = *~( "=" | ";" | SP )
+tag-key-1 = 1*~( "=" | ";" | SP )
+tag-value = *~( ";" | SP )
+
+; name[!user][@host]: the host is what follows the first "@", the user what
+; follows the first "!" before it.
+prefix       = pfx-full | pfx-user | pfx-host | pfx-nick
+pfx-full     = &pfx-end pfx-name "!" pfx-user-name "@" pfx-host-name
+pfx-user     = &pfx-end pfx-name "!" pfx-user-name
+pfx-host     = &pfx-end pfx-name "@" pfx-host-name
+pfx-nick     = &pfx-end pfx-name-1
+pfx-end       = *~SP
+pfx-name      = *~( "!" | "@" | SP )
+pfx-name-1    = 1*~( "!" | "@" | SP )
+pfx-user-name = *~( "@" | SP )
+pfx-host-name = *~SP
+
+rest          = only-trailing | with-command
+only-trailing = &SP spaces ":" trailing
+with-command  = lead command middles [ more-trailing ] lead
+middles       = *middle-item
+middle-item   = &SP spaces middle
+more-trailing = &SP spaces ":" trailing
+lead          = *SP
+spaces        = 1*SP
+command       = 1*~SP
+middle        = ~( SP | ":" ) *~SP
+trailing      = *rune
+
+rune = 0x00..0x10FFFF
+
+; A prefix outside a message (`--root=bare-prefix`): the same, without the
+; space as a delimiter.
+bare-prefix = bare-full | bare-user | bare-host | bare-nick
+bare-full   = &bare-any bare-name "!" bare-user-name "@" bare-host-name
+bare-user   = &bare-any bare-name "!" bare-user-name
+bare-host   = &bare-any bare-name "@" bare-host-name
+bare-nick   = &bare-any bare-name
+bare-any    = *rune
+bare-name      = *~( "!" | "@" )
+bare-user-name = *~"@"
+bare-host-name = *rune
+
+; The attributes of a BOUNCER command: tags outside a message, read as units as
+; the tags are (a blank may be in a value, ";" ends an attribute).
+attrs      = *attr-unit
+attr-unit  = attr-empty | attr-semi | attr-final
+attr-empty = &";" ";"
+attr-semi  = attr ";"
+attr-final = attr
+attr       = attr-pair | attr-key-only
+attr-pair     = &attr-end attr-name "=" attr-value
+attr-key-only = &attr-end attr-name-1
+attr-end   = *~";"
+attr-name   = *~( "=" | ";" )
+attr-name-1 = 1*~( "=" | ";" )
+attr-value  = *~";"

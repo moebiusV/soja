@@ -1,0 +1,59 @@
+; scfg.hbnf -- soja's configuration file: go-scfg's syntax, as soju reads it
+; (config/config.go).  One directive on a line: a name and its parameters,
+; blank space between them.  A "#" outside quotes starts a comment that goes to
+; the end of the line, and a line that is only blank space or a comment is
+; skipped.
+;
+;     listen ircs://:6697
+;     db sqlite3 "/var/lib/soju/main.db"   # a comment
+;     title 'My bouncer'
+;
+; A name or a parameter is a bareword (anything but blank space, quotes and
+; "#"; a backslash takes the next character as it is) or a string: "double
+; quoted" (a backslash takes the next character) or 'single quoted' (no
+; escapes).  A string stays inside its line, and the character after it is
+; blank space, a comment or the end of the line: a word does not touch a
+; quote, as go-scfg has it.  The quotes and backslashes are taken off by the
+; caller (soja-config.adb).
+;
+; No blocks: soju's configuration has none.  A line may end the file without
+; its line end.
+;
+; Rules that start with `&` consume nothing; the lookahead makes the rule a
+; record in the tree, where a rule of text rules only would be one text.
+
+prefix none
+whitespace none
+include "common.hbnf"
+
+config = *line
+line   = directive-line | other-line
+
+directive-line = &directive-start lead directive tail
+directive-start = lead word-start
+directive      = name params
+name           = cmd-word
+params         = *param
+param          = &blank-char blanks value
+value          = quoted | single-quoted | bare
+
+other-line = &rune lead tail
+
+tail     = lead [ comment ] line-end
+lead     = *blank-char
+blanks   = 1*blank-char
+comment  = "#" *~( CR | LF )
+line-end = CRLF | LF | CR | !rune
+
+cmd-word   = quoted | single-quoted | bare
+word-start = ~( blank-char | CR | LF | "#" )
+bare       = 1*( bare-char | escaped )
+quoted     = "\"" *( dq-char | escaped ) "\""
+single-quoted = "'" *sq-char "'"
+escaped    = "\\" ~( CR | LF )
+bare-char  = ~( blank-char | CR | LF | "#" | "\"" | "'" | "\\" )
+dq-char    = ~( "\"" | "\\" | CR | LF )
+sq-char    = ~( "'" | CR | LF )
+blank-char = SP | HTAB
+
+rune = 0x00..0x10FFFF

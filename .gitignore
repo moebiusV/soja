@@ -73,3 +73,4 @@ tests/web_check
 tests/metrics_check
 tests/mime_check
 tests/fileupload_check
+tests/irc_fuzz_check

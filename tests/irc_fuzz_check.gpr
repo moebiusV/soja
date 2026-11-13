@@ -1,0 +1,9 @@
+with "../soja.gpr";
+project Irc_Fuzz_Check is
+   for Languages use ("Ada");
+   for Source_Dirs use (".");
+   for Object_Dir use "obj-s";
+   for Create_Missing_Dirs use "True";
+   for Exec_Dir use ".";
+   for Main use ("irc_fuzz_check.adb");
+end Irc_Fuzz_Check;

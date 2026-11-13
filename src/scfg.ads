@@ -8,45 +8,25 @@ package Scfg is
    use Ada.Strings.Unbounded;
    use Interfaces;
 
-   subtype Wordchars_Type is Unbounded_String;
+   subtype Directive_start_Type is Unbounded_String;
 
-   -- a newline (directive terminator): CRLF, LF, or CR
-   subtype Nl_Type is Unbounded_String;
+   subtype Value_Type is Unbounded_String;
 
-   -- a quoted string: `"` ... `"`, backslash escapes and a bare newline inside.
-   -- The interior repeats `\` + any code point, or any code point except `"` and
-   -- `\` — a repetition over a DNF (one full branch per iteration, longest match).
-   subtype Str_Type is Unbounded_String;
-
-   subtype Str_char_Type is Unbounded_String;
-
-   -- `#` to end of line (matched and skipped, not a token).
    subtype Comment_Type is Unbounded_String;
 
-   subtype Comment_char_Type is Unbounded_String;
+   subtype Cmd_word_Type is Unbounded_String;
 
-   -- backslash-newline continuation (parse.y's lgetc), matched and skipped.
-   subtype Continuation_Type is Unbounded_String;
+   subtype Bare_Type is Unbounded_String;
 
-   -- what a phrase rule skips between its elements: inline white space (a newline
-   -- included — a block's entries sit on their own lines), a comment or a
-   -- continuation.  One element per match; the parser repeats it.
-   subtype Ws_Type is Unbounded_String;
+   subtype Quoted_Type is Unbounded_String;
 
-   -- ipv6 — hex groups separated by ":", with "::" and an IPv4-mapped tail
-   -- (".d.d.d.d") allowed (syntax only; parse.y resolves the address later)
-   subtype Ipv6_Type is Unbounded_String;
+   subtype Single_quoted_Type is Unbounded_String;
 
-   -- common.hbnf — the character classes and core rules any grammar shares.
-   -- 
-   -- The RFC 5234 Appendix B.1 character classes (DIGIT, ALPHA, HEXDIG, ...) and
-   -- the one multi-character core rule, CRLF.  It includes ascii.hbnf for the
-   -- named ASCII characters, so a grammar that includes this one file gets the
-   -- whole set.
-   -- --- RFC 5234 Appendix B.1 character classes (each matches one code point) ---
-   subtype DIGIT_Type is Unbounded_String;
+   subtype Escaped_Type is Unbounded_String;
 
-   subtype ALPHA_Type is Unbounded_String;
+   subtype Blank_char_Type is Unbounded_String;
+
+   subtype Rune_Type is Unbounded_String;
 
    subtype CRLF_Type is Unbounded_String;
  -- Internet standard newline
@@ -60,35 +40,100 @@ package Scfg is
 
    subtype HTAB_Type is Unbounded_String;
 
-   subtype DQUOTE_Type is Unbounded_String;
- -- "
+   subtype Not_x0_9_B_C_E_10FFFF_Type is Unbounded_String;
+
+   subtype Not_x0_8_B_C_E_1F_21_22_24_10FFFF_Type is Unbounded_String;
+
+   subtype Not_x0_8_B_C_E_1F_21_24_26_28_5B_5D_10FFFF_Type is Unbounded_String;
+
+   subtype Not_x0_9_B_C_E_21_23_5B_5D_10FFFF_Type is Unbounded_String;
+
+   subtype Not_x0_9_B_C_E_26_28_10FFFF_Type is Unbounded_String;
 
    subtype Word_Type is Unbounded_String;
 
+   subtype Int_Type is Unbounded_String;
+
+   subtype Str_Type is Unbounded_String;
+
+   subtype Ws_Type is Unbounded_String;
+
+   subtype Tail_1_Type is Unbounded_String;
+
+   subtype Name_Type is Unbounded_String;
+
+   subtype Lead_Type is Unbounded_String;
+
+   subtype Blanks_Type is Unbounded_String;
+
+   subtype Word_start_Type is Unbounded_String;
+
+   subtype Bare_char_Type is Unbounded_String;
+
+   subtype Dq_char_Type is Unbounded_String;
+
+   subtype Sq_char_Type is Unbounded_String;
+
+   type Line_Type;
+   type Directive_line_Type;
    type Directive_Type;
+   type Param_Type;
+   type Other_line_Type;
+   type Tail_Type;
+   type Line_end_Type;
 
+   type Line_Access is access Line_Type;
+   type Directive_line_Access is access Directive_line_Type;
    type Directive_Access is access Directive_Type;
+   type Param_Access is access Param_Type;
+   type Other_line_Access is access Other_line_Type;
+   type Tail_Access is access Tail_Type;
+   type Line_end_Access is access Line_end_Type;
 
-   type Config_Entry is record
-      Nl : Nl_Type;
-      Directive : Directive_Access;
-   end record;
    package Config_Vectors is new Ada.Containers.Vectors
-     (Positive, Config_Entry);
+     (Positive, Line_Access);
    subtype Config_Type is Config_Vectors.Vector;
 
-   type Directive_1_Entry is record
-      Word : Unbounded_String;
-      Str : Unbounded_String;
-   end record;
-   package Directive_1_Vectors is new Ada.Containers.Vectors
-     (Positive, Directive_1_Entry);
-   subtype Directive_1_Type is Directive_1_Vectors.Vector;
+   package Params_Vectors is new Ada.Containers.Vectors
+     (Positive, Param_Access);
+   subtype Params_Type is Params_Vectors.Vector;
 
    type Directive_Type is record
-      Word : Unbounded_String;
-      Directive_1 : Directive_1_Type;
-      Nl : Nl_Type;
+      Name : Name_Type;
+      Params : Params_Type;
+   end record;
+
+   type Param_Type is record
+      Blanks : Blanks_Type;
+      Value : Value_Type;
+   end record;
+
+   type Line_end_Type is record
+      CRLF : CRLF_Type;
+      LF : LF_Type;
+      CR : CR_Type;
+   end record;
+
+   type Tail_Type is record
+      Lead : Lead_Type;
+      Tail_1 : Tail_1_Type;
+      Line_end : Line_end_Access;
+   end record;
+
+   type Directive_line_Type is record
+      Lead : Lead_Type;
+      Directive : Directive_Access;
+      Tail : Tail_Access;
+   end record;
+
+   type Other_line_Type is record
+      Lead : Lead_Type;
+      Tail : Tail_Access;
+   end record;
+
+   type Line_Type is record
+      Directive_line : Directive_line_Access;
+      Other_line : Other_line_Access;
    end record;
 
 end Scfg;

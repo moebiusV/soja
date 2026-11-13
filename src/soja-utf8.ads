@@ -12,4 +12,12 @@ package Soja.Utf8 is
    --  U+FFFD.
    function To_Valid (S : String) return String;
 
+   --  Bytes that are not UTF-8 (an IRC line may be in any charset) made into
+   --  text a parser reads: each such byte becomes the private-use character
+   --  U+F700 + the byte, and Restore turns them back, so what went through
+   --  comes out byte for byte.  (A text that really has those characters,
+   --  U+F780 .. U+F7FF, comes back as the bytes: a rarity.)
+   function Escape_Invalid (S : String) return String;
+   function Restore (S : String) return String;
+
 end Soja.Utf8;

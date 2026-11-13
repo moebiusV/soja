@@ -77,4 +77,55 @@ package body Soja.Utf8 is
       return To_String (R);
    end To_Valid;
 
+   --  U+F700 + B (B in 16#80# .. 16#FF#) as UTF-8: EF, 9E or 9F, a byte.
+   function Escape_Byte (B : Natural) return String is
+     (Character'Val (16#EF#)
+      & Character'Val (16#9E# + (B - 16#80#) / 64)
+      & Character'Val (16#80# + (B - 16#80#) mod 64));
+
+   function Escape_Invalid (S : String) return String is
+      Result : Unbounded_String;
+      I      : Natural := S'First;
+   begin
+      if Is_Valid (S) then
+         return S;
+      end if;
+      while I <= S'Last loop
+         declare
+            L : constant Natural := Valid_Len (S, I);
+         begin
+            if L = 0 then
+               Append (Result, Escape_Byte (Character'Pos (S (I))));
+               I := I + 1;
+            else
+               Append (Result, S (I .. I + L - 1));
+               I := I + L;
+            end if;
+         end;
+      end loop;
+      return To_String (Result);
+   end Escape_Invalid;
+
+   function Restore (S : String) return String is
+      Result : Unbounded_String;
+      I      : Natural := S'First;
+   begin
+      while I <= S'Last loop
+         --  EF 9E 80 .. EF 9F BF is U+F780 .. U+F7FF.
+         if I + 2 <= S'Last and then S (I) = Character'Val (16#EF#)
+           and then Character'Pos (S (I + 1)) in 16#9E# .. 16#9F#
+           and then Character'Pos (S (I + 2)) in 16#80# .. 16#BF#
+         then
+            Append (Result, Character'Val
+              ((Character'Pos (S (I + 1)) - 16#9E#) * 64
+               + (Character'Pos (S (I + 2)) - 16#80#) + 16#80#));
+            I := I + 3;
+         else
+            Append (Result, S (I));
+            I := I + 1;
+         end if;
+      end loop;
+      return To_String (Result);
+   end Restore;
+
 end Soja.Utf8;

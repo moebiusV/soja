@@ -51,8 +51,8 @@ Done in soja (2026-11-13, hbnf 0.8, `d201a6e`): `Znclog`, `Service_Words`,
 `Ident_Query`, the PROXY v1 line and the HTTP head are now read by grammars in the
 new notation (`grammars/*.hbnf`, regenerated into `src/` by
 `grammars/generate.sh`; the image `ada-toolchain:edge-full-hbnf08` has the tool).
-`grammars/legacy/` keeps the grammars of the older notation (`irc-message`, `scfg`,
-`obconf`) with their generated units, for later.  Two things about hbnf's Ada
+Every grammar of soja is in the new notation now (the older `irc-message`, `scfg`
+and `obconf`, with a lexer and a walker, are gone).  Two things about hbnf's Ada
 tree came up, for its author:
 
 - A rule made only of character rules is read as one text, whatever its parts
@@ -62,6 +62,13 @@ tree came up, for its author:
   front of a kind of line (`&"*** "`) where the tree must say which kind it
   is.  (An optional literal, `[ "(" ]`, turns a rule back into text; the
   walkers take parentheses and quotes off, as Go's `TrimPrefix` does.)
+- A rule that matches no character fails in a tree of records (`tag-key-only` for an
+  empty tag, a prefix of nothing), and the parser takes no empty text at all; a
+  list of items that may be empty has to be read as units that each consume
+  something.  A rule with a lookahead that repeats, or names a rule that does, is
+  one text (the repetition has to be in a rule of its own).  A greedy optional
+  before something that can begin the same way (`[ tags ] [ prefix ] rest`) is
+  refused; ordered alternatives say it.
 - `hidden sep = SP` hides only the first use of `sep`; the second and later
   uses are fields `Sep_2`, `Sep_3`, ...  A number too big for 64 bits is a
   `Constraint_Error` from the parser, not a `Parse_Error`.
@@ -75,7 +82,7 @@ the note: it takes minutes, and the last three such notes were wrong.
 | -------------------------- | ----------------- | -------------------------------- |
 | `rate.go` (backoffer)      | `Soja.Backoff`    | — (pure Ada)                     |
 | `irc.go` + `xirc/`         | `Soja.Irc.*` (`Messages`, `Modes`, `Helpers`, `Xirc`, `Genmsg`, `Members`, …) | — (pure Ada) |
-| `config/config.go`         | `Soja.Config`     | `hbnf` (scfg grammar)             |
+| `config/config.go`         | `Soja.Config`     | `hbnf` (`grammars/scfg.hbnf`)     |
 | `conn.go` (TLS, buffering) | `Soja.Conn`       | `aws` (`AWS.Net.SSL`, OpenSSL 3) |
 | `certfp.go` (generateCertFP) | `Soja.Certfp`   | **deferred** — X.509 cert creation (see below) |
 | `downstream.go`            | `Soja.Downstream` (leaves) + `Soja.Core` (downstreamConn) | — |
@@ -122,7 +129,7 @@ CSPRNG are all already in `bracke-cryptolib`; TLS is already in `aws`.
 | `modernc.org/sqlite` / `go-sqlite3` | SQLite store | `gnatcoll-db` (SQLite) |
 | `github.com/lib/pq` | Postgres store | `gnatcoll-db` (Postgres) |
 | `gopkg.in/irc.v4` + `xirc/` | IRC parse/format, caps | `Soja.Irc` (message grammar via `hbnf`, caps/casemapping hand-written) |
-| `git.sr.ht/~emersion/go-scfg` | config | `hbnf` (scfg grammar) |
+| `git.sr.ht/~emersion/go-scfg` | config | `hbnf` (`grammars/scfg.hbnf`) |
 | `nhooyr.io/websocket` | WebSocket transport | hand-written RFC6455 (SHA-1 + base64) |
 | `git.sr.ht/~sircmpwn/go-bare` | msgstore message IDs (and the fs store's encoding) | `Soja.Bare` (hand-written: uint, int, string) |
 | `github.com/prometheus/client_golang` | metrics | `aws` + hand-written text format |
@@ -214,28 +221,47 @@ preserve, not bugs to fix:
   missing-data-after-prefix, missing-command). Go panics on some malformed
   inputs; soja raises `Parse_Error`.
 
-### IRC message grammar (`hbnf`, jet-free)
+### IRC message grammar (`grammars/irc-message.hbnf`)
 
-The wire message is expressed as an `hbnf` grammar at
-`grammars/irc-message.hbnf`; `soja-irc-hbnf.{ads,adb}` walks the generated
-parse tree into a `Message`. It is jet-free: the lexer's character classes are
-disjoint because each word's class is keyed on its **first byte** — `@`
-(message tags), `:` (prefix or trailing start), or anything else (command /
-middle param) — so the maximal-munch scanner emits exactly one token per word.
+`Soja.Irc.Messages.Parse_Message`, `Parse_Tags` and `Parse_Prefix` are read by
+the parsers hbnf makes of `grammars/irc-message.hbnf` (three roots of one
+file: the message, a list of attributes written like tags for the BOUNCER
+commands, and a prefix on its own), and `Soja.Irc.Hbnf` takes the tree to a
+`Message`: it takes the backslash escapes off tag values, upper-cases the
+command and picks the prefix apart.  The grammar is irc.v4's `ParseMessage`
+written out, quirks included: one space ends the tags word and the prefix word
+(a second one is part of the rest), a rest that begins with ` :` has no command
+of its own (its trailing text is the command), runs of spaces separate the
+parameters, and a line with no command is refused.  `tests/irc_oracle.adb`
+keeps the hand-written reading this replaced, and `irc_fuzz_check` makes
+120000 lines from the delimiters (and bytes that are not UTF-8) and checks the
+two agree on every one, errors included.
 
-The grammar captures only the structure; the walker applies irc.v4's semantics:
-it strips the `@`/`:` markers, splits tags on `;`/`=` and the prefix on
-`!`/`@`, upper-cases the command, and re-assembles the trailing param from its
-words and their space separators (so interior spaces in the trailing survive).
+An IRC line is bytes, not always UTF-8, and the parser reads code points: bytes
+that are not UTF-8 are carried through as private-use characters
+(`Soja.Utf8.Escape_Invalid`, `Restore`) and come out as they went in.  (Text
+that really has U+F780 .. U+F7FF comes back as bytes: a rarity.)  The parser
+takes no empty text, so an empty attribute list and an empty prefix are
+special-cased, and a record rule must consume a character, so a list of tags is
+read as units (an empty item with its `;`, an item with its `;`, a last item)
+and the walker adds the empty item of `""` and of a last `;`.
 
-Deviations (both from keying a word's class on its first byte):
+The old grammar (a token for each word, keyed on its first byte) rejected a
+command or middle parameter that began with `@` or `:`; this one does not.
 
-- **`@`- or `:`-leading command / middle param** — irc.v4 treats `@` and `:`
-  as markers only at fixed positions, so `PRIVMSG @foo` keeps `@foo` as a
-  middle param; the grammar lexes `@foo` as a tags word and rejects it. Rare,
-  and arguably malformed.
-- **Space only, not whitespace** — faithful, not a deviation: irc.v4 splits on
-  `' '` (and `" :"`), never on tabs, so the grammar's `gap` is `1*%x20`.
+### The configuration file (`grammars/scfg.hbnf`)
+
+`Soja.Config.Parse` reads the file with the parser of `grammars/scfg.hbnf`:
+go-scfg's syntax as soju reads it, one directive on a line, `#` comments, a
+bareword (anything but blank space, quotes and `#`, a backslash taking the next
+character) or a "double" or 'single' quoted string, a line that may end the
+file without its line end.  The old grammar widened a lexer's bareword
+characters (letters, digits and a few signs); this one takes any, as go-scfg
+does, so a path with parentheses or a comma is a word now.  A word does not
+touch a quote (`a"b"` is an error, as in go-scfg), a string does not go over a
+line, and single quotes work.  Still a deviation: a `#` after a word starts a
+comment (go-scfg takes it for part of a word), and there are no blocks.
+A file with bytes that are not UTF-8 is read with them kept as they are.
 
 ## Behavioural requirements (must preserve / encode)
 

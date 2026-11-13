@@ -1,64 +1,68 @@
 --  Soja.Config — the port of soju's config/config.go (the Load walk).
 pragma Ada_2022;
 
+with Ada.Exceptions;
 with Ada.Text_IO;
 with GNAT.Sockets;
 
 with Scfg;
 with Scfg.Parser;
+with Soja.Utf8;
 
 package body Soja.Config is
 
    use Ada.Strings.Unbounded;
-   use type Scfg.Directive_Access;
+   use type Scfg.Directive_line_Access;
 
    ----------
    -- Helpers (private to the body; config.go's unexported functions) --
    ----------
 
-   --  Unescape a quoted-string token: the Scfg lexer returns the whole
-   --  `"..."` (quotes kept, backslashes kept).  go-scfg's splitWords drops
-   --  the quotes and treats `\` as an escape for the next byte (no C-style
-   --  escapes), so `\"` is `"`, `\\` is `\`, and `\n` is a literal `n`.
-   function Unescape (S : String) return Unbounded_String is
-      R : Unbounded_String;
-      I : Natural := S'First;
+   --  A word as the file wrote it, without its quoting: a "double quoted"
+   --  string without the quotes, a backslash taking the next character as it
+   --  is; a 'single quoted' one without the quotes and with nothing taken off;
+   --  a bareword with its backslashes taken off.
+   function Unquote (Word : String) return Unbounded_String is
+      Single : constant Boolean :=
+        Word'Length > 0 and then Word (Word'First) = ''';
+      Quoted : constant Boolean :=
+        Single or else (Word'Length > 0 and then Word (Word'First) = '"');
+      First  : constant Natural :=
+        (if Quoted then Word'First + 1 else Word'First);
+      Last   : constant Natural :=
+        (if Quoted then Word'Last - 1 else Word'Last);
+      Result : Unbounded_String;
+      I      : Natural := First;
    begin
-      if S'Length >= 2 and then S (S'First) = '"' then
-         I := S'First + 1;
-      end if;
-      while I <= S'Last loop
-         declare
-            C : constant Character := S (I);
-         begin
-            if C = '"' and then I = S'Last then
-               null;                       -- the closing quote
-            elsif C = '\' and then I < S'Last then
-               I := I + 1;
-               Append (R, S (I));          -- escape: drop the backslash
-            else
-               Append (R, C);
-            end if;
-         end;
+      while I <= Last loop
+         if Word (I) = '\' and then not Single and then I < Last then
+            I := I + 1;
+         end if;
+         Append (Result, Word (I));
          I := I + 1;
       end loop;
-      return R;
-   end Unescape;
+      return To_Unbounded_String (Soja.Utf8.Restore (To_String (Result)));
+   end Unquote;
 
-   --  The parameters of a directive as strings (barewords as-is, quoted
-   --  strings unescaped).
+   --  The parameters of a directive as strings.
    function Params (D : Scfg.Directive_Type) return String_Vectors.Vector is
       R : String_Vectors.Vector;
    begin
-      for E of D.Directive_1 loop
-         if Length (E.Word) /= 0 then
-            R.Append (E.Word);
-         else
-            R.Append (Unescape (To_String (E.Str)));
-         end if;
+      for P of D.Params loop
+         R.Append (Unquote (To_String (P.Value)));
       end loop;
       return R;
    end Params;
+
+   --  The file is read by the generated parser (grammars/scfg.hbnf); a file
+   --  that is not UTF-8 is read with each stray byte kept as it is.
+   function Read (Text : String) return Scfg.Config_Type is
+   begin
+      return Scfg.Parser.Parse_Text (Soja.Utf8.Escape_Invalid (Text));
+   exception
+      when E : Scfg.Parser.Parse_Error =>
+         raise Config_Error with Ada.Exceptions.Exception_Message (E);
+   end Read;
 
    procedure Error (Msg : String) is
    begin
@@ -285,8 +289,9 @@ package body Soja.Config is
             Error ("failed to parse CIDR: " & S);
       end;
 
-      if (Is_V4 and then Prefix > 32) or else (not Is_V4 and then Prefix >
-        128) then
+      if (Is_V4 and then Prefix > 32)
+        or else (not Is_V4 and then Prefix > 128)
+      then
          Error ("failed to parse CIDR: " & S);
       end if;
 
@@ -379,7 +384,7 @@ package body Soja.Config is
    ---------
 
    function Parse (Text : String) return Server is
-      Tree : constant Scfg.Config_Type := Scfg.Parser.Parse_Text (Text);
+      Tree : constant Scfg.Config_Type := Read (Text);
       Srv  : Server := Defaults;
 
       --  raw message-store and its `log` alias, resolved after the walk
@@ -390,13 +395,15 @@ package body Soja.Config is
       Has_Log       : Boolean := False;
    begin
       for E of Tree loop
-         if E.Directive = null then
+         if E.Directive_line = null then
             goto Next;   -- a blank or comment line: skip, don't stop
          end if;
 
          declare
-            D      : Scfg.Directive_Type renames E.Directive.all;
-            Name   : constant String := To_String (D.Word);
+            D      : Scfg.Directive_Type renames
+              E.Directive_line.Directive.all;
+            Name   : constant String :=
+              To_String (Unquote (To_String (D.Name)));
             P      : constant String_Vectors.Vector := Params (D);
             N      : constant Natural := Natural (P.Length);
 
