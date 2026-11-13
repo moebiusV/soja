@@ -1,0 +1,27 @@
+--  The soja daemon: a port of soju's cmd/soju.  The executable is "soja" (the
+--  main unit cannot be called Soja: that is the library's root package).
+with "../../soja.gpr";
+
+project Soja_Daemon is
+   for Languages use ("Ada");
+   for Source_Dirs use (".");
+   for Object_Dir use "obj";
+   for Create_Missing_Dirs use "True";
+   for Exec_Dir use ".";
+   for Main use ("soja_main.adb");
+
+   package Builder is
+      for Executable ("soja_main.adb") use "soja";
+   end Builder;
+
+   package Compiler is
+      for Local_Configuration_Pragmas use "soja.adc";
+      for Default_Switches ("Ada") use
+        ("-gnat2022", "-gnatwa", "-gnatVa", "-gnato",
+         "-gnaty3abcefhiklmnprt");
+   end Compiler;
+
+   package Binder is
+      for Switches ("Ada") use ("-Es");
+   end Binder;
+end Soja_Daemon;

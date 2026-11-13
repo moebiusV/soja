@@ -55,3 +55,8 @@ tests/bouncer_check
 tests/service_words_check
 tests/service_check
 tests/flags_check
+cmd/soja/soja
+cmd/soja/obj/
+cmd/sojadb/sojadb
+cmd/sojadb/obj/
+tests/__pycache__/

@@ -244,6 +244,32 @@ Deviations:
   context, which has no deadline).
 - `server status` reads the gauges of `Soja.Server` (downstreams, upstreams).
 
+### Executables (`cmd/soja`, `cmd/sojadb`) and the end-to-end check
+
+Step 10.  `soja` (main unit `Soja_Main`, since `Soja` is the library's root
+package; the project renames the executable) is `cmd/soju/main.go`: flags
+`-config`, `-listen` (repeatable), `-debug`; SIGINT/SIGTERM shut down in order,
+SIGHUP reloads the configuration (`pragma Interrupt_State (SIGINT, User)` in
+`cmd/soja/soja.adc`, because GNAT reserves SIGINT).  `sojadb` is
+`cmd/sojudb/main.go` (`create-user`, `change-password`; the password is read
+without echo through `stty`).  The default config path is `/etc/soju/config`.
+What it refuses or changes, loudly:
+
+- Listeners: `ircs://` and `irc+insecure://` only; any other scheme (unix,
+  ws, http, ident, prometheus, pprof, unix+admin) is a startup error.
+- Auth drivers other than `internal` (pam, oauth2) are a startup error: a
+  bouncer that cannot check passwords must not start as if it could.
+- Message stores other than `memory` fall back to memory, with a warning;
+  `file-upload` is ignored, with a warning; only the SQLite database driver.
+- TLS certificates are read when the listener starts, so SIGHUP does not
+  reload them (Go swaps them atomically).
+
+`tests/e2e.sh` (inside the toolchain container) builds both programs, starts
+ngircd and soja, and runs `tests/e2e_scenario.py`: register, create a network
+through BouncerServ, join, messages both ways, a kick that is not undone,
+replay on reconnect without a new upstream JOIN, and a restart that rejoins
+once.  It passes.
+
 ## Open decisions
 
 - **v1 scope**: webpush, PAM, and PostgreSQL are the heavy items; ship

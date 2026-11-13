@@ -1,5 +1,6 @@
 pragma Ada_2022;
 
+with Ada.Exceptions;
 with Ada.IO_Exceptions;
 with Ada.Streams;
 with Ada.Strings.Fixed;
@@ -57,7 +58,19 @@ package body Soja.Conn.Net is
             end;
          end if;
 
-         C.Sock.Receive (Chunk, Last);
+         begin
+            C.Sock.Receive (Chunk, Last);
+         exception
+            when E : AWS.Net.Socket_Error =>
+               --  AWS reports an orderly close as an error: it is the EOF.
+               if Ada.Strings.Fixed.Index
+                    (Ada.Exceptions.Exception_Message (E), "closed by peer") > 0
+               then
+                  Last := Chunk'First - 1;
+               else
+                  raise;
+               end if;
+         end;
          if Last < Chunk'First then
             --  Peer closed the connection.
             if Length (C.Buffer) = 0 then
