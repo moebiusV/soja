@@ -32,4 +32,10 @@ package Soja.Core.Network_Ops is
    procedure Attach
      (Net : not null Network_Access; Ch : not null Channel_Access);
 
+   --  net.deleteChannel: forget a saved channel (and its idle timer).  Raises
+   --  Soja.Core.User_Ops.Operation_Error when it is not saved or the database
+   --  refuses.
+   procedure Delete_Channel
+     (Net : not null Network_Access; Name : String);
+
 end Soja.Core.Network_Ops;

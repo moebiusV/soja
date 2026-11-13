@@ -36,6 +36,10 @@ package Soja.Irc.Helpers is
    function Lower (S : String) return String;
    function Fields (S : String) return Soja.Irc.Genmsg.String_Vectors.Vector;
 
+   --  strings.Split(s, ","): every piece, empty ones included.
+   function Split_Commas (S : String)
+      return Soja.Irc.Genmsg.String_Vectors.Vector;
+
    --  parseMessageParams: Count is the number of parameters the caller is
    --  about to read; a message with fewer fails with ERR_NEEDMOREPARAMS.
    --  The caller then reads them with Messages.Param.

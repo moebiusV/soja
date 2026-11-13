@@ -6,6 +6,8 @@ with Ada.Exceptions;
 
 with Soja.Core.Downstream_Helpers;
 with Soja.Core.Upstream_Dispatch;
+with Soja.Core.User_Ops;
+with Soja.Server;
 with Soja.Irc.Case_Mapping;
 with Soja.Irc.Genmsg;
 with Soja.Irc.Helpers;
@@ -15,6 +17,7 @@ package body Soja.Core.Network_Ops is
 
    use Soja.Irc.Messages;
    use type Soja.Msgstore.Store_Access;
+   use type Soja.Database.Database_Access;
    use type Ada.Containers.Count_Type;
    use type Soja.Database.Message_Filter;
 
@@ -169,5 +172,44 @@ package body Soja.Core.Network_Ops is
          end loop;
       end;
    end Attach;
+
+   ----------------
+   -- Delete_Channel --
+   ----------------
+
+   procedure Delete_Channel
+     (Net : not null Network_Access; Name : String)
+   is
+      Ch : constant Channel_Access := Net.Channels.Get (Name);
+      DB : constant Soja.Database.Database_Access :=
+        Soja.Server.DB (Net.User.Srv.all);
+   begin
+      if Ch = null then
+         raise Soja.Core.User_Ops.Operation_Error with
+           "unknown channel " & Soja.Irc.Helpers.Quote (Name);
+      end if;
+
+      if Net.Conn /= null then
+         declare
+            Uch : constant Upstream_Channel_Access :=
+              Net.Conn.Channels.Get (To_String (Ch.Name));
+         begin
+            if Uch /= null then
+               Update_Auto_Detach (Uch, 0.0);
+            end if;
+         end;
+      end if;
+
+      if DB /= null and then Ch.ID /= 0 then
+         begin
+            Soja.Database.Delete_Channel (DB.all, Ch.ID);
+         exception
+            when E : Soja.Database.Database_Error =>
+               raise Soja.Core.User_Ops.Operation_Error with
+                 Ada.Exceptions.Exception_Message (E);
+         end;
+      end if;
+      Net.Channels.Del (Name);
+   end Delete_Channel;
 
 end Soja.Core.Network_Ops;

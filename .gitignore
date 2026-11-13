@@ -38,6 +38,7 @@ tests/upstream_dispatch_check
 tests/kicks_check
 tests/user_events_check
 tests/handshake_check
+tests/commands_check
 
 # Test fixtures (regenerate with the openssl commands in certfp_check.adb)
 tests/certfp_cert.pem

@@ -63,6 +63,22 @@ package body Soja.Irc.Helpers is
       return V;
    end Fields;
 
+   function Split_Commas (S : String)
+      return Soja.Irc.Genmsg.String_Vectors.Vector
+   is
+      V     : Soja.Irc.Genmsg.String_Vectors.Vector;
+      Start : Positive := S'First;
+   begin
+      for I in S'Range loop
+         if S (I) = ',' then
+            V.Append (S (Start .. I - 1));
+            Start := I + 1;
+         end if;
+      end loop;
+      V.Append (S (Start .. S'Last));
+      return V;
+   end Split_Commas;
+
    --------------------------
    -- Format_Member_Prefix --
    --------------------------

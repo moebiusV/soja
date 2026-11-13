@@ -603,11 +603,18 @@ begin
       DC2.Network := Net;
 
       --  Messages: dispatched; IRC errors go back to the client.
-      Count := DC2_Log.Count;
+      Count := UC_Log.Count;
       Send (U, new Downstream_Message_Event'
               (Msg => Parse_Message ("FROBNICATE x"), DC => DC2));
+      Check (Wait (UC_Log, Count + 1) and then UC_Log.Has ("FROBNICATE x"),
+             "unknown commands are relayed upstream on a network");
+      Count := DC2_Log.Count;
+      Net.Conn := null;
+      Send (U, new Downstream_Message_Event'
+              (Msg => Parse_Message ("FROBNICATE y"), DC => DC2));
       Check (Wait (DC2_Log, Count + 1) and then DC2_Log.Has (" 421 "),
-             "unknown commands are answered with 421");
+             "unknown commands are answered with 421 while disconnected");
+      Net.Conn := UC;
       Count := DC2_Log.Count;
       Soja.Conn.Close (DC.Conn);
       Send (U, new Downstream_Message_Event'

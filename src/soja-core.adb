@@ -13,6 +13,7 @@ with AWS.Net.Std;
 with CryptoLib.Hashes;
 with Soja.Backoff;
 with Soja.Conn.Net;
+with Soja.Core.Downstream_Commands;
 with Soja.Core.Downstream_Handshake;
 with Soja.Core.Upstream_Dispatch;
 with Soja.Core.User_Events;
@@ -1138,18 +1139,12 @@ package body Soja.Core is
         and then not Soja.Msgstore.Memory.Is_Memory_Store (U.Msg_Store.all);
    end Has_Persistent_Msg_Store;
 
-   --  Until the registered-client command dispatch (downstream.go's
-   --  handleMessageRegistered) is ported, every command is unknown.
    function Handle_Message_Registered
      (DC : not null Downstream_Conn_Access; M : Message)
       return Irc_Error_Result
    is
-      pragma Unreferenced (DC);
    begin
-      return (Failed => True, Is_IRC => True,
-              Err => Soja.Downstream.New_Unknown_Command_Error
-                       (To_String (M.Command)),
-              Text => Null_Unbounded_String);
+      return Soja.Core.Downstream_Commands.Handle_Message_Registered (DC, M);
    end Handle_Message_Registered;
 
    function Handle_Downstream_Message
