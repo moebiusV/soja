@@ -1,6 +1,7 @@
 pragma Ada_2022;
 
 with Ada.Calendar;
+with Ada.Directories;
 with Ada.Text_IO;
 with Ada.Strings.Unbounded;
 
@@ -291,11 +292,90 @@ begin
       end if;
    end;
 
+   --  Kick records: history is never deleted, only deactivated.
+   declare
+      Net_ID : constant Long_Long_Integer :=
+        List_Networks (DB.all, Get_User (DB.all, "alice").ID) (1).ID;
+      K1, K2, K3 : Kick_Record;
+   begin
+      K1.Channel := To_Unbounded_String ("#chan");
+      K1.Kicked_By := To_Unbounded_String ("op");
+      K1.Reason := To_Unbounded_String ("out");
+      K1.Kicked_At := Get_Now;
+      Store_Kick (DB.all, Net_ID, K1);
+      if K1.ID = 0 then
+         raise Program_Error with "Store_Kick must set the ID";
+      end if;
+      K2.Channel := To_Unbounded_String ("#other");
+      K2.Kicked_By := To_Unbounded_String ("bot");
+      K2.Kicked_At := Get_Now;
+      Store_Kick (DB.all, Net_ID, K2);
+
+      declare
+         Active : constant Kick_Lists.Vector := List_Kicks (DB.all, Net_ID, True);
+      begin
+         if Natural (Active.Length) /= 2
+           or else Active (1).ID /= K1.ID
+           or else Active (1).Channel /= To_Unbounded_String ("#chan")
+           or else Active (1).Kicked_By /= To_Unbounded_String ("op")
+           or else Active (1).Reason /= To_Unbounded_String ("out")
+           or else Active (2).Reason /= Null_Unbounded_String
+           or else Active (1).Rejoined_At /= Null_Time
+         then
+            raise Program_Error with "active kicks wrong";
+         end if;
+         Assert_Near (Active (1).Kicked_At, K1.Kicked_At, 0.01, "kicked_at");
+      end;
+
+      --  Rejoining deactivates the record but keeps it.
+      K1.Rejoined_At := Get_Now;
+      Store_Kick (DB.all, Net_ID, K1);
+      declare
+         Active  : constant Kick_Lists.Vector := List_Kicks (DB.all, Net_ID, True);
+         History : constant Kick_Lists.Vector := List_Kicks (DB.all, Net_ID, False);
+      begin
+         if Natural (Active.Length) /= 1
+           or else Active (1).Channel /= To_Unbounded_String ("#other")
+         then
+            raise Program_Error with "a rejoined kick must not be active";
+         end if;
+         if Natural (History.Length) /= 2
+           or else History (1).Rejoined_At = Null_Time
+           or else History (2).Rejoined_At /= Null_Time
+         then
+            raise Program_Error with "history must keep rejoined kicks";
+         end if;
+         Assert_Near (History (1).Rejoined_At, K1.Rejoined_At, 0.01, "rejoined_at");
+      end;
+
+      --  Kicked from the same channel again: a new record, the old one stays.
+      K3 := (ID => 0, Rejoined_At => Null_Time, Kicked_At => Get_Now,
+             Channel => K1.Channel, Kicked_By => To_Unbounded_String ("op2"),
+             Reason => To_Unbounded_String ("again"));
+      Store_Kick (DB.all, Net_ID, K3);
+      if K3.ID = K1.ID
+        or else Natural (List_Kicks (DB.all, Net_ID, True).Length) /= 2
+        or else Natural (List_Kicks (DB.all, Net_ID, False).Length) /= 3
+      then
+         raise Program_Error with "a new kick must be a new record";
+      end if;
+
+      --  Other networks are unaffected.
+      if not List_Kicks (DB.all, Net_ID + 1000, False).Is_Empty then
+         raise Program_Error with "kicks leaked across networks";
+      end if;
+   end;
+
    --  DeleteUser cascades to networks/channels/receipts.
    declare
       User_ID : constant Long_Long_Integer := Get_User (DB.all, "alice").ID;
+      Net_ID  : constant Long_Long_Integer :=
+        List_Networks (DB.all, User_ID) (1).ID;
    begin
       Delete_User (DB.all, User_ID);
+      if not List_Kicks (DB.all, Net_ID, False).Is_Empty then
+         raise Program_Error with "DeleteUser did not delete the kicks";
+      end if;
       if Natural (List_Users (DB.all).Length) /= 0 then
          raise Program_Error with "DeleteUser did not delete the user";
       end if;
@@ -305,6 +385,48 @@ begin
    end;
 
    Close (DB.all);
+
+   --  Kick records survive reopening the database file, and adding their
+   --  table does not change the schema version soju checks.
+   declare
+      Path : constant String := "/tmp/soja_kick_check.db";
+      Net_ID : Long_Long_Integer;
+      U : User := New_User ("kicker");
+      N : Network := New_Network ("irc.example");
+      K : Kick_Record;
+   begin
+      if Ada.Directories.Exists (Path) then
+         Ada.Directories.Delete_File (Path);
+      end if;
+      DB := Soja.Database.Sqlite.Open_Sqlite_DB (Path);
+      Store_User (DB.all, U);
+      Store_Network (DB.all, U.ID, N);
+      Net_ID := N.ID;
+      K.Channel := To_Unbounded_String ("#persist");
+      K.Kicked_By := To_Unbounded_String ("op");
+      K.Kicked_At := Get_Now;
+      Store_Kick (DB.all, Net_ID, K);
+      Close (DB.all);
+
+      DB := Soja.Database.Sqlite.Open_Sqlite_DB (Path);
+      declare
+         Active : constant Kick_Lists.Vector := List_Kicks (DB.all, Net_ID, True);
+      begin
+         if Natural (Active.Length) /= 1
+           or else Active (1).Channel /= To_Unbounded_String ("#persist")
+         then
+            raise Program_Error with "kick did not survive reopening";
+         end if;
+      end;
+
+      --  Deleting the network removes its kicks with it.
+      Delete_Network (DB.all, Net_ID);
+      if not List_Kicks (DB.all, Net_ID, False).Is_Empty then
+         raise Program_Error with "DeleteNetwork must delete its kicks";
+      end if;
+      Close (DB.all);
+      Ada.Directories.Delete_File (Path);
+   end;
 
    Ada.Text_IO.Put_Line ("ALL PASS");
 end Sqlite_Check;

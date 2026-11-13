@@ -20,6 +20,9 @@ with Soja.Irc.Helpers;
 with Soja.Irc.Modes;
 with Soja.Irc.Numerics;
 with Soja.Irc.User_Modes;
+with Soja.Irc.Whox;
+with Soja.Backoff;
+with Soja.Timers;
 with Soja.Irc.Xirc;
 
 package body Soja.Core.Upstream_Dispatch is
@@ -1071,7 +1074,8 @@ package body Soja.Core.Upstream_Dispatch is
       for Name of Split_Commas (Param (Msg, 0)) loop
          if Is_Our_Nick (UC, To_String (Msg.Prefix.Name)) then
             UC.Logger.Print ("joined channel " & Quote (Name));
-            UC.Network.Kicked.Del (Name);   --  back in: no longer "kicked"
+            Clear_Kick (UC.Network, Name);   --  back in: no longer "kicked"
+            Cancel_Join_Retry (UC, Name);
             UC.Channels.Set (Name, New_Upstream_Channel (UC, Name));
             Update_Channel_Auto_Detach (UC, Name);
 
@@ -1179,13 +1183,9 @@ package body Soja.Core.Upstream_Dispatch is
             UC.Logger.Print
               ("kicked from channel " & Quote (Channel) & " by "
                & To_String (Msg.Prefix.Name));
-            UC.Network.Kicked.Set
-              (Channel,
-               new Kick_Info'
-                 (Kicked_By => Msg.Prefix.Name,
-                  Reason    => (if Msg.Params.Length > 2 then Msg.Params (3)
-                                else Null_Unbounded_String),
-                  At_Time   => Ada.Calendar.Clock));
+            Record_Kick
+              (UC.Network, Channel, To_String (Msg.Prefix.Name),
+               (if Msg.Params.Length > 2 then Param (Msg, 2) else ""));
             declare
                Uch : constant Upstream_Channel_Access :=
                  UC.Channels.Get (Channel);
@@ -1777,6 +1777,592 @@ package body Soja.Core.Upstream_Dispatch is
       end;
       return Success;
    end Handle_Chat;
+
+   ----------------------------------------------------------------------
+   --  4d: replies, users, MONITOR
+   ----------------------------------------------------------------------
+
+   function Handle_List
+     (UC : not null Upstream_Conn_Access; Msg : Message; Is_End : Boolean)
+      return Handle_Result
+   is
+      P : constant Pending_Command :=
+        (if Is_End then Dequeue_Command (UC, "LIST")
+         else Current_Pending_Command (UC, "LIST"));
+   begin
+      if not P.Found then
+         return Fail
+           ((if Is_End then "unexpected RPL_LISTEND"
+             else "unexpected RPL_LIST") & ": no matching pending LIST");
+      elsif P.DC = null then
+         return Success;
+      end if;
+      Send_Message (P.DC, Msg);
+      return Success;
+   end Handle_List;
+
+   function Replace_All (S : String; From, To : Character) return String is
+      R : String := S;
+   begin
+      for C of R loop
+         if C = From then
+            C := To;
+         end if;
+      end loop;
+      return R;
+   end Replace_All;
+
+   function Handle_Who_Reply
+     (UC : not null Upstream_Conn_Access; Msg : Message) return Handle_Result
+   is
+      Bad : Boolean;
+      R   : constant Handle_Result := Check_Params (Msg, 8, Bad);
+   begin
+      if Bad then
+         return R;
+      end if;
+
+      declare
+         Pending : constant Pending_Command :=
+           Current_Pending_Command (UC, "WHO");
+      begin
+         if not Pending.Found then
+            return Fail ("unexpected RPL_WHOREPLY: no matching pending WHO");
+         elsif Pending.DC = null then
+            return Success;
+         end if;
+
+         declare
+            Trailing : constant String := Param (Msg, 7);
+            Space    : constant Natural :=
+              Ada.Strings.Fixed.Index (Trailing, " ");
+            Nick     : constant String := Param (Msg, 5);
+         begin
+            if Space = 0 then
+               return Fail
+                 ("malformed RPL_WHOREPLY: failed to parse real name");
+            end if;
+
+            Send_Message (Pending.DC, Msg);
+
+            if Should_Cache_User_Info (UC, Nick) then
+               Cache_User_Info
+                 (UC, Nick,
+                  (Username => Msg.Params (3),
+                   Hostname => Msg.Params (4),
+                   Server   => Msg.Params (5),
+                   Nickname => To_Unbounded_String (Nick),
+                   Flags    => To_Unbounded_String
+                     (Strip_Member_Prefixes
+                        (Param (Msg, 6), UC.Available_Memberships)),
+                   Realname => To_Unbounded_String
+                     (Trailing (Space + 1 .. Trailing'Last)),
+                   others   => <>));
+            end if;
+         end;
+      end;
+      return Success;
+   end Handle_Who_Reply;
+
+   function Handle_Whox_Reply
+     (UC : not null Upstream_Conn_Access; Msg : Message) return Handle_Result
+   is
+      Pending : constant Pending_Command := Current_Pending_Command (UC, "WHO");
+   begin
+      if not Pending.Found then
+         return Fail ("unexpected RPL_WHOSPCRPL: no matching pending WHO");
+      elsif Pending.DC = null then
+         return Success;
+      end if;
+
+      Send_Message (Pending.DC, Msg);
+
+      if Pending.Msg.Params.Length > 1 then
+         declare
+            Fields, Token : Unbounded_String;
+         begin
+            Soja.Irc.Whox.Parse_Whox_Options
+              (Param (Pending.Msg, 1), Fields, Token);
+            if Ada.Strings.Fixed.Index (To_String (Fields), "n") = 0 then
+               return Success;
+            end if;
+
+            declare
+               Info : constant Soja.Irc.Whox.Whox_Info :=
+                 Soja.Irc.Whox.Parse_Whox_Reply (Msg, To_String (Fields));
+            begin
+               if Should_Cache_User_Info (UC, To_String (Info.Nickname)) then
+                  Cache_User_Info
+                    (UC, To_String (Info.Nickname),
+                     (Nickname => Info.Nickname,
+                      Username => Info.Username,
+                      Hostname => Info.Hostname,
+                      Server   => Info.Server,
+                      Flags    => To_Unbounded_String
+                        (Strip_Member_Prefixes
+                           (To_String (Info.Flags), UC.Available_Memberships)),
+                      Account  => Info.Account,
+                      Realname => Info.Realname));
+               end if;
+            end;
+         exception
+            when E : Soja.Irc.Whox.Whox_Error =>
+               return Fail (Ada.Exceptions.Exception_Message (E));
+         end;
+      end if;
+      return Success;
+   end Handle_Whox_Reply;
+
+   function Handle_End_Of_Who
+     (UC : not null Upstream_Conn_Access; Msg : Message) return Handle_Result
+   is
+      Pending : constant Pending_Command := Dequeue_Command (UC, "WHO");
+   begin
+      --  No pending WHO: some servers send RPL_TRYAGAIN followed by
+      --  RPL_ENDOFWHO.  No downstream: it is gone.
+      if Pending.Found and then Pending.DC /= null then
+         Send_Message (Pending.DC, Msg);
+      end if;
+      return Success;
+   end Handle_End_Of_Who;
+
+   function Handle_Whois_Reply
+     (UC : not null Upstream_Conn_Access; Msg : Message) return Handle_Result
+   is
+      Pending : constant Pending_Command := Current_Pending_Command (UC, "WHOIS");
+   begin
+      if not Pending.Found then
+         return Fail
+           ("unexpected WHOIS reply " & Quote (To_String (Msg.Command))
+            & ": no matching pending WHOIS");
+      elsif Pending.DC /= null then
+         Send_Message (Pending.DC, Msg);
+      end if;
+      return Success;
+   end Handle_Whois_Reply;
+
+   function Handle_End_Of_Whois
+     (UC : not null Upstream_Conn_Access; Msg : Message) return Handle_Result
+   is
+      Pending : constant Pending_Command := Dequeue_Command (UC, "WHOIS");
+   begin
+      if not Pending.Found then
+         return Fail
+           ("unexpected RPL_ENDOFWHOIS: no matching pending WHOIS");
+      elsif Pending.DC /= null then
+         Send_Message (Pending.DC, Msg);
+      end if;
+      return Success;
+   end Handle_End_Of_Whois;
+
+   function Handle_No_Such_Nick
+     (UC : not null Upstream_Conn_Access;
+      Msg : Message;
+      Downstream_ID : Long_Long_Integer) return Handle_Result
+   is
+      Bad : Boolean;
+      R   : constant Handle_Result := Check_Params (Msg, 3, Bad);
+   begin
+      if Bad then
+         return R;
+      end if;
+
+      --  A one-argument WHOIS fails with NOSUCHNICK, the two-argument
+      --  variant with NOSUCHSERVER.
+      declare
+         use Soja.Irc.Case_Mapping;
+         Nick    : constant String := Param (Msg, 1);
+         Pending : constant Pending_Command :=
+           Current_Pending_Command (UC, "WHOIS");
+      begin
+         if Pending.Found and then Pending.Msg.Params.Length > 0
+           and then Fold (UC.Network.Casemap, Trailing (Pending.Msg))
+                    = Fold (UC.Network.Casemap, Nick)
+         then
+            declare
+               Ignored : constant Pending_Command :=
+                 Dequeue_Command (UC, "WHOIS");
+               pragma Unreferenced (Ignored);
+            begin
+               if Pending.DC /= null then
+                  Send_Message (Pending.DC, Msg);
+               end if;
+            end;
+         else
+            Forward_Msg_By_ID (UC, Downstream_ID, Msg);
+         end if;
+      end;
+      return Success;
+   end Handle_No_Such_Nick;
+
+   function Handle_Invite
+     (UC : not null Upstream_Conn_Access; Msg : Message) return Handle_Result
+   is
+      Bad : Boolean;
+      R   : constant Handle_Result := Check_Params (Msg, 2, Bad);
+   begin
+      if Bad then
+         return R;
+      end if;
+
+      declare
+         Channel : constant String := Param (Msg, 1);
+         Invited : constant Boolean := Is_Our_Nick (UC, Param (Msg, 0));
+      begin
+         if Invited then
+            declare
+               Joined : constant Boolean := UC.Channels.Get (Channel) /= null;
+               Saved  : constant Channel_Access :=
+                 UC.Network.Channels.Get (Channel);
+            begin
+               --  Automatically join a saved channel when we are invited --
+               --  unless we were kicked from it and stayed out: then the
+               --  invitation is shown to the clients, who decide.
+               if not Joined and then Saved /= null
+                 and then not UC.Network.Kicked.Has (Channel)
+               then
+                  for M of Generate_Join
+                             ([To_String (Saved.Name)], [To_String (Saved.Key)])
+                  loop
+                     Send_Message (UC, M);
+                  end loop;
+                  return Success;
+               end if;
+            end;
+         end if;
+
+         for DC of Downstreams (UC.Network) loop
+            if Invited or else Is_Enabled (DC.Caps, "invite-notify") then
+               Send_Message (DC, Msg);
+            end if;
+         end loop;
+         --  TODO: Web Push (broadcastWebPush) when we are invited.
+      end;
+      return Success;
+   end Handle_Invite;
+
+   function Handle_Monitor_Status
+     (UC : not null Upstream_Conn_Access; Msg : Message) return Handle_Result
+   is
+      Bad : Boolean;
+      R   : constant Handle_Result := Check_Params (Msg, 2, Bad);
+   begin
+      if Bad then
+         return R;
+      end if;
+
+      declare
+         Cmd     : constant String := To_String (Msg.Command);
+         Targets : constant String_Vectors.Vector :=
+           Split_Commas (Param (Msg, 1));
+         Online  : constant Boolean := Cmd = RPL_MONONLINE;
+         Want    : constant String := Soja.Database.Get_Nick
+           (UC.User.User_Record, UC.Network.Network_Record);
+      begin
+         for Target of Targets loop
+            UC.Monitored.Set (To_String (Parse_Prefix (Target).Name), Online);
+         end loop;
+
+         --  Check if the nick we want is now free.
+         if not Online and then not Is_Our_Nick (UC, Want)
+           and then not UC.Has_Desired_Nick
+         then
+            for Target of Targets loop
+               if Equal_Casemap
+                    (UC.Network, To_String (Parse_Prefix (Target).Name), Want)
+               then
+                  UC.Logger.Print
+                    ("desired nick " & Quote (Want) & " is now available");
+                  Send_Message (UC, Make ("NICK", [Want]));
+                  exit;
+               end if;
+            end loop;
+         end if;
+
+         for DC of Downstreams (UC.Network) loop
+            for Target of Targets loop
+               if DC.Monitored.Has (To_String (Parse_Prefix (Target).Name))
+               then
+                  Send_Message (DC, Make (Cmd, [To_String (DC.Nick), Target]));
+               end if;
+            end loop;
+         end loop;
+      end;
+      return Success;
+   end Handle_Monitor_Status;
+
+   function Handle_Monitor_List_Full
+     (UC : not null Upstream_Conn_Access; Msg : Message) return Handle_Result
+   is
+      Bad : Boolean;
+      R   : constant Handle_Result := Check_Params (Msg, 3, Bad);
+   begin
+      if Bad then
+         return R;
+      end if;
+      declare
+         Limit   : constant String := Param (Msg, 1);
+         Targets : constant String_Vectors.Vector :=
+           Split_Commas (Param (Msg, 2));
+      begin
+         for DC of Downstreams (UC.Network) loop
+            for Target of Targets loop
+               if DC.Monitored.Has (Target) then
+                  Send_Message
+                    (DC, Make (ERR_MONLISTFULL,
+                               [To_String (DC.Nick), Limit, Target]));
+               end if;
+            end loop;
+         end loop;
+      end;
+      return Success;
+   end Handle_Monitor_List_Full;
+
+   procedure Handle_Away (UC : not null Upstream_Conn_Access; Msg : Message) is
+      Nick : constant String := To_String (Msg.Prefix.Name);
+      Uu   : constant Upstream_User_Access := UC.Users.Get (Nick);
+   begin
+      --  Update the user flags, if we already have them cached.
+      if Uu /= null and then Length (Uu.Flags) > 0 then
+         declare
+            Flags : constant String := To_String (Uu.Flags);
+            Away  : constant Boolean := not Msg.Params.Is_Empty;
+         begin
+            Cache_User_Info
+              (UC, Nick,
+               (Flags => To_Unbounded_String
+                  (if Away then Replace_All (Flags, 'H', 'G')
+                   else Replace_All (Flags, 'G', 'H')),
+                others => <>));
+         end;
+      end if;
+      Forward_Message (UC, Msg);
+   end Handle_Away;
+
+   function Handle_Account
+     (UC : not null Upstream_Conn_Access; Msg : Message) return Handle_Result
+   is
+      Bad : Boolean;
+      R   : constant Handle_Result := Check_Params (Msg, 1, Bad);
+   begin
+      if Bad then
+         return R;
+      end if;
+      Cache_User_Info
+        (UC, To_String (Msg.Prefix.Name),
+         (Account => Msg.Params (1), others => <>));
+      Forward_Message (UC, Msg);
+      return Success;
+   end Handle_Account;
+
+   function Handle_Setname
+     (UC : not null Upstream_Conn_Access; Msg : Message) return Handle_Result
+   is
+      use Soja.Core.Downstream_Helpers;
+      Bad : Boolean;
+      R   : constant Handle_Result := Check_Params (Msg, 1, Bad);
+   begin
+      if Bad then
+         return R;
+      end if;
+
+      Cache_User_Info
+        (UC, To_String (Msg.Prefix.Name),
+         (Realname => Msg.Params (1), others => <>));
+
+      --  TODO (Go): consider appending this message to logs.
+      if Is_Our_Nick (UC, To_String (Msg.Prefix.Name)) then
+         UC.Logger.Print
+           ("changed realname from " & Quote (To_String (UC.Realname))
+            & " to " & Quote (Param (Msg, 0)));
+         UC.Realname := Msg.Params (1);
+         for DC of Downstreams (UC.Network) loop
+            Update_Realname (DC);
+         end loop;
+      else
+         Forward_Message (UC, Msg);
+      end if;
+      return Success;
+   end Handle_Setname;
+
+   function Handle_Chghost
+     (UC : not null Upstream_Conn_Access; Msg : Message) return Handle_Result
+   is
+      use Soja.Core.Downstream_Helpers;
+      Bad : Boolean;
+      R   : constant Handle_Result := Check_Params (Msg, 2, Bad);
+   begin
+      if Bad then
+         return R;
+      end if;
+
+      if Is_Our_Nick (UC, To_String (Msg.Prefix.Name)) then
+         declare
+            New_Prefix : constant Soja.Irc.Messages.Prefix :=
+              (Name => UC.Nick, User => Msg.Params (1), Host => Msg.Params (2));
+         begin
+            UC.Logger.Print
+              ("changed prefix from " & Quote (To_String (Msg.Prefix.Host))
+               & " to " & Quote (Image (New_Prefix)));
+         end;
+         UC.Username := Msg.Params (1);
+         UC.Hostname := Msg.Params (2);
+         for DC of Downstreams (UC.Network) loop
+            Update_Host (DC);
+         end loop;
+      else
+         --  TODO (Go): add a fallback with QUIT/JOIN/MODE messages.
+         Forward_Message (UC, Msg);
+      end if;
+      return Success;
+   end Handle_Chghost;
+
+   ----------------------------------------------------------------------
+   --  Channel-full retries (soja-specific; see PORTING.md)
+   ----------------------------------------------------------------------
+
+   type Join_Retry_Action is new Soja.Timers.Action with record
+      UC   : Upstream_Conn_Access;
+      Name : Unbounded_String;
+   end record;
+
+   overriding procedure Run (A : in out Join_Retry_Action) is
+      Ok : Boolean := False;
+   begin
+      --  Post without blocking for good: whoever stops this timer waits for
+      --  this procedure, and may be the very task that must make room.
+      for Attempt in 1 .. 20 loop
+         A.UC.Network.User.Events.Try_Enqueue
+           (new Retry_Join_Event'(UC => A.UC, Name => A.Name), Ok);
+         exit when Ok;
+         delay 0.5;
+      end loop;
+      if not Ok then
+         A.UC.Logger.Print
+           ("skipping a join retry: the event queue is full");
+      end if;
+   end Run;
+
+   --  The channel is saved, we are not in it, we were not kicked from it, and
+   --  UC is still the network's connection.
+   function Should_Retry_Join
+     (UC : not null Upstream_Conn_Access; Name : String) return Boolean
+   is
+   begin
+      return UC.Network.Conn = UC
+        and then UC.Network.Channels.Has (Name)
+        and then UC.Channels.Get (Name) = null
+        and then not UC.Network.Kicked.Has (Name);
+   end Should_Retry_Join;
+
+   procedure Cancel_Join_Retry
+     (UC : not null Upstream_Conn_Access; Name : String)
+   is
+      R : constant Join_Retry_Access := UC.Join_Retries.Get (Name);
+   begin
+      if R /= null then
+         Soja.Timers.Stop (R.Timer);
+         UC.Join_Retries.Del (Name);
+      end if;
+   end Cancel_Join_Retry;
+
+   procedure Stop_Join_Retries (UC : not null Upstream_Conn_Access) is
+      Names : String_Vectors.Vector;
+
+      procedure Collect (Name : String; R : Join_Retry_Access) is
+         pragma Unreferenced (R);
+      begin
+         Names.Append (Name);
+      end Collect;
+   begin
+      UC.Join_Retries.For_Each (Collect'Access);
+      for Name of Names loop
+         Cancel_Join_Retry (UC, Name);
+      end loop;
+   end Stop_Join_Retries;
+
+   --  Arm the next retry (unless one is pending already).
+   procedure Schedule_Join_Retry
+     (UC : not null Upstream_Conn_Access; Name : String)
+   is
+      R : Join_Retry_Access := UC.Join_Retries.Get (Name);
+   begin
+      if not Should_Retry_Join (UC, Name) then
+         Cancel_Join_Retry (UC, Name);
+         return;
+      end if;
+
+      if R = null then
+         R := new Join_Retry;
+         R.Backoff := new Soja.Backoff.Backoffer'
+           (Soja.Backoff.New_Backoffer
+              (Join_Retry_Min, Join_Retry_Max, Join_Retry_Jitter));
+         declare
+            First : constant Duration := Soja.Backoff.Next (R.Backoff.all);
+            pragma Unreferenced (First);   --  the immediate first value
+         begin
+            null;
+         end;
+         UC.Join_Retries.Set (Name, R);
+      end if;
+
+      if R.Armed then
+         return;
+      end if;
+      R.Armed := True;
+      Soja.Timers.Stop (R.Timer);
+      R.Timer := Soja.Timers.After_Func
+        (Soja.Backoff.Next (R.Backoff.all),
+         new Join_Retry_Action'(UC => UC, Name => To_Unbounded_String (Name)));
+   end Schedule_Join_Retry;
+
+   procedure Retry_Join
+     (UC : not null Upstream_Conn_Access; Name : String)
+   is
+      R : constant Join_Retry_Access := UC.Join_Retries.Get (Name);
+   begin
+      if R = null then
+         return;
+      end if;
+      R.Armed := False;
+
+      if not Should_Retry_Join (UC, Name) then
+         Cancel_Join_Retry (UC, Name);
+         return;
+      end if;
+
+      declare
+         Saved : constant Channel_Access := UC.Network.Channels.Get (Name);
+      begin
+         UC.Logger.Print
+           ("retrying to join " & Quote (Name) & ", it was full");
+         for M of Generate_Join
+                    ([To_String (Saved.Name)], [To_String (Saved.Key)])
+         loop
+            Send_Message (UC, M);
+         end loop;
+      end;
+
+      --  Keep trying, with a growing delay, until we are in (the JOIN
+      --  handler cancels this), kicked, or the channel is no longer saved.
+      Schedule_Join_Retry (UC, Name);
+   end Retry_Join;
+
+   --  ERR_CHANNELISFULL: relay it, and retry the saved channel later.  The
+   --  other join failures (banned, bad key, invite-only, ...) are only
+   --  relayed: they are not retried.
+   function Handle_Channel_Full
+     (UC : not null Upstream_Conn_Access;
+      Msg : Message;
+      Downstream_ID : Long_Long_Integer) return Handle_Result
+   is
+   begin
+      Forward_Msg_By_ID (UC, Downstream_ID, Msg);
+      if Msg.Params.Length >= 2 then
+         Schedule_Join_Retry (UC, Param (Msg, 1));
+      end if;
+      return Success;
+   end Handle_Channel_Full;
 
    function Handle_Cap
      (UC : not null Upstream_Conn_Access; Msg : Message) return Handle_Result
@@ -2428,6 +3014,77 @@ package body Soja.Core.Upstream_Dispatch is
 
       elsif Cmd = RPL_ENDOFNAMES then
          return Handle_End_Of_Names (UC, Msg, Downstream_ID);
+
+      elsif Cmd = RPL_LISTSTART or else Cmd = RPL_LIST then
+         return Handle_List (UC, Msg, Is_End => False);
+
+      elsif Cmd = RPL_LISTEND then
+         return Handle_List (UC, Msg, Is_End => True);
+
+      elsif Cmd = RPL_WHOREPLY then
+         return Handle_Who_Reply (UC, Msg);
+
+      elsif Cmd = RPL_WHOSPCRPL then
+         return Handle_Whox_Reply (UC, Msg);
+
+      elsif Cmd = RPL_ENDOFWHO then
+         return Handle_End_Of_Who (UC, Msg);
+
+      elsif Cmd = RPL_WHOISCERTFP or else Cmd = RPL_WHOISREGNICK
+        or else Cmd = RPL_WHOISUSER or else Cmd = RPL_WHOISSERVER
+        or else Cmd = RPL_WHOISCHANNELS or else Cmd = RPL_WHOISOPERATOR
+        or else Cmd = RPL_WHOISIDLE or else Cmd = RPL_WHOISSPECIAL
+        or else Cmd = RPL_WHOISACCOUNT or else Cmd = RPL_WHOISACTUALLY
+        or else Cmd = RPL_WHOISHOST or else Cmd = RPL_WHOISMODES
+        or else Cmd = RPL_WHOISSECURE
+      then
+         return Handle_Whois_Reply (UC, Msg);
+
+      elsif Cmd = RPL_ENDOFWHOIS then
+         return Handle_End_Of_Whois (UC, Msg);
+
+      elsif Cmd = "INVITE" then
+         return Handle_Invite (UC, Msg);
+
+      elsif Cmd = RPL_INVITING then
+         R := Check_Params (Msg, 3, Bad);
+         if Bad then
+            return R;
+         end if;
+         Forward_Msg_By_ID (UC, Downstream_ID, Msg);
+
+      elsif Cmd = RPL_MONONLINE or else Cmd = RPL_MONOFFLINE then
+         return Handle_Monitor_Status (UC, Msg);
+
+      elsif Cmd = ERR_MONLISTFULL then
+         return Handle_Monitor_List_Full (UC, Msg);
+
+      elsif Cmd = RPL_AWAY then
+         Forward_Msg_By_ID (UC, Downstream_ID, Msg);
+
+      elsif Cmd = "AWAY" then
+         Handle_Away (UC, Msg);
+
+      elsif Cmd = "ACCOUNT" then
+         return Handle_Account (UC, Msg);
+
+      elsif Cmd = "SETNAME" then
+         return Handle_Setname (UC, Msg);
+
+      elsif Cmd = "CHGHOST" then
+         return Handle_Chghost (UC, Msg);
+
+      elsif Cmd = RPL_BANLIST or else Cmd = RPL_INVITELIST
+        or else Cmd = RPL_EXCEPTLIST or else Cmd = RPL_ENDOFBANLIST
+        or else Cmd = RPL_ENDOFINVITELIST or else Cmd = RPL_ENDOFEXCEPTLIST
+      then
+         Forward_Msg_By_ID (UC, Downstream_ID, Msg);
+
+      elsif Cmd = ERR_NOSUCHNICK or else Cmd = ERR_NOSUCHSERVER then
+         return Handle_No_Such_Nick (UC, Msg, Downstream_ID);
+
+      elsif Cmd = ERR_CHANNELISFULL then
+         return Handle_Channel_Full (UC, Msg, Downstream_ID);
 
       elsif Cmd = ERR_UNKNOWNERROR or else Cmd = ERR_UNKNOWNCOMMAND
         or else Cmd = ERR_NEEDMOREPARAMS or else Cmd = RPL_TRYAGAIN

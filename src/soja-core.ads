@@ -103,6 +103,7 @@ package Soja.Core is
       Kicked_By : Unbounded_String;
       Reason    : Unbounded_String;
       At_Time   : Ada.Calendar.Time := Zero_Time;
+      ID        : Long_Long_Integer := 0;   --  its Kick_Record, 0 if unsaved
    end record;
    type Kick_Info_Access is access all Kick_Info;
 
@@ -114,6 +115,7 @@ package Soja.Core is
    type Join_Retry is record
       Backoff : Backoff_Access;
       Timer   : Soja.Timers.Timer_Access;
+      Armed   : Boolean := False;   --  a timer is pending
    end record;
    type Join_Retry_Access is access all Join_Retry;
 
@@ -480,6 +482,19 @@ package Soja.Core is
    --  unless another mechanism (e.g. EXTERNAL) is configured.
    procedure Auto_Save_SASL_Plain
      (Net : not null Network_Access; Username, Password : String);
+
+   --  Kicks of our own nick are persisted (Soja.Database.Kick_Record) and
+   --  kept as history: Record_Kick stores a new one (and closes an earlier
+   --  one that is still active), Clear_Kick marks the active one rejoined --
+   --  it is then ignored until the next kick -- and Load_Kicks reads the
+   --  active ones back when a network is loaded.  All three work without a
+   --  database (null) and log database errors instead of failing.
+   procedure Record_Kick
+     (Net : not null Network_Access;
+      Channel, Kicked_By, Reason : String);
+   procedure Clear_Kick
+     (Net : not null Network_Access; Channel : String);
+   procedure Load_Kicks (Net : not null Network_Access);
 
    --  uc.appendLog: store a message sent to or received from Entity and
    --  return its ID ("" when it is not stored: no store, a TAGMSG without a

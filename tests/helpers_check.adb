@@ -15,6 +15,7 @@ with Soja.Irc.Helpers;
 with Soja.Irc.Members;
 with Soja.Irc.Messages;
 with Soja.Irc.Modes;
+with Soja.Irc.Whox;
 with Soja.Irc.Xirc;
 
 procedure Helpers_Check is
@@ -451,6 +452,104 @@ begin
       Soja.Irc.Xirc.Parse_CTCP_Message
         (Parse_Message ("PRIVMSG #c"), Cmd, Params, Ok);
       Check (not Ok, "too few params");
+   end;
+
+   -------------------------------------------------------------------
+   --  WHOX
+   -------------------------------------------------------------------
+   declare
+      use Soja.Irc.Whox;
+      Info : Whox_Info;
+      Fields, Token : Unbounded_String;
+   begin
+      Info.Token := To_Unbounded_String ("5");
+      Info.Channel := To_Unbounded_String ("#c");
+      Info.Username := To_Unbounded_String ("u");
+      Info.Hostname := To_Unbounded_String ("h.example");
+      Info.Server := To_Unbounded_String ("irc");
+      Info.Nickname := To_Unbounded_String ("nick");
+      Info.Flags := To_Unbounded_String ("H@");
+      Info.Realname := To_Unbounded_String ("Real Name");
+
+      Check (Image (Generate_Whox_Reply ("", Info))
+             = "352 * #c u h.example irc nick H@ :0 Real Name",
+             "plain WHO reply: " & Image (Generate_Whox_Reply ("", Info)));
+      Check (Image (Generate_Whox_Reply ("tcuhnar", Info))
+             = "354 * 5 #c u h.example nick 0 :Real Name",
+             "WHOX reply: " & Image (Generate_Whox_Reply ("tcuhnar", Info)));
+      --  Fields come out in WHOX order whatever order they were asked in.
+      Check (Image (Generate_Whox_Reply ("rnu", Info))
+             = "354 * u nick :Real Name", "field order");
+      Check (Image (Generate_Whox_Reply ("idlo", Info))
+             = "354 * 255.255.255.255 0 0 0", "static fields");
+
+      Info.Channel := Null_Unbounded_String;
+      Info.Hostname := To_Unbounded_String ("::1");
+      Info.Account := To_Unbounded_String ("*");
+      Check (Image (Generate_Whox_Reply ("", Info))
+             = "352 * * u 0::1 irc nick H@ :0 Real Name",
+             "no channel is *, IPv6 hosts get a leading zero: "
+             & Image (Generate_Whox_Reply ("", Info)));
+      Check (Image (Generate_Whox_Reply ("ca", Info)) = "354 * * 0",
+             "no account is 0");
+      Info.Account := To_Unbounded_String ("acct");
+      Check (Image (Generate_Whox_Reply ("a", Info)) = "354 * acct",
+             "account");
+
+      Parse_Whox_Options ("%tcuhnar,5", Fields, Token);
+      Check (To_String (Fields) = "tcuhnar" and then To_String (Token) = "5",
+             "options with a token");
+      Parse_Whox_Options ("%CUHN", Fields, Token);
+      Check (To_String (Fields) = "cuhn" and then Length (Token) = 0,
+             "fields are lower-cased");
+      Parse_Whox_Options ("%cuh,5", Fields, Token);
+      Check (To_String (Fields) = "cuh" and then Length (Token) = 0,
+             "a token only counts with the t field");
+      Parse_Whox_Options ("%t", Fields, Token);
+      Check (To_String (Fields) = "t" and then Length (Token) = 0,
+             "t without a token");
+      Parse_Whox_Options ("plain", Fields, Token);
+      Check (Length (Fields) = 0 and then Length (Token) = 0, "no options");
+      Parse_Whox_Options ("", Fields, Token);
+      Check (Length (Fields) = 0, "empty options");
+
+      --  Parsing is the inverse of generating.
+      declare
+         Back : constant Whox_Info := Parse_Whox_Reply
+           (Parse_Message (":irc 354 me 5 #c u h nick acct :Real Name"),
+            "tcuhnar");
+      begin
+         Check (To_String (Back.Token) = "5"
+                and then To_String (Back.Channel) = "#c"
+                and then To_String (Back.Username) = "u"
+                and then To_String (Back.Hostname) = "h"
+                and then To_String (Back.Nickname) = "nick"
+                and then To_String (Back.Account) = "acct"
+                and then To_String (Back.Realname) = "Real Name",
+                "WHOX reply parsed");
+      end;
+      begin
+         declare
+            Bad : constant Whox_Info :=
+              Parse_Whox_Reply (Parse_Message (":irc 354 me 5 #c"), "tcun");
+            pragma Unreferenced (Bad);
+         begin
+            Check (False, "a missing value must raise");
+         end;
+      exception
+         when Whox_Error => null;
+      end;
+      begin
+         declare
+            Bad : constant Whox_Info :=
+              Parse_Whox_Reply (Parse_Message (":irc 352 me x"), "n");
+            pragma Unreferenced (Bad);
+         begin
+            Check (False, "the wrong numeric must raise");
+         end;
+      exception
+         when Whox_Error => null;
+      end;
    end;
 
    Ada.Text_IO.Put_Line ("ALL PASS");

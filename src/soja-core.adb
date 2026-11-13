@@ -285,6 +285,9 @@ package body Soja.Core is
          null;   --  deferred: handleBroadcast
       elsif E.all in Stop_Event then
          null;   --  deferred: stop the user
+      elsif E.all in Retry_Join_Event then
+         Soja.Core.Upstream_Dispatch.Retry_Join
+           (Retry_Join_Event (E.all).UC, To_String (Retry_Join_Event (E.all).Name));
       elsif E.all in Try_Regain_Nick_Event then
          null;   --  deferred: handleTryRegainNick
       end if;
@@ -1097,6 +1100,112 @@ package body Soja.Core is
             & Ada.Exceptions.Exception_Message (E));
    end Auto_Save_SASL_Plain;
 
+   ---------------------------------------------------------------
+   -- Kick records (persisted; see Soja.Database.Kick_Record) --
+   ---------------------------------------------------------------
+
+   procedure Store_Kick_Quietly
+     (Net : not null Network_Access; Kick : in out Soja.Database.Kick_Record)
+   is
+      DB : constant Soja.Database.Database_Access :=
+        Soja.Server.DB (Net.User.Srv.all);
+   begin
+      if DB /= null then
+         Soja.Database.Store_Kick (DB.all, Net.Network_Record.ID, Kick);
+      end if;
+   exception
+      when E : others =>
+         Net.Logger.Print
+           ("failed to store the kick record: "
+            & Ada.Exceptions.Exception_Message (E));
+   end Store_Kick_Quietly;
+
+   --  Mark a stored kick as rejoined (history keeps it).
+   procedure End_Kick
+     (Net : not null Network_Access; ID : Long_Long_Integer)
+   is
+      Rec : Soja.Database.Kick_Record;
+   begin
+      if ID = 0 then
+         return;
+      end if;
+      Rec.ID := ID;
+      Rec.Rejoined_At := Ada.Calendar.Clock;
+      Store_Kick_Quietly (Net, Rec);
+   end End_Kick;
+
+   procedure Record_Kick
+     (Net : not null Network_Access;
+      Channel, Kicked_By, Reason : String)
+   is
+      Old  : constant Kick_Info_Access := Net.Kicked.Get (Channel);
+      Info : constant Kick_Info_Access := new Kick_Info;
+      Rec  : Soja.Database.Kick_Record;
+   begin
+      --  Being kicked means we were in the channel again, so an earlier kick
+      --  that is still active was rejoined without us noticing.
+      if Old /= null then
+         End_Kick (Net, Old.ID);
+      end if;
+
+      Info.Kicked_By := To_Unbounded_String (Kicked_By);
+      Info.Reason := To_Unbounded_String (Reason);
+      Info.At_Time := Ada.Calendar.Clock;
+
+      Rec.Channel := To_Unbounded_String (Channel);
+      Rec.Kicked_By := Info.Kicked_By;
+      Rec.Reason := Info.Reason;
+      Rec.Kicked_At := Info.At_Time;
+      Store_Kick_Quietly (Net, Rec);
+      Info.ID := Rec.ID;
+
+      Net.Kicked.Set (Channel, Info);
+   end Record_Kick;
+
+   procedure Clear_Kick
+     (Net : not null Network_Access; Channel : String)
+   is
+      Old : constant Kick_Info_Access := Net.Kicked.Get (Channel);
+   begin
+      if Old = null then
+         return;
+      end if;
+      Net.Kicked.Del (Channel);
+      End_Kick (Net, Old.ID);
+   end Clear_Kick;
+
+   procedure Load_Kicks (Net : not null Network_Access) is
+      DB : constant Soja.Database.Database_Access :=
+        Soja.Server.DB (Net.User.Srv.all);
+   begin
+      if DB = null then
+         return;
+      end if;
+      for K of Soja.Database.List_Kicks
+                 (DB.all, Net.Network_Record.ID, Active_Only => True)
+      loop
+         declare
+            Name : constant String := To_String (K.Channel);
+            Old  : constant Kick_Info_Access := Net.Kicked.Get (Name);
+         begin
+            --  Two active records for a channel (shouldn't happen): the
+            --  older one is superseded.
+            if Old /= null then
+               End_Kick (Net, Old.ID);
+            end if;
+            Net.Kicked.Set
+              (Name,
+               new Kick_Info'(Kicked_By => K.Kicked_By, Reason => K.Reason,
+                              At_Time => K.Kicked_At, ID => K.ID));
+         end;
+      end loop;
+   exception
+      when E : others =>
+         Net.Logger.Print
+           ("failed to load the kick records: "
+            & Ada.Exceptions.Exception_Message (E));
+   end Load_Kicks;
+
    ----------------
    -- Append_Log --
    ----------------
@@ -1208,10 +1317,21 @@ package body Soja.Core is
    end record;
 
    overriding procedure Run (A : in out Detach_Action) is
+      Ok : Boolean := False;
    begin
-      --  Go's blocking `events <- eventChannelDetach{...}`.
-      A.UC.Network.User.Events.Enqueue
-        (new Channel_Detach_Event'(UC => A.UC, Name => A.Name));
+      --  Go does a blocking `events <- eventChannelDetach{...}`.  Here
+      --  whoever stops this timer waits for Run to return, and may be the
+      --  very task that must make room in the queue, so wait for room only
+      --  for a while.
+      for Attempt in 1 .. 20 loop
+         A.UC.Network.User.Events.Try_Enqueue
+           (new Channel_Detach_Event'(UC => A.UC, Name => A.Name), Ok);
+         exit when Ok;
+         delay 0.5;
+      end loop;
+      if not Ok then
+         A.UC.Logger.Print ("skipping a channel detach: the event queue is full");
+      end if;
    end Run;
 
    procedure Update_Auto_Detach
@@ -1371,6 +1491,7 @@ package body Soja.Core is
               Soja.Database.List_Channels (DB.all, Rec.ID);
             Net : constant Network_Access := New_Network (U, Rec, Chs);
          begin
+            Load_Kicks (Net);
             U.Networks.Append (Net);
             Spawn_Network (Net);
          end;

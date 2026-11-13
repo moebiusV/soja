@@ -381,17 +381,52 @@ this rule is written explicitly, not assumed. Reference anchors:
   channel only once its NAMES are complete (Go panics otherwise).
 
 - **Kicked channels (user requirement, 2026-11-12).**  When we are kicked
-  from a channel, `network.Kicked` records who kicked us, the reason and the
-  time.  Soja does not rejoin it by itself, **not even when the upstream
-  connection is established again**: the 001 autojoin skips kicked channels
-  (it logs "not rejoining ...").  The state is cleared when we join the
-  channel again (a client's JOIN, once the downstream command handler exists,
-  must forward it upstream; our own JOIN coming back clears the kick).
-  Clients are told with a BouncerServ NOTICE per kicked channel
-  (`Downstream_Helpers.Send_Kicked_Notices`, to be called from the welcome
-  burst) so they can decide to rejoin.  The state lives in memory: a restart
-  of soja forgets it, so the channel is joined at startup like any saved
-  channel.  (Persisting it would need a schema change; not done.)
+  from a channel, a *kick record* is stored (who, why, when) and kept for
+  good as history.  While a record is **active** (we have not rejoined) soja
+  does not rejoin the channel by itself: the 001 autojoin skips it ("not
+  rejoining ..."), also after the upstream reconnects and after soja itself
+  restarts, and an invitation to it is shown to the clients instead of being
+  accepted automatically.  Once we are back in the channel (our own JOIN
+  arrives, e.g. after a client's manual JOIN) the record is marked rejoined
+  and is **ignored from then on, until the next kick**; it stays in the
+  table as history, and each new kick is a new record.  A kick that arrives
+  while an older record is still active closes the older one (we were
+  evidently back in).  Clients that connect later are told with a BouncerServ
+  NOTICE per active kick (`Downstream_Helpers.Send_Kicked_Notices`, to be
+  called from the welcome burst) so they can decide to rejoin.
+  *Schema change (soja-specific).*  The records live in a new table,
+  `KickRecord (id, network, channel, kicked_by, reason, kicked_at,
+  rejoined_at)`; `rejoined_at` is NULL while the kick is active.  It is
+  created with `CREATE TABLE IF NOT EXISTS` after soju's migrations and
+  **without changing `PRAGMA user_version`** (still 25), so a database stays
+  usable by upstream soju, which ignores the table; deleting a network or user
+  deletes its kick records with it.  `Soja.Database` gained `Kick_Record`,
+  `Store_Kick` and `List_Kicks`; `Core.Record_Kick` / `Clear_Kick` /
+  `Load_Kicks` keep a per-network cache (`Network.Kicked`) in step with it.
+
+- **Upstream message handling, slice 4d: replies, users, MONITOR.**  The
+  WHO / WHOX / WHOIS / LIST replies (routed to the client that asked through
+  the pending-command queues; WHO and WHOX replies also feed the user-info
+  cache), INVITE and 341, the MONITOR numerics (730/731/734, including taking
+  the desired nick when it frees up), AWAY, ACCOUNT, SETNAME, CHGHOST, the
+  ban/invite/exception lists and NOSUCHNICK/NOSUCHSERVER.  `xirc/whox.go` is
+  `Soja.Irc.Whox`.  Deviations: an INVITE to a saved channel that we were
+  kicked from is not auto-accepted (see above); Web Push on invites is not
+  ported.
+
+- **Channel-full retries (user requirement, 2026-10-05; new in soja, soju
+  has no such code).**  When a *saved* channel we are not in answers
+  `ERR_CHANNELISFULL` (471), soja retries joining it with an exponential
+  backoff (`Soja.Backoff`: 10 s, doubling, capped at 5 min, 5 s of jitter;
+  `Join_Retry_*` in `Upstream_Dispatch`) until we are in, kicked from it, or
+  it is no longer saved; a pending retry is cancelled by our own JOIN, and a
+  retry that fires after the upstream connection was replaced does nothing.
+  The timer posts a `Retry_Join_Event` to the user's event queue.  The other
+  refusals (banned 474, bad key 475, invite-only 473, ...) are only relayed to
+  the clients, never retried.  `Stop_Join_Retries` must be called when the
+  upstream connection goes away (the disconnect handler, step 5).  Both timer
+  actions (this and the idle detach) post to the queue without blocking for
+  good, because stopping a timer waits for its action.
 
 - **Ordering**: `downstream.go`, `upstream.go`, `user.go` and `service.go`
   form one mutually-dependent core (the `network` type in `user.go` holds both

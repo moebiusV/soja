@@ -125,6 +125,22 @@ package Soja.Core.Upstream_Dispatch is
    --  uc.updateMonitor: sync the MONITOR list with what the clients watch.
    procedure Update_Monitor (UC : not null Upstream_Conn_Access);
 
+   --  Channel-full retries (soja-specific).  When a saved channel is full
+   --  (ERR_CHANNELISFULL) soja retries joining it with an exponential
+   --  backoff, until we are in, kicked from it, or it is no longer saved; it
+   --  never retries other refusals (banned, bad key, invite-only, ...).
+   --  Retry_Join runs when a Retry_Join_Event is handled; Stop_Join_Retries
+   --  must be called when the upstream connection goes away.
+   procedure Retry_Join (UC : not null Upstream_Conn_Access; Name : String);
+   procedure Cancel_Join_Retry
+     (UC : not null Upstream_Conn_Access; Name : String);
+   procedure Stop_Join_Retries (UC : not null Upstream_Conn_Access);
+
+   --  The retry delays (variables so that tests can shorten them).
+   Join_Retry_Min    : Duration := 10.0;
+   Join_Retry_Max    : Duration := 300.0;
+   Join_Retry_Jitter : Duration := 5.0;
+
    --  uc.shouldCacheUserInfo.
    function Should_Cache_User_Info
      (UC : not null Upstream_Conn_Access; Nick : String) return Boolean;

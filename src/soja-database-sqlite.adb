@@ -465,6 +465,90 @@ package body Soja.Database.Sqlite is
       return 0;
    end Last_ID;
 
+   -----------------------------------------------------------------
+   --  Kick records (soja-specific; not part of soju's schema)
+   -----------------------------------------------------------------
+
+   --  A table of its own, created with IF NOT EXISTS after the usual
+   --  upgrade and without touching PRAGMA user_version, so that upstream
+   --  soju (which refuses a database whose version it does not know) keeps
+   --  working on the same file, and simply ignores the table.
+   procedure Ensure_Soja_Tables (DB : access Sqlite_DB) is
+   begin
+      Execute (DB.DB,
+        "CREATE TABLE IF NOT EXISTS KickRecord (id INTEGER PRIMARY KEY, " &
+        "network INTEGER NOT NULL, channel TEXT NOT NULL, kicked_by TEXT " &
+        "NOT NULL, reason TEXT, kicked_at TEXT NOT NULL, rejoined_at TEXT, " &
+        "FOREIGN KEY(network) REFERENCES Network(id))");
+      Check (DB);
+      Execute (DB.DB,
+        "CREATE INDEX IF NOT EXISTS KickRecordNetwork ON " &
+        "KickRecord(network, rejoined_at)");
+      Check (DB);
+      Commit_Check (DB);
+   end Ensure_Soja_Tables;
+
+   overriding procedure Store_Kick (DB : in out Sqlite_DB;
+      Network_ID : Long_Long_Integer; Kick : in out Kick_Record)
+   is
+      G : Guard;
+   begin
+      Acquire (G, DB.Lock);
+      if Kick.ID /= 0 then
+         --  Only the rejoin time ever changes: a kick is history.
+         Execute (DB.DB,
+           "UPDATE KickRecord SET rejoined_at = ?1 WHERE id = ?2",
+           [1 => P_Time (Kick.Rejoined_At), 2 => As_Bigint (Kick.ID)]);
+         Check (DB'Access);
+      else
+         Execute (DB.DB,
+           "INSERT INTO KickRecord(network, channel, kicked_by, reason, " &
+           "kicked_at, rejoined_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+           [1 => As_Bigint (Network_ID),
+            2 => +To_String (Kick.Channel),
+            3 => +To_String (Kick.Kicked_By),
+            4 => P_Str (Kick.Reason),
+            5 => P_Time (Kick.Kicked_At),
+            6 => P_Time (Kick.Rejoined_At)]);
+         Check (DB'Access);
+         Kick.ID := Last_ID (DB'Access);
+      end if;
+      Commit_Check (DB'Access);
+   end Store_Kick;
+
+   overriding function List_Kicks (DB : in out Sqlite_DB;
+      Network_ID : Long_Long_Integer; Active_Only : Boolean)
+      return Kick_Lists.Vector
+   is
+      G : Guard;
+      C : Forward_Cursor;
+      V : Kick_Lists.Vector := Kick_Lists.Empty_Vector;
+   begin
+      Acquire (G, DB.Lock);
+      Fetch (C, DB.DB,
+        "SELECT id, channel, kicked_by, reason, kicked_at, rejoined_at " &
+        "FROM KickRecord WHERE network = ?1 " &
+        (if Active_Only then "AND rejoined_at IS NULL " else "") &
+        "ORDER BY id",
+        [1 => As_Bigint (Network_ID)]);
+      Check (DB'Access);
+      while Has_Row (C) loop
+         declare
+            K : Kick_Record;
+         begin
+            K.ID := Bigint_Value (C, 0);
+            K.Channel := Unbounded_Value (C, 1);
+            K.Kicked_By := Unbounded_Value (C, 2);
+            K.Reason := Col_Str (C, 3);
+            K.Kicked_At := Col_Time (C, 4);
+            K.Rejoined_At := Col_Time (C, 5);
+            V.Append (K);
+         end;
+         Next (C);
+      end loop;
+      return V;
+   end List_Kicks;
+
    -------------
    --  Upgrade --
    -------------
@@ -539,6 +623,7 @@ package body Soja.Database.Sqlite is
       end if;
 
       Upgrade (Self);
+      Ensure_Soja_Tables (Self);
 
       return Database_Access (Self);
    exception
@@ -736,6 +821,9 @@ package body Soja.Database.Sqlite is
       Del ("DELETE FROM MessageTarget WHERE id IN (SELECT " &
         "MessageTarget.id FROM MessageTarget, Network WHERE " &
         "MessageTarget.network = Network.id AND Network.user = ?1)");
+      Del ("DELETE FROM KickRecord WHERE id IN (SELECT KickRecord.id FROM " &
+        "KickRecord JOIN Network ON KickRecord.network = Network.id WHERE " &
+        "Network.user = ?1)");
       Del ("DELETE FROM WebPushSubscription WHERE user = ?1");
       Del ("DELETE FROM Channel WHERE id IN (SELECT Channel.id FROM Channel " &
         "JOIN Network ON Channel.network = Network.id WHERE Network.user = " &
@@ -925,6 +1013,7 @@ package body Soja.Database.Sqlite is
       Del ("DELETE FROM WebPushSubscription WHERE network = ?1");
       Del ("DELETE FROM DeliveryReceipt WHERE network = ?1");
       Del ("DELETE FROM ReadReceipt WHERE network = ?1");
+      Del ("DELETE FROM KickRecord WHERE network = ?1");
       Del ("DELETE FROM Channel WHERE network = ?1");
       Del ("DELETE FROM Network WHERE id = ?1");
       Commit_Check (DB'Access);

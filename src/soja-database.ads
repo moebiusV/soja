@@ -19,6 +19,9 @@ package Soja.Database is
    --  A timestamp: Go's time.Time, the zero value meaning "never".
    subtype Time is Ada.Calendar.Time;
 
+   --  Go's time.Time{} zero value: means "never"/"unset".
+   Null_Time : constant Time := Ada.Calendar.Time_Of (1901, 1, 1, 0.0);
+
    --  Message filtering policy (a Channel's RelayDetached/ReattachOn/DetachOn
    --  and DetachAfter is a duration).
    type Message_Filter is
@@ -179,10 +182,29 @@ package Soja.Database is
       Take_Last  : Boolean := False;
    end record;
 
+   -----------
+   -- Kicks --
+   -----------
+
+   --  A kick of our own nick from a channel (soja-specific; see PORTING.md).
+   --  Kicks are never deleted: Rejoined_At is set (to a real time) once we
+   --  are back in the channel, which makes the record inactive but keeps it
+   --  as history.  A record with a null Rejoined_At is active: soja stays out
+   --  of that channel until we rejoin it.
+   type Kick_Record is record
+      ID          : Long_Long_Integer := 0;
+      Channel     : Unbounded_String;
+      Kicked_By   : Unbounded_String;
+      Reason      : Unbounded_String;
+      Kicked_At   : Time := Null_Time;
+      Rejoined_At : Time := Null_Time;
+   end record;
+
    --  Result containers (Go's []T slices).
    package User_Lists is new Ada.Containers.Vectors (Positive, User);
    package Network_Lists is new Ada.Containers.Vectors (Positive, Network);
    package Channel_Lists is new Ada.Containers.Vectors (Positive, Channel);
+   package Kick_Lists is new Ada.Containers.Vectors (Positive, Kick_Record);
    package Delivery_Receipt_Lists is
      new Ada.Containers.Vectors (Positive, Delivery_Receipt);
    package WebPush_Config_Lists is
@@ -246,6 +268,16 @@ package Soja.Database is
       Network_ID : Long_Long_Integer; Client : String;
       Receipts : in out Delivery_Receipt_Lists.Vector) is abstract;
 
+   --  Soja-specific: the kick history of a network.  Store_Kick inserts a
+   --  record with ID 0 (and sets its ID), or updates the rejoin time of an
+   --  existing one.  List_Kicks lists the active ones, or every one (history),
+   --  oldest first.
+   procedure Store_Kick (DB : in out Database_Interface;
+      Network_ID : Long_Long_Integer; Kick : in out Kick_Record) is abstract;
+   function List_Kicks (DB : in out Database_Interface;
+      Network_ID : Long_Long_Integer; Active_Only : Boolean)
+      return Kick_Lists.Vector is abstract;
+
    function Get_Read_Receipt (DB : in out Database_Interface;
       Network_ID : Long_Long_Integer; Name : String)
       return Read_Receipt_Access is abstract;
@@ -267,7 +299,5 @@ package Soja.Database is
    procedure Delete_WebPush_Subscription (DB : in out Database_Interface;
       ID : Long_Long_Integer) is abstract;
 
-   --  Go's time.Time{} zero value: means "never"/"unset".
-   Null_Time : constant Time := Ada.Calendar.Time_Of (1901, 1, 1, 0.0);
 
 end Soja.Database;

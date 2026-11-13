@@ -35,6 +35,7 @@ tests/timers_check
 tests/core_fields_check
 tests/msgstore_check
 tests/upstream_dispatch_check
+tests/kicks_check
 
 # Test fixtures (regenerate with the openssl commands in certfp_check.adb)
 tests/certfp_cert.pem

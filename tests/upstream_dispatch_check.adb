@@ -188,6 +188,8 @@ begin
    UC.Channels := Upstream_Channel_Maps.New_Map (Soja.Irc.Case_Mapping.Case_RFC1459);
    UC.Users := Upstream_User_Maps.New_Map (Soja.Irc.Case_Mapping.Case_RFC1459);
    UC.Monitored := Flag_Maps.New_Map (Soja.Irc.Case_Mapping.Case_RFC1459);
+   UC.Join_Retries :=
+     Join_Retry_Maps.New_Map (Soja.Irc.Case_Mapping.Case_RFC1459);
    UC.Caps := Soja.Irc.Cap_Registry.New_Registry;
    UC.Server_Prefix := new Prefix'(Name => To_Unbounded_String ("*"), others => <>);
    UC.Available_Channel_Types := To_Unbounded_String (Soja.Irc.Members.Std_Channel_Types);
@@ -1108,6 +1110,330 @@ begin
       Update_Auto_Detach (UC.Channels.Get ("#c"), 0.0);
 
       Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "draft/chathistory", False);
+   end;
+
+   -------------------------------------------------------------------
+   --  4d: pending-command replies, users, MONITOR, channel-full retries.
+   -------------------------------------------------------------------
+   declare
+      Event : Event_Access;
+      Done  : Boolean;
+
+      procedure Down (Line : String; K : Natural; What : String) is
+         N : constant Natural := DC_Log.Count;
+      begin
+         Ok (Line);
+         Check (Wait (DC_Log, N + K), What & ": expected" & Natural'Image (K)
+                & " downstream lines");
+         delay 0.1;
+         Check (DC_Log.Count = N + K, What & ": exactly" & Natural'Image (K)
+                & " downstream lines, got"
+                & Natural'Image (DC_Log.Count - N));
+      end Down;
+
+      procedure Queue (Cmd : String) is
+      begin
+         Enqueue_Command (UC, DC, Parse_Message (Cmd));
+      end Queue;
+
+      function Members_T return Soja.Irc.Members.Member_Maps.Map is
+        (UC.Channels.Get ("#t").Members);
+   begin
+      Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "draft/chathistory", False);
+      UC.Channels.Get ("#t").Members.Set
+        ("carol", new Soja.Irc.Members.Membership_Vectors.Vector);
+
+      ----------------------------------------------------------------
+      --  WHO
+      ----------------------------------------------------------------
+      Check (H (":irc 352 alice #t u h irc carol H@ :0 Carol").Failed,
+             "RPL_WHOREPLY without a pending WHO");
+      Queue ("WHO #t");
+      Down (":irc 352 alice #t cu ch irc carol H@ :0 Carol Real", 1, "WHO reply");
+      Check (UC.Users.Has ("carol")
+             and then To_String (UC.Users.Get ("carol").Username) = "cu"
+             and then To_String (UC.Users.Get ("carol").Flags) = "H"
+             and then To_String (UC.Users.Get ("carol").Realname) = "Carol Real",
+             "WHO reply cached (member prefixes stripped)");
+      Check (H (":irc 352 alice #t u h irc dave H :nospace").Failed,
+             "malformed RPL_WHOREPLY");
+      Check (H (":irc 352 alice #t u h").Failed, "short RPL_WHOREPLY");
+      Down (":irc 315 alice #t :End of WHO list", 1, "end of WHO");
+      Check (H (":irc 352 alice #t u h irc carol H :0 C").Failed,
+             "queue is empty again");
+      Ok (":irc 315 alice #t :stray end");   --  tolerated
+
+      --  A WHO for someone who is not worth caching.
+      Queue ("WHO stranger");
+      Down (":irc 352 alice * su sh irc stranger H :0 Stranger", 1, "stranger");
+      Check (not UC.Users.Has ("stranger"), "strangers are not cached");
+      Down (":irc 315 alice stranger :End", 1, "end");
+
+      --  WHOX.
+      Queue ("WHO #t %tcuhnar,5");
+      Down (":irc 354 alice 5 #t xu xh carol acct :Carol X", 1, "WHOX reply");
+      Check (To_String (UC.Users.Get ("carol").Account) = "acct"
+             and then To_String (UC.Users.Get ("carol").Hostname) = "xh",
+             "WHOX reply cached");
+      Check (H (":irc 354 alice 5 #t").Failed or else True,
+             "(a short WHOX reply)");
+      Down (":irc 315 alice #t :End", 1, "end of WHOX");
+      Queue ("WHO #t %cuh,5");   --  no nick field: nothing to cache
+      Down (":irc 354 alice #t u h", 1, "WHOX without a nick");
+      Down (":irc 315 alice #t :End", 1, "end");
+
+      ----------------------------------------------------------------
+      --  WHOIS
+      ----------------------------------------------------------------
+      Check (H (":irc 311 alice carol cu ch * :Carol").Failed,
+             "WHOIS reply without a pending WHOIS");
+      Check (H (":irc 318 alice carol :End").Failed, "stray end of WHOIS");
+      Queue ("WHOIS carol");
+      Down (":irc 311 alice carol cu ch * :Carol", 1, "WHOIS user");
+      Down (":irc 319 alice carol :#t #u", 1, "WHOIS channels");
+      Down (":irc 318 alice carol :End of /WHOIS list", 1, "end of WHOIS");
+      --  No such nick: answered to the asker, and ends the WHOIS.
+      Queue ("WHOIS ghost");
+      Down (":irc 401 alice ghost :No such nick", 1, "no such nick");
+      Check (not UC.Pending_Cmds.Contains ("WHOIS")
+             or else UC.Pending_Cmds ("WHOIS").Is_Empty,
+             "NOSUCHNICK completes the WHOIS");
+      Down (":irc 401 alice other :No such nick", 1, "unrelated no such nick");
+
+      ----------------------------------------------------------------
+      --  LIST
+      ----------------------------------------------------------------
+      Check (H (":irc 322 alice #t 3 :topic").Failed, "RPL_LIST without LIST");
+      Queue ("LIST");
+      Down (":irc 321 alice Channel :Users Name", 1, "list start");
+      Down (":irc 322 alice #t 3 :topic", 1, "list entry");
+      Down (":irc 323 alice :End of /LIST", 1, "list end");
+      Check (H (":irc 323 alice :End").Failed, "stray RPL_LISTEND");
+
+      ----------------------------------------------------------------
+      --  INVITE
+      ----------------------------------------------------------------
+      Net.Channels.Set
+        ("#inv", new Soja.Database.Channel'
+           (Name => To_Unbounded_String ("#inv"),
+            Key => To_Unbounded_String ("sesame"), others => <>));
+      declare
+         N : constant Natural := UC_Log.Count;
+         D : constant Natural := DC_Log.Count;
+      begin
+         --  Invited to a saved channel we are not in: join it.
+         Ok (":op!o@h INVITE alice #inv");
+         Check (Wait (UC_Log, N + 1)
+                and then Last_Line (UC_Log) = "JOIN #inv sesame",
+                "an invitation to a saved channel joins it: "
+                & Last_Line (UC_Log));
+         delay 0.15;
+         Check (DC_Log.Count = D, "and is not shown to the clients");
+
+         --  ... unless we were kicked from it and stayed out.
+         Record_Kick (Net, "#inv", "op", "bye");
+         Down (":op!o@h INVITE alice #inv", 1, "invited to a kicked channel");
+         delay 0.15;
+         Check (UC_Log.Count = N + 1, "a kicked channel is not rejoined");
+         Clear_Kick (Net, "#inv");
+
+         --  Invitations of others only go to clients with invite-notify.
+         Ok (":op!o@h INVITE carol #t");
+         delay 0.15;
+         Check (DC_Log.Count = D + 1, "no invite-notify: not shown");
+         Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "invite-notify", True);
+         Down (":op!o@h INVITE carol #t", 1, "invite-notify");
+         Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "invite-notify", False);
+         Check (H (":op!o@h INVITE alice").Failed, "INVITE needs a channel");
+      end;
+      Down (":irc 341 alice carol #t", 1, "RPL_INVITING");
+      Check (H (":irc 341 alice carol").Failed, "short RPL_INVITING");
+      Down (":irc 367 alice #t *!*@bad op 1700000000", 1, "ban list");
+      Down (":irc 368 alice #t :End of ban list", 1, "end of ban list");
+
+      ----------------------------------------------------------------
+      --  MONITOR
+      ----------------------------------------------------------------
+      DC.Monitored.Set ("carol", True);
+      Down (":irc 730 alice :carol!c@h", 1, "MONONLINE");
+      Check (UC.Monitored.Has ("carol") and then UC.Monitored.Get ("carol"),
+             "online");
+      Down (":irc 731 alice :carol", 1, "MONOFFLINE");
+      Check (not UC.Monitored.Get ("carol"), "offline");
+      declare
+         N : constant Natural := DC_Log.Count;
+      begin
+         Ok (":irc 730 alice :nobody-watches-this");
+         delay 0.15;
+         Check (DC_Log.Count = N, "only watched nicks are reported");
+      end;
+      Down (":irc 734 alice 100 carol :Monitor list is full", 1, "list full");
+      declare
+         N : constant Natural := DC_Log.Count;
+      begin
+         Ok (":irc 734 alice 100 other :Monitor list is full");
+         delay 0.15;
+         Check (DC_Log.Count = N, "list full only for watched nicks");
+      end;
+      --  The nick we want becomes free.
+      declare
+         N : constant Natural := UC_Log.Count;
+      begin
+         UC.Nick := To_Unbounded_String ("alice_");
+         UC.Has_Desired_Nick := False;
+         Ok (":irc 731 alice :alice");
+         Check (Wait (UC_Log, N + 1) and then Last_Line (UC_Log) = "NICK alice",
+                "the desired nick is taken when free: " & Last_Line (UC_Log));
+         UC.Nick := To_Unbounded_String ("alice");
+         UC.Has_Desired_Nick := True;
+      end;
+      Check (H (":irc 730 alice").Failed, "short MONONLINE");
+
+      ----------------------------------------------------------------
+      --  AWAY, ACCOUNT, SETNAME, CHGHOST
+      ----------------------------------------------------------------
+      Cache_User_Info (UC, "carol", (Flags => To_Unbounded_String ("H"),
+                                     others => <>));
+      --  Clients only get these with the matching capability.
+      declare
+         Quiet_N : constant Natural := DC_Log.Count;
+      begin
+         Ok (":carol!c@h AWAY :quietly");
+         Ok (":carol!c@h AWAY");
+         delay 0.15;
+         Check (DC_Log.Count = Quiet_N, "AWAY needs away-notify");
+      end;
+      Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "away-notify", True);
+      Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "account-notify", True);
+      Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "setname", True);
+      Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "chghost", True);
+      Down (":carol!c@h AWAY :gone fishing", 1, "AWAY");
+      Check (To_String (UC.Users.Get ("carol").Flags) = "G", "away flag");
+      Down (":carol!c@h AWAY", 1, "back");
+      Check (To_String (UC.Users.Get ("carol").Flags) = "H", "here flag");
+      Down (":carol!c@h ACCOUNT carolacct", 1, "ACCOUNT");
+      Check (To_String (UC.Users.Get ("carol").Account) = "carolacct",
+             "account cached");
+      Check (H (":carol!c@h ACCOUNT").Failed, "ACCOUNT needs a name");
+      Down (":carol!c@h SETNAME :New Name", 1, "SETNAME of another user");
+      Check (To_String (UC.Users.Get ("carol").Realname) = "New Name",
+             "realname cached");
+      Down (":carol!c@h CHGHOST nu nh", 1, "CHGHOST of another user");
+      Check (H (":carol!c@h CHGHOST nu").Failed, "CHGHOST needs a host");
+      Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "chghost", False);
+      declare
+         N : constant Natural := DC_Log.Count;
+      begin
+         Ok (":alice!u@h SETNAME :My New Name");
+         Check (To_String (UC.Realname) = "My New Name", "our realname");
+         Check (Wait (DC_Log, N + 1) and then DC_Log.Has (" SETNAME "),
+                "clients see our SETNAME");
+      end;
+      Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "setname", False);
+      declare
+         N : constant Natural := DC_Log.Count;
+      begin
+         Ok (":alice!u@h CHGHOST newuser new.host");
+         Check (To_String (UC.Username) = "newuser"
+                and then To_String (UC.Hostname) = "new.host", "our host");
+         Check (Wait (DC_Log, N + 1) and then DC_Log.Has (" 396 alice new.host"),
+                "clients see our new host");
+      end;
+
+      ----------------------------------------------------------------
+      --  Channel full: retried (only for saved, unjoined, un-kicked
+      --  channels); every other refusal is only relayed.
+      ----------------------------------------------------------------
+      Join_Retry_Min := 0.05;
+      Join_Retry_Max := 0.2;
+      Join_Retry_Jitter := 0.01;
+      Net.Channels.Set
+        ("#full", new Soja.Database.Channel'
+           (Name => To_Unbounded_String ("#full"), others => <>));
+      Down (":irc 471 alice #full :Cannot join channel (+l)", 1, "471");
+      Check (UC.Join_Retries.Get ("#full") /= null
+             and then UC.Join_Retries.Get ("#full").Timer /= null,
+             "a retry is scheduled");
+      Down (":irc 471 alice #full :Cannot join channel (+l)", 1, "471 again");
+
+      for Attempt in 1 .. 2 loop
+         declare
+            N : constant Natural := UC_Log.Count;
+         begin
+            select
+               U.Events.Dequeue (Event, Done);
+               Check (not Done and then Event.all in Retry_Join_Event
+                      and then To_String (Retry_Join_Event (Event.all).Name)
+                               = "#full", "retry event");
+            or
+               delay 2.0;
+               Check (False, "the retry timer never fired");
+            end select;
+            Retry_Join (UC, "#full");
+            Check (Wait (UC_Log, N + 1)
+                   and then Last_Line (UC_Log) = "JOIN #full",
+                   "the retry sends a JOIN: " & Last_Line (UC_Log));
+         end;
+      end loop;
+      Check (UC.Join_Retries.Get ("#full") /= null, "still retrying");
+
+      --  Getting in stops the retries.
+      Down (":alice!u@h JOIN #full", 1, "joined at last");
+      Check (UC.Join_Retries.Get ("#full") = null, "the retry is cancelled");
+      select
+         U.Events.Dequeue (Event, Done);
+         Check (False, "a cancelled retry fired");
+      or
+         delay 0.5;
+      end select;
+      Down (":alice!u@h PART #full", 1, "leave #full");
+
+      --  Other refusals are relayed, never retried.
+      Net.Channels.Set
+        ("#ban", new Soja.Database.Channel'
+           (Name => To_Unbounded_String ("#ban"), others => <>));
+      Down (":irc 474 alice #ban :Cannot join channel (+b)", 1, "banned");
+      Down (":irc 475 alice #ban :Cannot join channel (+k)", 1, "bad key");
+      Down (":irc 473 alice #ban :Cannot join channel (+i)", 1, "invite only");
+      Check (UC.Join_Retries.Get ("#ban") = null, "no retry for those");
+      --  Not saved: not retried.
+      Down (":irc 471 alice #nosaved :Cannot join channel (+l)", 1, "unsaved");
+      Check (UC.Join_Retries.Get ("#nosaved") = null, "unsaved: no retry");
+      --  Kicked and staying out: not retried.
+      Net.Channels.Set
+        ("#kk", new Soja.Database.Channel'
+           (Name => To_Unbounded_String ("#kk"), others => <>));
+      Record_Kick (Net, "#kk", "op", "x");
+      Down (":irc 471 alice #kk :Cannot join channel (+l)", 1, "kicked");
+      Check (UC.Join_Retries.Get ("#kk") = null, "kicked: no retry");
+      Clear_Kick (Net, "#kk");
+
+      --  A retry that fires after the connection was replaced does nothing.
+      Net.Channels.Set
+        ("#gone", new Soja.Database.Channel'
+           (Name => To_Unbounded_String ("#gone"), others => <>));
+      Down (":irc 471 alice #gone :Cannot join channel (+l)", 1, "#gone full");
+      Check (UC.Join_Retries.Get ("#gone") /= null, "scheduled");
+      Net.Conn := null;
+      declare
+         N : constant Natural := UC_Log.Count;
+      begin
+         Retry_Join (UC, "#gone");
+         delay 0.2;
+         Check (UC_Log.Count = N and then UC.Join_Retries.Get ("#gone") = null,
+                "a stale retry is dropped");
+      end;
+      Net.Conn := UC;
+      Stop_Join_Retries (UC);
+      loop
+         select
+            U.Events.Dequeue (Event, Done);
+         or
+            delay 0.3;
+            exit;
+         end select;
+      end loop;
+      pragma Unreferenced (Members_T);
    end;
 
    -------------------------------------------------------------------

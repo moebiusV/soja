@@ -54,6 +54,12 @@ package Soja.Database.Sqlite is
    overriding procedure Delete_Channel (DB : in out Sqlite_DB;
       ID : Long_Long_Integer);
 
+   overriding procedure Store_Kick (DB : in out Sqlite_DB;
+      Network_ID : Long_Long_Integer; Kick : in out Kick_Record);
+   overriding function List_Kicks (DB : in out Sqlite_DB;
+      Network_ID : Long_Long_Integer; Active_Only : Boolean)
+      return Kick_Lists.Vector;
+
    overriding function List_Delivery_Receipts (DB : in out Sqlite_DB;
       Network_ID : Long_Long_Integer) return Delivery_Receipt_Lists.Vector;
    overriding procedure Store_Client_Delivery_Receipts (DB : in out Sqlite_DB;
