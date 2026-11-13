@@ -283,7 +283,8 @@ listener (default `/run/soju/admin`) and prints the PRIVMSGs that come back;
 administrator without a user (so `user run <name> ...` for per-user commands),
 and ends with `BOUNCERSERV OK` or `FAIL BOUNCERSERV :<error>`.  AWS.Net is TCP
 only, so unix sockets are `GNAT.Sockets` (`Soja.Conn.Unix` is the transport,
-`Soja.Unix_Server` the accept loop); the same pieces will serve `unix://`.
+`Soja.Unix_Server` the accept loop); `unix://` (clients, mode 0775 as soju sets it, created that way rather than
+chmodded) uses the same pieces with `Bouncer.Handle`.
 Deviations:
 
 - Go chmods the admin socket to 0600 *after* listening ("TODO: this is racy");
@@ -309,8 +310,10 @@ SIGHUP reloads the configuration (`pragma Interrupt_State (SIGINT, User)` in
 without echo through `stty`).  The default config path is `/etc/soju/config`.
 What it refuses or changes, loudly:
 
-- Listeners: `ircs://`, `irc+insecure://`, `ident://` and `unix+admin://` only;
-  any other scheme (unix, ws, http, prometheus, pprof) is a startup error.
+- Listeners: `ircs://`, `irc+insecure://`, `unix://`, `ident://` and
+  `unix+admin://` only; any other scheme (ws, http, prometheus, pprof) is a
+  startup error.  Go wraps the TCP, unix, admin and ident listeners in PROXY
+  protocol handling (`accept-proxy-ip`); soja does not, yet.
 - Auth drivers other than `internal` (pam, oauth2) are a startup error: a
   bouncer that cannot check passwords must not start as if it could.
 - Message stores other than `memory` fall back to memory, with a warning;

@@ -40,6 +40,7 @@ cat > "$D/soja.conf" <<EOT
 listen irc+insecure://127.0.0.1:6697
 listen ident://127.0.0.1:1130
 listen unix+admin://$D/admin.sock
+listen unix://$D/irc.sock
 hostname soja.example.net
 db sqlite3 $D/soja.db
 EOT

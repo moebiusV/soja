@@ -247,7 +247,8 @@ procedure Soja_Main is
    end Ident_Task;
    type Ident_Task_Access is access Ident_Task;
 
-   --  The admin socket (`unix+admin://[path]`): serves Handle_Admin.
+   --  Unix-domain listeners: `unix://path` serves IRC clients (Handle) and
+   --  `unix+admin://[path]` the admin socket (Handle_Admin).
    Default_Admin_Path : constant String := "/run/soju/admin";
 
    Unix_Listeners : array (1 .. 16) of Soja.Unix_Server.Listener_Access;
@@ -255,11 +256,12 @@ procedure Soja_Main is
 
    task type Unix_Task
      (L : not null Soja.Unix_Server.Listener_Access;
+      H : Soja.Server.Handler;
       Name : not null String_Access);
 
    task body Unix_Task is
    begin
-      Soja.Unix_Server.Serve (L, Soja.Bouncer.Handle_Admin'Access);
+      Soja.Unix_Server.Serve (L, H);
       Serving.Done;
    exception
       when E : others =>
@@ -269,20 +271,31 @@ procedure Soja_Main is
    end Unix_Task;
    type Unix_Task_Access is access Unix_Task;
 
-   procedure Start_Admin_Listener (Listen, Rest : String) is
+   procedure Start_Unix_Listener
+     (Listen, Rest : String; Admin : Boolean)
+   is
+      Has_Path : constant Boolean :=
+        Rest'Length > 0 and then Rest (Rest'First) = '/';
       Path : constant String :=
-        (if Rest'Length > 0 and then Rest (Rest'First) = '/'
-         then Rest else Default_Admin_Path);
+        (if Has_Path then Rest
+         elsif Admin then Default_Admin_Path else "");
       L    : Soja.Unix_Server.Listener_Access;
       Runner : Unix_Task_Access;
       pragma Unreferenced (Runner);
    begin
+      if Path = "" then
+         Fatal ("failed to start listener on " & Quote (Listen)
+                & ": no socket path");
+      end if;
       if Unix_Count = Unix_Listeners'Last then
          Fatal ("too many unix listeners");
       end if;
       begin
-         --  Only the owner may use it (rw-------): it is administrator access.
-         L := Soja.Unix_Server.Listen (Path, 8#600#);
+         --  Admin: only the owner may use it (rw-------), it is administrator
+         --  access.  IRC: rwxrwxr-x, as soju sets it, so that a group (a web
+         --  server, say) can connect.
+         L := Soja.Unix_Server.Listen
+           (Path, (if Admin then 8#600# else 8#775#));
       exception
          when E : Soja.Unix_Server.Listen_Error =>
             Fatal ("failed to start listener on " & Quote (Listen) & ": "
@@ -291,8 +304,10 @@ procedure Soja_Main is
       Unix_Count := Unix_Count + 1;
       Unix_Listeners (Unix_Count) := L;
       Serving.Add;
-      Runner := new Unix_Task (L, new String'(Listen));
-   end Start_Admin_Listener;
+      Runner := new Unix_Task
+        (L, (if Admin then Soja.Bouncer.Handle_Admin'Access
+             else Soja.Bouncer.Handle'Access), new String'(Listen));
+   end Start_Unix_Listener;
 
    --  withDefaultPort for a "host[:port]" (or "[v6]:port") string; Host and
    --  Port are what is left after the default.
@@ -353,8 +368,8 @@ procedure Soja_Main is
       TLS    : Boolean;
       Is_Ident : Boolean := False;
    begin
-      if Scheme = "unix+admin" then
-         Start_Admin_Listener (Listen, Rest);
+      if Scheme = "unix+admin" or else Scheme = "unix" then
+         Start_Unix_Listener (Listen, Rest, Admin => Scheme = "unix+admin");
          Log.Print ("server listening on " & Quote (Listen));
          return;
       end if;

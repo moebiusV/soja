@@ -9,9 +9,15 @@ class Fail(Exception):
 
 
 class Client:
-    def __init__(self, port, name):
+    def __init__(self, port, name, path=None):
         self.name = name
-        self.sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+        if path:
+            self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.sock.settimeout(5)
+            self.sock.connect(path)
+        else:
+            self.sock = socket.create_connection(("127.0.0.1", port),
+                                                 timeout=5)
         self.buf = b""
         self.seen = []
 

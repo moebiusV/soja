@@ -159,6 +159,17 @@ def main():
     if r.returncode != 0 or 'created network "two words"' not in r.stdout:
         raise Fail(f"quoting: {r.stdout!r} {r.stderr!r}")
 
+    log("a client over the unix:// socket")
+    path = os.path.join(DIR, "irc.sock")
+    mode = os.stat(path).st_mode & 0o777
+    if mode != 0o775:
+        raise Fail(f"unix socket has mode {mode:o}, wanted 775")
+    u = Client(None, "unix:alice/test", path=path)
+    u.register("alice", "alice/test", "secret")
+    u.send("PRIVMSG BouncerServ :network status")
+    u.expect(r"test .*connected")
+    u.close()
+
     log("messages both ways")
     b.send("PRIVMSG #t :hello from bob")
     a.expect(r":bob!\S+ PRIVMSG #t :hello from bob")
