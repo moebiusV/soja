@@ -553,6 +553,162 @@ begin
    end;
 
    -------------------------------------------------------------------
+   --  WHO
+   -------------------------------------------------------------------
+   delay 0.3;   --  let earlier replies land before counting lines
+   declare
+      D : Natural := DC_Log.Count;
+      B : Natural := Bnc_Log.Count;
+      N : Natural;
+   begin
+      Ok (DC, "WHO");
+      Check (Wait (DC_Log, D + 1)
+             and then Last (DC_Log) = ":localhost 315 * * :End of /WHO list",
+             "WHO without a mask: " & Last (DC_Log));
+
+      --  The bouncer connection answers for itself.
+      Bnc.Realname := To_Unbounded_String ("Alice Real");
+      U.User_Record.Admin := True;
+      Ok (Bnc, "WHO alice_");
+      Check (Wait (Bnc_Log, B + 2)
+             and then Line_Of (Bnc_Log, B + 1)
+                      = ":localhost 352 * * alice 1.2.3.4 localhost alice_ H* :0 Alice Real"
+             and then Line_Of (Bnc_Log, B + 2)
+                      = ":localhost 315 * alice_ :End of /WHO list",
+             "self WHO: " & Line_Of (Bnc_Log, B + 1));
+      U.User_Record.Admin := False;
+      B := Bnc_Log.Count;
+      Ok (Bnc, "WHO alice_ %uhnar,7");
+      Check (Wait (Bnc_Log, B + 2)
+             and then Line_Of (Bnc_Log, B + 1)
+                      = ":localhost 354 * alice 1.2.3.4 alice_ alice :Alice Real",
+             "self WHOX: " & Line_Of (Bnc_Log, B + 1));
+      B := Bnc_Log.Count;
+      Ok (Bnc, "WHO BouncerServ");
+      Check (Wait (Bnc_Log, B + 2)
+             and then Line_Of (Bnc_Log, B + 1)
+                      = ":localhost 352 * * BouncerServ BouncerServ localhost "
+                        & "BouncerServ H*B :0 soju bouncer service",
+             "WHO of the service: " & Line_Of (Bnc_Log, B + 1));
+      B := Bnc_Log.Count;
+      Ok (Bnc, "WHO somebody");
+      Check (Wait (Bnc_Log, B + 1)
+             and then Last (Bnc_Log) = ":localhost 315 * somebody :End of /WHO list",
+             "the bouncer connection has nobody else");
+      D := DC_Log.Count;
+      UC.Isupport.Include ("BOT", (Has_Value => True,
+                                   Value => To_Unbounded_String ("B")));
+      Ok (DC, "WHO bouncerserv");
+      Check (Wait (DC_Log, D + 2) and then DC_Log.Has ("H*B"),
+             "on a network the service uses the upstream's bot flag");
+
+      --  On a network: from the cache when it can, else asked upstream.
+      Soja.Irc.Cap_Registry.Set_Enabled (UC.Caps, "away-notify", True);
+      Soja.Core.Upstream_Dispatch.Cache_User_Info
+        (UC, "carol",
+         (Nickname => To_Unbounded_String ("carol"),
+          Username => To_Unbounded_String ("cu"),
+          Hostname => To_Unbounded_String ("ch.example"),
+          Server   => To_Unbounded_String ("irc"),
+          Flags    => To_Unbounded_String ("H*"),
+          Realname => To_Unbounded_String ("Carol C"), others => <>));
+      Soja.Core.Upstream_Dispatch.Cache_User_Info
+        (UC, "troll",
+         (Nickname => To_Unbounded_String ("troll"),
+          Username => To_Unbounded_String ("tu"),
+          Hostname => To_Unbounded_String ("th.example"),
+          Server   => To_Unbounded_String ("irc"),
+          Flags    => To_Unbounded_String ("G"),
+          Realname => To_Unbounded_String ("Troll T"), others => <>));
+      D := DC_Log.Count;
+      N := UC_Log.Count;
+      Ok (DC, "WHO carol");
+      Check (Wait (DC_Log, D + 2)
+             and then Line_Of (DC_Log, D + 1)
+                      = ":localhost 352 * * cu ch.example irc carol H* :0 Carol C",
+             "a cached user: " & Line_Of (DC_Log, D + 1));
+      Check (UC_Log.Count = N, "nothing asked upstream");
+
+      --  A channel: every member must be cached; prefixes come from NAMES.
+      declare
+         Op : constant Soja.Irc.Members.Membership_Set_Access :=
+           new Soja.Irc.Members.Membership_Vectors.Vector;
+      begin
+         Op.Append (Soja.Irc.Members.Std_Memberships (3));   --  o, @
+         UC.Channels.Get ("#one").Members.Set ("carol", Op);
+      end;
+      D := DC_Log.Count;
+      Ok (DC, "WHO #one");
+      Check (Wait (DC_Log, D + 3), "a channel's members and the end");
+      Check (DC_Log.Has (" 352 * #one cu ch.example irc carol H*@ :0 Carol C"),
+             "the member prefix goes after the H/G and * flags");
+      Check (DC_Log.Has (" 352 * #one tu th.example irc troll G :0 Troll T"),
+             "a member without rank");
+      --  A channel with an uncached member goes upstream.
+      UC.Channels.Get ("#one").Members.Set
+        ("stranger", new Soja.Irc.Members.Membership_Vectors.Vector);
+      N := UC_Log.Count;
+      Ok (DC, "WHO #one");
+      Check (Wait (UC_Log, N + 1) and then Last (UC_Log) = "WHO #one",
+             "an incomplete cache is not used");
+      UC.Channels.Get ("#one").Members.Del ("stranger");
+      --  WHOX fields the cache lacks (account) with no account-notify.
+      UC.Pending_Cmds.Clear;   --  (the WHO above is still waiting for its reply)
+      N := UC_Log.Count;
+      Ok (DC, "WHO carol %na,1");
+      Check (Wait (UC_Log, N + 1) and then Last (UC_Log) = "WHO carol %na,1",
+             "fields we cannot keep up to date are asked upstream");
+      Check (Error_Of (Bnc, "WHO x")'Length = 0, "no error on the bouncer");
+   end;
+
+   -------------------------------------------------------------------
+   --  WHOIS
+   -------------------------------------------------------------------
+   delay 0.3;   --  let earlier replies land before counting lines
+   declare
+      D : Natural := DC_Log.Count;
+      B : Natural := Bnc_Log.Count;
+      N : Natural := UC_Log.Count;
+   begin
+      Check (Error_Of (DC, "WHOIS") = "431 alice_ :No nickname given",
+             "WHOIS without a nick");
+      Ok (DC, "WHOIS carol,dave");
+      --  (Only the local checks look at the first user; the message is
+      --  forwarded as it came.)
+      Check (Wait (UC_Log, N + 1) and then Last (UC_Log) = "WHOIS carol,dave",
+             "WHOIS goes upstream");
+      N := UC_Log.Count;
+      Ok (DC, "WHOIS irc.example erin");
+      delay 0.15;
+      Check (UC.Pending_Cmds ("WHOIS").Length = 2 and then UC_Log.Count = N,
+             "the second one queues behind the first (not sent yet)");
+      Check (Param (UC.Pending_Cmds ("WHOIS") (2).Msg, 1) = "erin",
+             "and keeps its parameters");
+
+      U.User_Record.Admin := True;
+      Ok (Bnc, "WHOIS alice_");
+      Check (Wait (Bnc_Log, B + 5), "the bouncer's own WHOIS");
+      Check (Bnc_Log.Has (" 311 alice_ alice_ alice 1.2.3.4 * :Alice Real")
+             and then Bnc_Log.Has (" 312 alice_ alice_ localhost soju")
+             and then Bnc_Log.Has (" 313 alice_ alice_ :is a bouncer administrator")
+             and then Bnc_Log.Has (" 330 alice_ alice_ alice :is logged in as")
+             and then Bnc_Log.Has (" 318 alice_ alice_ :End of /WHOIS list"),
+             "self WHOIS");
+      U.User_Record.Admin := False;
+
+      Ok (Bnc, "WHOIS BouncerServ");
+      Check (Wait (Bnc_Log, B + 11), "the service's WHOIS");
+      Check (Bnc_Log.Has (" 311 alice_ BouncerServ BouncerServ BouncerServ * :soju bouncer service")
+             and then Bnc_Log.Has ("is the bouncer service")
+             and then Bnc_Log.Has (" 335 alice_ BouncerServ :is a bot"),
+             "service WHOIS");
+      Ok (DC, "WHOIS bouncerserv");
+      Check (Wait (DC_Log, D + 6), "the service's WHOIS on a network too");
+      Check (Error_Of (Bnc, "WHOIS carol")(1 .. 3) = "400",
+             "WHOIS of others needs a network");
+   end;
+
+   -------------------------------------------------------------------
    --  Anything else
    -------------------------------------------------------------------
    declare
@@ -588,6 +744,12 @@ exception
       if DC_Log /= null then
          for I in 1 .. DC_Log.Count loop
             Ada.Text_IO.Put_Line (DC_Log.Line (I));
+         end loop;
+      end if;
+      Ada.Text_IO.Put_Line ("--- client on the bouncer connection ---");
+      if Bnc_Log /= null then
+         for I in 1 .. Bnc_Log.Count loop
+            Ada.Text_IO.Put_Line (Bnc_Log.Line (I));
          end loop;
       end if;
       GNAT.OS_Lib.OS_Exit (1);

@@ -17,7 +17,9 @@ with Soja.Irc.Cap_Registry;
 with Soja.Irc.Genmsg;
 with Soja.Irc.Helpers;
 with Soja.Irc.Modes;
+with Soja.Irc.Members;
 with Soja.Irc.Numerics;
+with Soja.Irc.Whox;
 with Soja.Server;
 
 package body Soja.Core.Downstream_Commands is
@@ -30,6 +32,7 @@ package body Soja.Core.Downstream_Commands is
    use Soja.Irc.Numerics;
    use type Soja.Database.Database_Access;
    use type Ada.Containers.Count_Type;
+   use type Soja.Irc.Members.Membership_Set_Access;
 
    ----------------------------------------------------------------------
    --  Results and small helpers
@@ -679,6 +682,263 @@ package body Soja.Core.Downstream_Commands is
    end Cmd_Names;
 
    ----------------------------------------------------------------------
+   --  WHO, WHOIS
+   ----------------------------------------------------------------------
+
+   function Cmd_Who
+     (DC : not null Downstream_Conn_Access; M : Message)
+      return Irc_Error_Result
+   is
+      function End_Of_Who (Token : String) return Message is
+        (Make (RPL_ENDOFWHO, ["*", Token, "End of /WHO list"]));
+   begin
+      if M.Params.Is_Empty then
+         Send_Message (DC, End_Of_Who ("*"));
+         return Success;
+      end if;
+
+      declare
+         --  Clients use the first mask to match RPL_ENDOFWHO.
+         Mask    : constant String := Param (M, 0);
+         Options : constant String :=
+           (if M.Params.Length > 1 then Param (M, 1) else "");
+         Fields_U, Token_U : Unbounded_String;
+      begin
+         --  TODO (Go): add support for WHOX mask2.
+         Soja.Irc.Whox.Parse_Whox_Options (Options, Fields_U, Token_U);
+
+         declare
+            Fields  : constant String := To_String (Fields_U);
+            Mask_CM : constant String := Fold (DC, Mask);
+            Info    : Soja.Irc.Whox.Whox_Info;
+            Cfg     : constant Soja.Server.Server_Config_Access :=
+              Soja.Server.Config (DC.Srv.all);
+         begin
+            --  TODO (Go): support mixed bouncer/upstream WHO queries.
+            if DC.Network = null and then Mask_CM = To_String (DC.Nick_CM) then
+               --  TODO (Go): support AWAY (H/G) in the self WHO reply.
+               Info.Token := Token_U;
+               Info.Username := DC.User.User_Record.Username;
+               Info.Hostname := DC.Hostname;
+               Info.Server := Cfg.Hostname;
+               Info.Nickname := DC.Nick;
+               Info.Flags := To_Unbounded_String
+                 (if DC.User.User_Record.Admin then "H*" else "H");
+               Info.Account := DC.User.User_Record.Username;
+               Info.Realname := DC.Realname;
+               Send_Message
+                 (DC, Soja.Irc.Whox.Generate_Whox_Reply (Fields, Info));
+               Send_Message (DC, End_Of_Who (Mask));
+               return Success;
+            end if;
+
+            if Mask_CM = Service_Nick_CM then
+               declare
+                  Flags : Unbounded_String := To_Unbounded_String ("H*");
+                  Up    : constant Upstream_Conn_Access := Upstream_Of (DC);
+               begin
+                  if DC.Network = null then
+                     Append (Flags, "B");
+                  elsif Up /= null and then Up.Isupport.Contains ("BOT")
+                    and then Up.Isupport ("BOT").Has_Value
+                    and then Length (Up.Isupport ("BOT").Value) = 1
+                  then
+                     Append (Flags, Up.Isupport ("BOT").Value);
+                  end if;
+                  Info.Token := Token_U;
+                  Info.Username := To_Unbounded_String (Service_Nick);
+                  Info.Hostname := To_Unbounded_String (Service_Nick);
+                  Info.Server := Cfg.Hostname;
+                  Info.Nickname := To_Unbounded_String (Service_Nick);
+                  Info.Flags := Flags;
+                  Info.Account := To_Unbounded_String (Service_Nick);
+                  Info.Realname := To_Unbounded_String (Service_Realname);
+               end;
+               Send_Message
+                 (DC, Soja.Irc.Whox.Generate_Whox_Reply (Fields, Info));
+               Send_Message (DC, End_Of_Who (Mask));
+               return Success;
+            end if;
+
+            if DC.Network = null then
+               Send_Message (DC, End_Of_Who (Mask));
+               return Success;
+            end if;
+
+            declare
+               UC : Upstream_Conn_Access;
+               R  : constant Irc_Error_Result :=
+                 Upstream_For_Command (DC, "WHO", UC);
+            begin
+               if R.Failed then
+                  return R;
+               end if;
+
+               --  Check if we have the reply cached.
+               declare
+                  Cached : constant Soja.Core.Upstream_Dispatch.Cached_Who :=
+                    Soja.Core.Upstream_Dispatch.Get_Cached_Who
+                      (UC, Mask, Fields);
+               begin
+                  if Cached.Found then
+                     for Uu of Cached.Users loop
+                        declare
+                           W : Soja.Irc.Whox.Whox_Info;
+                        begin
+                           W.Token := Token_U;
+                           W.Username := Uu.Username;
+                           W.Hostname := Uu.Hostname;
+                           W.Server := Uu.Server;
+                           W.Nickname := Uu.Nickname;
+                           W.Flags := Uu.Flags;
+                           W.Account := Uu.Account;
+                           W.Realname := Uu.Realname;
+
+                           if Soja.Core.Upstream_Dispatch.Is_Channel
+                                (UC, Mask)
+                           then
+                              W.Channel := To_Unbounded_String (Mask);
+
+                              --  Channel membership prefixes from the cached
+                              --  NAMES reply, listed after the away status
+                              --  ('G'/'H') and the operator indicator ('*').
+                              declare
+                                 Ch : constant Upstream_Channel_Access :=
+                                   UC.Channels.Get (Mask);
+                                 Set : constant
+                                   Soja.Irc.Members.Membership_Set_Access :=
+                                   (if Ch = null then null
+                                    else Ch.Members.Get
+                                           (To_String (W.Nickname)));
+                                 Prefixes : constant String :=
+                                   (if Set = null then ""
+                                    else Format_Member_Prefix
+                                           (Set.all,
+                                            Soja.Irc.Cap_Registry.Is_Enabled
+                                              (DC.Caps, "multi-prefix")));
+                                 Flags : constant String :=
+                                   To_String (W.Flags);
+                                 I : Natural := 0;
+                              begin
+                                 for K in Flags'Range loop
+                                    if Flags (K) /= 'G'
+                                      and then Flags (K) /= 'H'
+                                      and then Flags (K) /= '*'
+                                    then
+                                       I := K;
+                                       exit;
+                                    end if;
+                                 end loop;
+                                 if I = 0 then
+                                    W.Flags := To_Unbounded_String
+                                      (Flags & Prefixes);
+                                 else
+                                    W.Flags := To_Unbounded_String
+                                      (Flags (Flags'First .. I - 1) & Prefixes
+                                       & Flags (I .. Flags'Last));
+                                 end if;
+                              end;
+                           end if;
+                           Send_Message
+                             (DC, Soja.Irc.Whox.Generate_Whox_Reply
+                                    (Fields, W));
+                        end;
+                     end loop;
+                     Send_Message (DC, End_Of_Who (Mask));
+                     return Success;
+                  end if;
+               end;
+
+               Soja.Core.Upstream_Dispatch.Enqueue_Command (UC, DC, M);
+            end;
+         end;
+      end;
+      return Success;
+   end Cmd_Who;
+
+   function Cmd_Whois
+     (DC : not null Downstream_Conn_Access; M : Message)
+      return Irc_Error_Result
+   is
+      Nick : constant String := Nick_Of (DC);
+      Cfg  : constant Soja.Server.Server_Config_Access :=
+        Soja.Server.Config (DC.Srv.all);
+   begin
+      if M.Params.Is_Empty then
+         return IRC_Fail (ERR_NONICKNAMEGIVEN, [Nick, "No nickname given"]);
+      end if;
+
+      declare
+         Raw  : constant String :=
+           (if M.Params.Length = 1 then Param (M, 0) else Param (M, 1));
+         Comma : constant Natural := Ada.Strings.Fixed.Index (Raw, ",");
+         --  TODO (Go): support multiple WHOIS users.
+         Mask : constant String :=
+           (if Comma > 0 then Raw (Raw'First .. Comma - 1) else Raw);
+         Host : constant String := To_String (Cfg.Hostname);
+      begin
+         if DC.Network = null
+           and then Fold (DC, Mask) = To_String (DC.Nick_CM)
+         then
+            Send_Message
+              (DC, Make (RPL_WHOISUSER,
+                         [Nick, Nick, To_String (DC.User.User_Record.Username),
+                          To_String (DC.Hostname), "*",
+                          To_String (DC.Realname)]));
+            Send_Message
+              (DC, Make (RPL_WHOISSERVER, [Nick, Nick, Host, "soju"]));
+            if DC.User.User_Record.Admin then
+               Send_Message
+                 (DC, Make (RPL_WHOISOPERATOR,
+                            [Nick, Nick, "is a bouncer administrator"]));
+            end if;
+            Send_Message
+              (DC, Make (RPL_WHOISACCOUNT,
+                         [Nick, Nick,
+                          To_String (DC.User.User_Record.Username),
+                          "is logged in as"]));
+            Send_Message
+              (DC, Make (RPL_ENDOFWHOIS, [Nick, Nick, "End of /WHOIS list"]));
+            return Success;
+         end if;
+
+         if Fold (DC, Mask) = Service_Nick_CM then
+            Send_Message
+              (DC, Make (RPL_WHOISUSER,
+                         [Nick, Service_Nick, Service_Nick, Service_Nick, "*",
+                          Service_Realname]));
+            Send_Message
+              (DC, Make (RPL_WHOISSERVER,
+                         [Nick, Service_Nick, Host, "soju"]));
+            Send_Message
+              (DC, Make (RPL_WHOISOPERATOR,
+                         [Nick, Service_Nick, "is the bouncer service"]));
+            Send_Message
+              (DC, Make (RPL_WHOISACCOUNT,
+                         [Nick, Service_Nick, Service_Nick, "is logged in as"]));
+            Send_Message
+              (DC, Make (RPL_WHOISBOT, [Nick, Service_Nick, "is a bot"]));
+            Send_Message
+              (DC, Make (RPL_ENDOFWHOIS,
+                         [Nick, Service_Nick, "End of /WHOIS list"]));
+            return Success;
+         end if;
+      end;
+
+      declare
+         UC : Upstream_Conn_Access;
+         R  : constant Irc_Error_Result :=
+           Upstream_For_Command (DC, "WHOIS", UC);
+      begin
+         if R.Failed then
+            return R;
+         end if;
+         Soja.Core.Upstream_Dispatch.Enqueue_Command (UC, DC, M);
+      end;
+      return Success;
+   end Cmd_Whois;
+
+   ----------------------------------------------------------------------
    --  The dispatch
    ----------------------------------------------------------------------
 
@@ -715,6 +975,10 @@ package body Soja.Core.Downstream_Commands is
          return Cmd_List (DC, M);
       elsif Cmd = "NAMES" then
          return Cmd_Names (DC, M);
+      elsif Cmd = "WHO" then
+         return Cmd_Who (DC, M);
+      elsif Cmd = "WHOIS" then
+         return Cmd_Whois (DC, M);
       end if;
 
       DC.Logger.Debug ("unhandled message: " & Image (M));

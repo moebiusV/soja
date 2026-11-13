@@ -485,6 +485,7 @@ package Soja.Core is
    --  service.go's BouncerServ identity.
    Service_Nick    : constant String := "BouncerServ";
    Service_Nick_CM : constant String := "bouncerserv";
+   Service_Realname : constant String := "soju bouncer service";
 
    --  srv.prefix(): the server's prefix (its hostname).
    function Server_Prefix (Srv : Soja.Server.Server_Access)

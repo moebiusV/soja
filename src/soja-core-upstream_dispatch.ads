@@ -1,5 +1,6 @@
 pragma Ada_2022;
 
+with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded;
 
 with Soja.Irc.Genmsg;
@@ -46,6 +47,22 @@ package Soja.Core.Upstream_Dispatch is
    function Passthrough_Isupport_Tokens
      (UC : not null Upstream_Conn_Access)
       return Soja.Irc.Genmsg.String_Vectors.Vector;
+
+   --  uc.getCachedWHO: answer a WHO from the user-info cache, when it holds
+   --  every field asked for -- of the user the mask names, or of every member
+   --  of the channel it names.  Found is False when the cache cannot answer.
+   package User_Vectors is new Ada.Containers.Vectors
+     (Positive, Soja.Upstream.Upstream_User, "=" => Soja.Upstream."=");
+
+   type Cached_Who is record
+      Found : Boolean := False;
+      Users : User_Vectors.Vector;
+   end record;
+
+   function Get_Cached_Who
+     (UC     : not null Upstream_Conn_Access;
+      Mask   : String;
+      Fields : String) return Cached_Who;
 
    --  uc.cacheUserInfo: remember (or merge) what is known about a user.
    procedure Cache_User_Info

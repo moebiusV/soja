@@ -832,6 +832,71 @@ package body Soja.Core.Upstream_Dispatch is
    --  Channel state (4b): users, channels, produce
    ----------------------------------------------------------------------
 
+   function Get_Cached_Who
+     (UC     : not null Upstream_Conn_Access;
+      Mask   : String;
+      Fields : String) return Cached_Who
+   is
+      Result    : Cached_Who;
+      Effective : constant String :=
+        (if Fields = "" then "cuhsnfdr" else Fields);
+      Single    : constant Upstream_User_Access := UC.Users.Get (Mask);
+      Channel   : constant Upstream_Channel_Access := UC.Channels.Get (Mask);
+      OK        : Boolean := True;
+
+      --  Some extensions are required to keep our cached state in sync.  We
+      --  could require setname for 'r' and chghost for 'h'/'s', but servers
+      --  usually implement a QUIT/JOIN fallback, so let's not bother.
+      --  TODO (Go): avoid storing fields we cannot keep up to date.
+   begin
+      if Ada.Strings.Fixed.Index (Effective, "a") > 0
+        and then not Is_Enabled (UC.Caps, "account-notify")
+      then
+         return Result;
+      end if;
+      if Ada.Strings.Fixed.Index (Effective, "f") > 0
+        and then not Is_Enabled (UC.Caps, "away-notify")
+      then
+         return Result;
+      end if;
+
+      if Single /= null then
+         if Soja.Upstream.Has_WHOX_Fields (Single.all, Effective) then
+            Result.Found := True;
+            Result.Users.Append (Single.all);
+         end if;
+      elsif Channel /= null then
+         declare
+            procedure Collect
+              (Nick : String;
+               Set  : Soja.Irc.Members.Membership_Set_Access)
+            is
+               pragma Unreferenced (Set);
+               Uu : constant Upstream_User_Access := UC.Users.Get (Nick);
+            begin
+               if not OK then
+                  return;
+               end if;
+               if Uu = null
+                 or else not Soja.Upstream.Has_WHOX_Fields (Uu.all, Effective)
+               then
+                  OK := False;
+               else
+                  Result.Users.Append (Uu.all);
+               end if;
+            end Collect;
+         begin
+            Channel.Members.For_Each (Collect'Access);
+         end;
+         if OK then
+            Result.Found := True;
+         else
+            Result.Users.Clear;
+         end if;
+      end if;
+      return Result;
+   end Get_Cached_Who;
+
    procedure Cache_User_Info
      (UC   : not null Upstream_Conn_Access;
       Nick : String;
