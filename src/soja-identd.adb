@@ -8,6 +8,7 @@ with AWS.Net.Std;
 with GNAT.Sockets;
 
 with Ident_Query.Parser;
+with Soja.Proxy_Protocol;
 
 package body Soja.Identd is
 
@@ -157,9 +158,12 @@ package body Soja.Identd is
    Max_Line : constant := 512;   --  the scanner's buffer in Go
 
    --  Identd.handle: read queries from one client.
-   procedure Handle (I : in out Identd; Sock : in out AWS.Net.Std.Socket_Type)
+   procedure Handle
+     (I : in out Identd; Sock : in out AWS.Net.Std.Socket_Type;
+      Proxy : Proxy_Check)
    is
-      Remote_Host : constant String := Sock.Peer_Addr;
+      Peer        : constant String := Sock.Peer_Addr;
+      Remote_Host : Unbounded_String := To_Unbounded_String (Peer);
       Pending     : Unbounded_String;
       Chunk       : Ada.Streams.Stream_Element_Array (1 .. 256);
       Last        : Ada.Streams.Stream_Element_Offset;
@@ -176,6 +180,19 @@ package body Soja.Identd is
          Sock.Send (Data, Sent);
       end Send;
    begin
+      if Proxy /= null and then Proxy (Peer) then
+         declare
+            Header : Soja.Proxy_Protocol.Info;
+         begin
+            Soja.Proxy_Protocol.Read_Header (Sock, Pending, 5.0, Header);
+            if not Header.Local then
+               Remote_Host := Header.Source_Host;
+            end if;
+         exception
+            when Soja.Proxy_Protocol.Proxy_Error =>
+               return;   --  not a connection we can trust or understand
+         end;
+      end if;
       Sock.Set_Timeout (Query_Timeout);
       loop
          --  A complete line?
@@ -194,7 +211,7 @@ package body Soja.Identd is
                   Keep  : Boolean;
                begin
                   Pending := To_Unbounded_String (Text (NL + 1 .. Text'Last));
-                  Answer (I, Remote_Host, Line, Reply, Keep);
+                  Answer (I, To_String (Remote_Host), Line, Reply, Keep);
                   Send (To_String (Reply) & CRLF);
                   exit when not Keep;
                end;
@@ -215,7 +232,8 @@ package body Soja.Identd is
    end Handle;
 
    task type Client_Task
-     (I : not null access Identd; Sock : not null AWS.Net.Socket_Access)
+     (I : not null access Identd; Sock : not null AWS.Net.Socket_Access;
+      Proxy : Proxy_Check)
    is
       entry Start;
    end Client_Task;
@@ -224,7 +242,7 @@ package body Soja.Identd is
    begin
       accept Start;
       begin
-         Handle (I.all, AWS.Net.Std.Socket_Type (Sock.all));
+         Handle (I.all, AWS.Net.Std.Socket_Type (Sock.all), Proxy);
       exception
          when others => null;
       end;
@@ -243,7 +261,9 @@ package body Soja.Identd is
    type Client_Task_Access is access Client_Task;
 
    procedure Serve
-     (I : aliased in out Identd; Listener : not null AWS.Net.Socket_Access)
+     (I        : aliased in out Identd;
+      Listener : not null AWS.Net.Socket_Access;
+      Proxy    : Proxy_Check := null)
    is
       FD   : constant Integer := AWS.Net.Std.Socket_Type (Listener.all).Get_FD;
       GS   : constant GNAT.Sockets.Socket_Type := GNAT.Sockets.To_Ada (FD);
@@ -267,7 +287,7 @@ package body Soja.Identd is
                AWS.Net.Accept_Socket (Listener.all, New_Sock.all);
                declare
                   T : constant Client_Task_Access :=
-                    new Client_Task (I'Unchecked_Access, New_Sock);
+                    new Client_Task (I'Unchecked_Access, New_Sock, Proxy);
                begin
                   T.Start;
                end;

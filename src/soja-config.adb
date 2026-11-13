@@ -153,19 +153,20 @@ package body Soja.Config is
 
       --  Parse the address part (before the slash) and fill Addr.
       procedure Parse_Address (A : String) is
-         Dot : Natural := 0;
+         Dot       : Natural := 0;
+         Has_Colon : Boolean := False;
       begin
          --  v4: contains '.' and no ':'
          for I in A'Range loop
             if A (I) = ':' then
-               Is_V4 := False;
-               return;
+               Has_Colon := True;
+               exit;
             elsif A (I) = '.' then
                Dot := Dot + 1;
             end if;
          end loop;
 
-         if Dot = 3 then
+         if Dot = 3 and then not Has_Colon then
             --  IPv4 dotted-quad.
             Is_V4 := True;
             declare

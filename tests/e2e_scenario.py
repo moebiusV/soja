@@ -170,6 +170,49 @@ def main():
     u.expect(r"test .*connected")
     u.close()
 
+    log("the PROXY protocol, from a trusted peer")
+    p = Client(BOUNCER, "proxied")
+    p.send("PROXY TCP4 10.9.8.7 127.0.0.1 51234 6697")
+    p.register("alice", "alice", "secret")
+    p.send("WHOIS alice")
+    p.expect(r" 311 alice alice alice 10\.9\.8\.7 ")
+    p.close()
+    p = Client(BOUNCER, "proxied6")
+    p.send("PROXY TCP6 2001:db8::5 ::1 51234 6697")
+    p.register("alice", "alice", "secret")
+    p.send("WHOIS alice")
+    p.expect(r" 311 alice alice alice 2001:db8::5 ")
+    p.close()
+    # a client that sends no header is served as before (address 127.0.0.1)
+    p = Client(BOUNCER, "unproxied")
+    p.register("alice", "alice", "secret")
+    p.send("WHOIS alice")
+    p.expect(r" 311 alice alice alice 127\.0\.0\.1 ")
+    p.close()
+    # a malformed header drops the connection
+    p = Client(BOUNCER, "badheader")
+    p.send("PROXY TCP4 not-an-address 127.0.0.1 1 2")
+    try:
+        p.expect(r"never", timeout=5)
+        raise Fail("a malformed PROXY header was accepted")
+    except Fail as e:
+        if "connection closed" not in str(e):
+            raise
+    p.close()
+    # identd matches the address the header names
+    s1 = socket.create_connection(("127.0.0.1", 1130), timeout=5)
+    s1.sendall(f"PROXY TCP4 127.0.0.1 127.0.0.1 1 113\r\n{ports[0]}, {SERVER}\r\n".encode())
+    r1 = s1.recv(512).decode()
+    s1.close()
+    if "USERID" not in r1:
+        raise Fail(f"identd ignored the PROXY source: {r1!r}")
+    s2 = socket.create_connection(("127.0.0.1", 1130), timeout=5)
+    s2.sendall(f"PROXY TCP4 10.9.8.7 127.0.0.1 1 113\r\n{ports[0]}, {SERVER}\r\n".encode())
+    r2 = s2.recv(512).decode()
+    s2.close()
+    if "NO-USER" not in r2:
+        raise Fail(f"identd matched the wrong host: {r2!r}")
+
     log("messages both ways")
     b.send("PRIVMSG #t :hello from bob")
     a.expect(r":bob!\S+ PRIVMSG #t :hello from bob")

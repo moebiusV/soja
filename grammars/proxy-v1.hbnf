@@ -1,0 +1,16 @@
+; proxy-v1.hbnf -- the text form of the HAProxy PROXY protocol header, without
+; its CRLF:  PROXY <TCP4|TCP6|UNKNOWN> <src> <dst> <sport> <dport>
+;
+; The grammar only splits the line into words and single or repeated gaps;
+; the walker (soja-proxy_protocol.adb) checks the shape: exactly one space
+; between words, the protocol, and that addresses and ports are valid.
+; (The binary form, version 2, is not text and is parsed by hand.)
+
+language Ada
+
+include "common.hbnf"
+
+line = *( gap | word )
+
+gap  = 1*SP
+word = 1*VCHAR

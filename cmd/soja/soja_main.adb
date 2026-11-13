@@ -21,6 +21,7 @@ with Soja.Identd;
 with Soja.Irc.Genmsg;
 with Soja.Irc.Helpers;
 with Soja.Logging;
+with Soja.Proxy_Protocol;
 with Soja.Server;
 with Soja.Unix_Server;
 with Soja_Signals;
@@ -235,9 +236,18 @@ procedure Soja_Main is
    task type Ident_Task
      (L : not null AWS.Net.Socket_Access; Name : not null String_Access);
 
+   --  accept-proxy-ip, for the ident listener.
+   function Accepts_Proxy (Peer : String) return Boolean is
+      Addr : Soja.Config.IP_Addr;
+   begin
+      return Soja.Proxy_Protocol.Parse_IP (Peer, Addr)
+        and then Soja.Proxy_Protocol.Contains
+                   (Soja.Server.Config (Srv).Accept_Proxy_IPs, Addr);
+   end Accepts_Proxy;
+
    task body Ident_Task is
    begin
-      Soja.Identd.Serve (Ident, L);
+      Soja.Identd.Serve (Ident, L, Accepts_Proxy'Unrestricted_Access);
       Serving.Done;
    exception
       when E : others =>

@@ -42,6 +42,7 @@ listen ident://127.0.0.1:1130
 listen unix+admin://$D/admin.sock
 listen unix://$D/irc.sock
 hostname soja.example.net
+accept-proxy-ip localhost
 db sqlite3 $D/soja.db
 EOT
 export SOJUCTL_BIN="$PWD/cmd/sojuctl/sojuctl" SOJA_BIN="$PWD/cmd/soja/soja" SOJA_CONF="$D/soja.conf" E2E_DIR="$D"

@@ -40,9 +40,17 @@ package Soja.Identd is
       Reply : out Ada.Strings.Unbounded.Unbounded_String;
       Keep_Open : out Boolean);
 
-   --  Identd.Serve: accept queries on Listener until Stop is called.
+   --  Whether a peer (its IP, as text) may send a PROXY protocol header
+   --  (`accept-proxy-ip`).
+   type Proxy_Check is access function (Peer : String) return Boolean;
+
+   --  Identd.Serve: accept queries on Listener until Stop is called.  A peer
+   --  that Proxy accepts may start with a PROXY header; the address in it is
+   --  then the one its queries are matched against.
    procedure Serve
-     (I : aliased in out Identd; Listener : not null AWS.Net.Socket_Access);
+     (I        : aliased in out Identd;
+      Listener : not null AWS.Net.Socket_Access;
+      Proxy    : Proxy_Check := null);
 
    procedure Stop (I : in out Identd);
 

@@ -6,6 +6,7 @@ with Ada.Streams;
 with Ada.Strings.Fixed;
 with AWS.Net;
 with Soja.Irc.Hbnf;
+with Soja.Proxy_Protocol;
 
 package body Soja.Conn.Net is
 
@@ -20,7 +21,8 @@ package body Soja.Conn.Net is
      is
    begin
       return Net_IRC_Conn'
-        (IRC_Conn with Sock => Sock, Buffer => Null_Unbounded_String);
+        (IRC_Conn with Sock => Sock, Buffer => Null_Unbounded_String,
+         Proxied => Null_Unbounded_String);
    end Create;
 
    function Socket (C : Net_IRC_Conn) return AWS.Net.Socket_Access is
@@ -127,11 +129,35 @@ package body Soja.Conn.Net is
           (Positive'Image (C.Sock.Peer_Port), Ada.Strings.Left);
       Addr : constant String := C.Sock.Peer_Addr;
    begin
+      if Length (C.Proxied) > 0 then
+         return To_String (C.Proxied);
+      end if;
       --  net.JoinHostPort: an IPv6 literal is bracketed.
       if Ada.Strings.Fixed.Index (Addr, ":") > 0 then
          return "[" & Addr & "]:" & Port;
       end if;
       return Addr & ":" & Port;
    end Remote_Addr;
+
+   procedure Read_Proxy_Header (C : in out Net_IRC_Conn; Timeout : Duration)
+   is
+      Info : Soja.Proxy_Protocol.Info;
+   begin
+      Soja.Proxy_Protocol.Read_Header (C.Sock.all, C.Buffer, Timeout, Info);
+      --  Back to waiting as long as the peer likes.
+      C.Sock.Set_Timeout (AWS.Net.Forever);
+      if not Info.Local then
+         declare
+            Host : constant String := To_String (Info.Source_Host);
+            Port : constant String := Ada.Strings.Fixed.Trim
+              (Natural'Image (Info.Source_Port), Ada.Strings.Left);
+         begin
+            --  net.JoinHostPort.
+            C.Proxied := To_Unbounded_String
+              ((if Ada.Strings.Fixed.Index (Host, ":") > 0
+                then "[" & Host & "]:" & Port else Host & ":" & Port));
+         end;
+      end if;
+   end Read_Proxy_Header;
 
 end Soja.Conn.Net;

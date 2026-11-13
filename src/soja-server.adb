@@ -4,12 +4,17 @@ with AWS.Net;
 with AWS.Net.SSL;
 with AWS.Net.Std;
 with GNAT.Sockets;
+with Ada.Exceptions;
+
+with Soja.Config;
 with Soja.Conn.Net;
+with Soja.Proxy_Protocol;
 
 package body Soja.Server is
 
    use AWS.Net;
    use type GNAT.Sockets.Selector_Status;
+   use type Soja.Logging.Logger_Access;
 
    protected body Shutdown_Flag is
       procedure Request is
@@ -22,15 +27,42 @@ package body Soja.Server is
    --  One task per connection (server.go's `go handler(...)`).  Start gates
    --  the body so activation completes at an Ada suspension point rather than
    --  inside the handler's first blocking read.
+   --  Proxy: the peer is in `accept-proxy-ip`, so the connection may start
+   --  with a PROXY protocol header (go-proxyproto's USE policy, 5 s to read
+   --  it).  It is read here, on the connection's own task, not in the accept
+   --  loop; for TLS it comes inside the TLS stream, as in soju (the proxy
+   --  listener wraps the TLS one).
    task type Conn_Task
-     (IC : not null Soja.Conn.IRC_Conn_Access; H : Handler) is
+     (S : not null access Server;
+      IC : not null Soja.Conn.IRC_Conn_Access; H : Handler;
+      Proxy : Boolean; Peer : not null access constant String)
+   is
       entry Start;
    end Conn_Task;
 
    task body Conn_Task is
+      Header_Timeout : constant Duration := 5.0;
+      Serve_It       : Boolean := True;
    begin
       accept Start;
-      H (IC);
+      if Proxy then
+         begin
+            Soja.Conn.Net.Read_Proxy_Header
+              (Soja.Conn.Net.Net_IRC_Conn (IC.all), Header_Timeout);
+         exception
+            when E : others =>
+               if S.Logger /= null then
+                  S.Logger.Print
+                    ("connection from " & Peer.all & ": "
+                     & Ada.Exceptions.Exception_Message (E));
+               end if;
+               Soja.Conn.Close (IC.all);
+               Serve_It := False;
+         end;
+      end if;
+      if Serve_It then
+         H (IC);
+      end if;
    end Conn_Task;
 
    --  A package-level access type, so a connection task's master is the
@@ -144,7 +176,14 @@ package body Soja.Server is
             end;
 
             declare
-               IC : Soja.Conn.IRC_Conn_Access;
+               IC    : Soja.Conn.IRC_Conn_Access;
+               Peer  : constant access constant String :=
+                 new String'(New_Sock.Peer_Addr);
+               Addr  : Soja.Config.IP_Addr;
+               Proxy : constant Boolean :=
+                 Soja.Proxy_Protocol.Parse_IP (Peer.all, Addr)
+                 and then Soja.Proxy_Protocol.Contains
+                            (Soja.Server.Config (S).Accept_Proxy_IPs, Addr);
             begin
                if Use_TLS then
                   declare
@@ -162,7 +201,8 @@ package body Soja.Server is
                end if;
 
                declare
-                  T : Conn_Task_Access := new Conn_Task (IC, S.H);
+                  T : Conn_Task_Access :=
+                    new Conn_Task (S'Unchecked_Access, IC, S.H, Proxy, Peer);
                begin
                   T.Start;   -- begin serving the connection
                end;

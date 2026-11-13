@@ -299,6 +299,30 @@ Deviations:
   control character (a newline, a tab) comes out as the letter after the
   backslash, because BouncerServ's word splitting has no `\n`.
 
+### PROXY protocol (`Soja.Proxy_Protocol`, `accept-proxy-ip`)
+
+`proxyProtoListener` in `cmd/soju/main.go` (go-proxyproto, policy USE for peers
+in `accept-proxy-ip`, 5 s header timeout).  A connection from such a peer may
+start with a PROXY header, version 1 (text) or 2 (binary); if it does, the
+address in it becomes the connection's remote address (the client's hostname,
+the log lines, the ident match), and if it does not the connection goes on as
+it is.  A malformed header, EOF inside one, or no complete header in 5 s drops
+the connection.  Applies to the TCP listeners (ircs, irc+insecure, ident); unix
+sockets are never proxied, as in Go.  Version 1 goes through
+`grammars/proxy-v1.hbnf` (words and gaps; the walker checks the shape); version
+2 is binary, so it is parsed by hand.  Notes:
+
+- For `ircs://` the header is read *inside* the TLS stream: Go wraps the TLS
+  listener in the proxy listener, so soja does the same.
+- The header is read on the connection's own task, not in the accept loop, so
+  a slow peer cannot hold up other clients.
+- A trusted peer that waits for the server to speak first would wait 5 s for
+  its header-or-data decision; IRC clients speak first, so it does not matter.
+- The destination address of a header is parsed and ignored (Go uses it for
+  `LocalAddr`, which soju only reads for upstream connections).
+- Fixed on the way: `Soja.Config`'s CIDR parser returned at the first `:`, so
+  every IPv6 `accept-proxy-ip` / `upstream-user-ip` network was stored as `::`.
+
 ### Executables (`cmd/soja`, `cmd/sojadb`) and the end-to-end check
 
 Step 10.  `soja` (main unit `Soja_Main`, since `Soja` is the library's root
@@ -312,8 +336,7 @@ What it refuses or changes, loudly:
 
 - Listeners: `ircs://`, `irc+insecure://`, `unix://`, `ident://` and
   `unix+admin://` only; any other scheme (ws, http, prometheus, pprof) is a
-  startup error.  Go wraps the TCP, unix, admin and ident listeners in PROXY
-  protocol handling (`accept-proxy-ip`); soja does not, yet.
+  startup error.  `accept-proxy-ip` (PROXY protocol) works on the TCP listeners.
 - Auth drivers other than `internal` (pam, oauth2) are a startup error: a
   bouncer that cannot check passwords must not start as if it could.
 - Message stores other than `memory` fall back to memory, with a warning;

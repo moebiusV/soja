@@ -25,11 +25,20 @@ package Soja.Conn.Net is
 
    function Socket (C : Net_IRC_Conn) return AWS.Net.Socket_Access;
 
+   --  The PROXY protocol (policy USE): if the connection starts with a PROXY
+   --  header, consume it and report the address it names from now on as the
+   --  remote address; if it starts with something else, leave it alone.
+   --  Soja.Proxy_Protocol.Proxy_Error (after Timeout, or on a malformed
+   --  header) means the connection must be dropped.
+   procedure Read_Proxy_Header (C : in out Net_IRC_Conn; Timeout : Duration);
+
 private
 
    type Net_IRC_Conn is new IRC_Conn with record
       Sock   : AWS.Net.Socket_Access;
       Buffer : Ada.Strings.Unbounded.Unbounded_String;   -- leftover bytes
+      --  Set by a PROXY header: "host:port" of the real client.
+      Proxied : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
 end Soja.Conn.Net;
