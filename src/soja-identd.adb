@@ -69,50 +69,26 @@ package body Soja.Identd is
       I.Entries.Remove (Key_Of (Remote_Host, Remote_Port, Local_Port));
    end Delete;
 
+   --  A port is 1 .. 65535.
+   function Valid_Port (N : Long_Long_Integer) return Boolean is
+     (N in 1 .. 65_535);
+
+   --  The line is read by the generated parser (grammars/ident-query.hbnf);
+   --  what is left is the range of the two numbers.
    procedure Parse_Query
      (Line : String; Local_Port, Remote_Port : out Natural;
       Ok : out Boolean)
    is
-      type Step is (Want_First, Want_Comma, Want_Second, Done);
-      Where : Step := Want_First;
-      Bad   : Boolean := False;
+      Q : Standard.Ident_Query.Query_Type;
    begin
-      Local_Port := 0;
-      Remote_Port := 0;
-      Ok := False;
-      declare
-         Tree : constant Standard.Ident_Query.Query_Type :=
-           Standard.Ident_Query.Parser.Parse_Text (Line);
-      begin
-         --  number comma number, white space anywhere between.
-         for E of Tree loop
-            if Length (E.Ws) > 0 then
-               null;
-            elsif Length (E.Num) > 0 then
-               case Where is
-                  when Want_First =>
-                     Local_Port := Natural'Value (To_String (E.Num));
-                     Where := Want_Comma;
-                  when Want_Second =>
-                     Remote_Port := Natural'Value (To_String (E.Num));
-                     Where := Done;
-                  when others =>
-                     Bad := True;
-               end case;
-            elsif Where = Want_Comma then
-               Where := Want_Second;
-            else
-               Bad := True;
-            end if;
-         end loop;
-      end;
-      Ok := not Bad and then Where = Done
-        and then Local_Port > 0 and then Remote_Port > 0;
-      if not Ok then
-         Local_Port := 0;
-         Remote_Port := 0;
-      end if;
+      Q := Standard.Ident_Query.Parser.Parse_Text (Line);
+      Ok := Valid_Port (Q.Local) and then Valid_Port (Q.Remote);
+      Local_Port := (if Ok then Natural (Q.Local) else 0);
+      Remote_Port := (if Ok then Natural (Q.Remote) else 0);
+      Standard.Ident_Query.Parser.Free_Query (Q);
    exception
+      --  (A number too big for 64 bits is a Constraint_Error from the parser,
+      --  not a Parse_Error: reported to hbnf.)
       when Standard.Ident_Query.Parser.Parse_Error | Constraint_Error =>
          Local_Port := 0;
          Remote_Port := 0;

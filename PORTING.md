@@ -8,6 +8,67 @@ itself are fixed, not copied (decided 2026-11-12), and each fix is recorded
 here under "Bugs in soju that soja fixes" and, in PR-ready form, in
 `SOJU-BUGS.md` (each becomes its own upstream PR once soja is complete).
 
+## What hbnf can do (checked 2026-11-13; read this before deciding a format is "not an hbnf grammar")
+
+Several notes below say hbnf cannot express something because of its "lexer" (the
+znclog line, the quoting of BouncerServ's command line, the ident query).  **hbnf
+has no lexer.**  It is a scannerless, ordered-choice (PEG) parser generator: a rule
+reads characters, a literal is matched where it stands, a repetition takes what it
+can, and `!x` / `&x` look ahead.  Text after a delimiter that may contain the
+delimiter is the rest of the line (`*~LF`); a delimiter that is the first of its
+kind is `*( ~">" | ">" !" " ) "> "`; a class used twice is two uses of one rule.
+The notes were written against an older hbnf and its token-and-walker habit; the
+grammars it read used the older notation (`language Ada`, `%x09-0D`, maximal-munch
+tokens), which the current hbnf refuses.
+
+Where it lives: `/home/matthew/claude/hbnf` (`README.md`, `CONTEXTS.md` for the
+newer notation, `decision-register.md` for what was decided and when, `corpus/` for
+worked grammars, `tests/` for how each is checked).  Backends: C, Rust, Zig, Ada,
+tree-sitter (`hbnf FILE --backend=ada`).  Not every feature is in every backend:
+contexts (`in` / `not in` sets) are in all four; facts and rewrites (`=>`) too
+(Ada since `d201a6e`).
+
+What was checked, with real grammars and cases (not guesses):
+
+- **znclog** (`corpus/znclog/znclog.hbnf`, `tests/znclog.sh` in the hbnf repo): every
+  line kind of `reader.go`'s `UnmarshalLine` with events on, split at the first
+  delimiter as `strings.SplitN` does, text free.  A transducer (each line replaced by
+  `KIND<TAB>fields`); its output is identical to a Python port of the Go splits on 15
+  written lines and 30000 fuzzed ones built from the delimiters (`<a> b> c`,
+  `<a>b> x> y`, nested parentheses, quotes).  The Go code itself could not be run (no
+  Go toolchain on that machine).
+- **ident query** (`<port> , <port>`): `query = *WSP port *WSP "," *WSP port *WSP`,
+  `port = 1*DIGIT`: 7 cases, accepts the three good spacings, refuses `6193 23`,
+  `6193,`, `,23` and `6193, 23, 5`.  No walker is needed.
+- **splitWords' quoting**: `word = 1*( plain | escaped | dq | sq )` with
+  `dq = "\"" *( ~( "\"" | "\\" ) | "\\" OCTET ) "\""` (likewise `sq`) accepts and refuses
+  what `splitWords` does (8 cases: unterminated quote and trailing backslash are
+  errors, `""` is a word, a `'` inside `"` is text).  Not checked end to end: producing
+  each word's unquoted value from the grammar (it is a list of pieces, plain, escaped
+  and quoted, whose payloads a short walker joins, or a transducer like znclog's).
+
+Done in soja (2026-11-13, hbnf 0.8, `d201a6e`): `Znclog`, `Service_Words`,
+`Ident_Query`, the PROXY v1 line and the HTTP head are now read by grammars in the
+new notation (`grammars/*.hbnf`, regenerated into `src/` by
+`grammars/generate.sh`; the image `ada-toolchain:edge-full-hbnf08` has the tool).
+`grammars/legacy/` keeps the grammars of the older notation (`irc-message`, `scfg`,
+`obconf`) with their generated units, for later.  Two things about hbnf's Ada
+tree came up, for its author:
+
+- A rule made only of character rules is read as one text, whatever its parts
+  are named: `field = name ":" value` has no `Name` and `Value` in the tree.
+  A record appears when the rule holds something that is not text: an `int`, or
+  a lookahead (`&x`, `!x`) of a rule.  The grammars here put a lookahead in
+  front of a kind of line (`&"*** "`) where the tree must say which kind it
+  is.  (An optional literal, `[ "(" ]`, turns a rule back into text; the
+  walkers take parentheses and quotes off, as Go's `TrimPrefix` does.)
+- `hidden sep = SP` hides only the first use of `sep`; the second and later
+  uses are fields `Sep_2`, `Sep_3`, ...  A number too big for 64 bits is a
+  `Constraint_Error` from the parser, not a `Parse_Error`.
+
+If something seems inexpressible, write the small grammar and try it before writing
+the note: it takes minutes, and the last three such notes were wrong.
+
 ## Component map
 
 | Go (soju)                  | Ada (soja)        | ada-on-alpine package            |
@@ -225,12 +286,14 @@ Step 8: server.go's user table, `Handle`, `getOrCreateUser`, `createUser`,
 
 ### BouncerServ's command line (`grammars/service-words.hbnf`)
 
-`splitWords` is `Soja.Service_Words.Split_Words`.  The hbnf grammar only
-classifies each byte (white space, backslash, `"`, `'`, other): hbnf's Ada
-lexer cannot carry "inside a quote" from one token to the next, so the quoting
-state machine is in the walker.  Deviation: only ASCII white space separates
-words (Go's `unicode.IsSpace` also takes U+0085, U+00A0 and other Unicode
-spaces).
+`splitWords` is `Soja.Service_Words.Split_Words`.  The grammar reads the
+line as white space and words; a word is pieces run together (plain text, a
+backslash and the character after it, a "double" or 'single' quoted string); two
+more pieces stand for what Go refuses (a quote never closed, a backslash at
+the end), so the messages are Go's.  The walker takes the quotes and
+backslashes off and joins the pieces.  White space is Go's `unicode.IsSpace`
+(U+0085, U+00A0 and the other Unicode spaces too).  Deviation: bytes that are not
+UTF-8 are refused ("failed to parse command"), where Go makes each a U+FFFD.
 
 ### BouncerServ commands (`Soja.Core.Service`, `Soja.Flags`)
 
@@ -265,9 +328,8 @@ and an RFC 1413 server answering `<port>, <port>` queries.  `Soja.Core` register
 each upstream connection right after the TCP connect and before the TLS
 handshake (the server may query at once) and removes it when the connection
 ends; the ident is the hash of the user ID (`userIdent`).  The query line is
-tokenised by `grammars/ident-query.hbnf`; the walker checks it is
-`number , number` (a flat token grammar again: hbnf's lexer cannot tell two
-uses of one token class apart).  Deviations: a signed port such as `+80` is
+read by `grammars/ident-query.hbnf` (`*WSP local *WSP "," *WSP remote *WSP`), and
+the walker checks that the ports are 1 to 65535.  Deviations: a signed port such as `+80` is
 refused (Go's `Atoi` takes it); the PROXY protocol wrapper Go puts on the ident
 listener is not ported (no PROXY support yet).
 
@@ -314,8 +376,9 @@ address in it becomes the connection's remote address (the client's hostname,
 the log lines, the ident match), and if it does not the connection goes on as
 it is.  A malformed header, EOF inside one, or no complete header in 5 s drops
 the connection.  Applies to the TCP listeners (ircs, irc+insecure, ident); unix
-sockets are never proxied, as in Go.  Version 1 goes through
-`grammars/proxy-v1.hbnf` (words and gaps; the walker checks the shape); version
+sockets are never proxied, as in Go.  Version 1 is read by
+`grammars/proxy-v1.hbnf` (`PROXY <TCP4|TCP6> src dst sport dport`, or `PROXY UNKNOWN
+...`); the walker checks the addresses are of the family and the ports in range.  Version
 2 is binary, so it is parsed by hand.  Notes:
 
 - For `ircs://` the header is read *inside* the TLS stream: Go wraps the TLS
@@ -377,10 +440,14 @@ files' modification time (second granularity), and their names are the
   umask), not fixed afterwards.  All file access is through the C library: GNAT
   refuses to open one file twice in different modes, and the store reads a
   day's log while it has it open for appending.
-- `Znclog` splits lines at the first delimiter, like the Go code; it is not an
-  hbnf grammar (what follows a delimiter is free text that may contain it,
-  `<a> b> c`, which hbnf's lexer cannot express).  A line that does not start
-  with a time is an error that fails the whole read of that day, as in soju.
+- `Znclog` reads a line with `grammars/znclog.hbnf`, the line rules of hbnf's
+  `corpus/znclog/znclog.hbnf` (checked there against the Go splitting on 30000
+  fuzzed lines) with a rule for each kind of line; the walker takes the
+  parentheses and quotes off the mask, the reason and the topic and builds the
+  message.  (It was hand-parsed first, on the wrong belief that hbnf could not
+  express it.)  A line that does not start with a time is an error that fails
+  the whole read of that day, as in soju; bytes that are not UTF-8 are replaced
+  by U+FFFD first, so that they do not.
 - Search lower-cases Unicode text (`Ada.Wide_Wide_Characters`), not only ASCII.
 - Fixed soju quirks: SB-17 (rename of a network with no logs reported as an
   error) and SB-18 (the store kept the user's nick from creation; it is told
@@ -410,9 +477,9 @@ no closing-handshake wait on `Close` (the close frame is sent, then the socket
 is shut); `Forwarded` is parsed the way `mime.ParseMediaType` does, but only for
 the `for` parameter; the Origin is split into host with a small URL reader, not
 `net/url` (a control character or space is refused).  The request line and
-header fields are tokenised by `grammars/http-head.hbnf`, in the older
-token-and-walker style; moving it to a full grammar goes with the other three
-(see "What hbnf can do").
+header fields are read by `grammars/http-head.hbnf` (a request line or a
+field, one line at a time; the reader cuts the head into lines).  A field value
+that is not UTF-8 is refused, where net/http keeps its bytes.
 
 The socket is released once the connection is closed, the handler has
 returned and no task is inside a read or write, so a late write from the writer

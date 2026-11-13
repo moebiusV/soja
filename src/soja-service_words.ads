@@ -1,6 +1,5 @@
---  service.go splitWords: BouncerServ's command line into words.  The
---  grammar (grammars/service-words.hbnf) classifies the bytes; the quoting
---  state machine is here.
+--  service.go splitWords: BouncerServ's command line into words, read by the
+--  grammar grammars/service-words.hbnf; this package takes off the quoting.
 pragma Ada_2022;
 
 with Soja.Irc.Genmsg;

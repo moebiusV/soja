@@ -8,16 +8,9 @@ package Ident_Query is
    use Ada.Strings.Unbounded;
    use Interfaces;
 
-   subtype Comma_Type is Unbounded_String;
+   subtype Local_Type is Long_Long_Integer;
 
-   -- common.hbnf — the character classes and core rules any grammar shares.
-   -- 
-   -- The RFC 5234 Appendix B.1 character classes (DIGIT, ALPHA, HEXDIG, ...) and
-   -- the one multi-character core rule, CRLF.  It includes ascii.hbnf for the
-   -- named ASCII characters, so a grammar that includes this one file gets the
-   -- whole set.
-   -- --- RFC 5234 Appendix B.1 character classes (each matches one code point) ---
-   subtype DIGIT_Type is Unbounded_String;
+   subtype Remote_Type is Long_Long_Integer;
 
    subtype WSP_Type is Unbounded_String;
  -- white space
@@ -35,17 +28,25 @@ package Ident_Query is
 
    subtype Ws_Type is Unbounded_String;
 
-   subtype Num_Type is Unbounded_String;
+   subtype Query_1_Type is Unbounded_String;
 
+   subtype Query_2_Type is Unbounded_String;
 
+   subtype Query_3_Type is Unbounded_String;
 
-   type Query_Entry is record
-      Ws : Ws_Type;
-      Num : Num_Type;
-      Comma : Comma_Type;
+   subtype Query_4_Type is Unbounded_String;
+
+   type Query_Type;
+
+   type Query_Access is access Query_Type;
+
+   type Query_Type is record
+      Query_1 : Query_1_Type;
+      Local : Local_Type;
+      Query_2 : Query_2_Type;
+      Query_3 : Query_3_Type;
+      Remote : Remote_Type;
+      Query_4 : Query_4_Type;
    end record;
-   package Query_Vectors is new Ada.Containers.Vectors
-     (Positive, Query_Entry);
-   subtype Query_Type is Query_Vectors.Vector;
 
 end Ident_Query;

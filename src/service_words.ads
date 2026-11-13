@@ -8,15 +8,32 @@ package Service_Words is
    use Ada.Strings.Unbounded;
    use Interfaces;
 
-   subtype Ws_Type is Unbounded_String;
+   subtype Escaped_Type is Unbounded_String;
 
-   subtype Bsl_Type is Unbounded_String;
+   subtype Bad_quote_Type is Unbounded_String;
 
-   subtype Dquote_Type is Unbounded_String;
+   subtype Bad_slash_Type is Unbounded_String;
 
-   subtype Squote_Type is Unbounded_String;
+   -- The quote that opens a string.  (It is an enumeration so that a quoted piece
+   -- is a record in the tree: a grammar of characters only is read as text, and
+   -- the caller could not tell the pieces apart.)
+   type Quote_mark_Type is (Quote_mark_Op_1, Quote_mark_Op_2);
 
-   subtype Other_Type is Unbounded_String;
+   subtype Dq_body_Type is Unbounded_String;
+
+   subtype Sq_body_Type is Unbounded_String;
+
+   subtype Rune_Type is Unbounded_String;
+
+   -- unicode.IsSpace: '\t', '\n', '\v', '\f', '\r', ' ', U+0085, U+00A0 and the
+   -- Z category (U+1680, U+2000 .. U+200A, U+2028, U+2029, U+202F, U+205F, U+3000).
+   subtype Space_char_Type is Unbounded_String;
+
+   subtype Not_x0_8_E_1F_21_23_26_28_5B_5D_84_86_9F_A1_167F_1681_1FFF_200B_2027_202A_202E_2030_205E_2060_2FFF_3001_10FFFF_Type is Unbounded_String;
+
+   subtype Not_x0_21_23_5B_5D_10FFFF_Type is Unbounded_String;
+
+   subtype Not_x0_26_28_5B_5D_10FFFF_Type is Unbounded_String;
 
    subtype Word_Type is Unbounded_String;
 
@@ -24,17 +41,60 @@ package Service_Words is
 
    subtype Str_Type is Unbounded_String;
 
+   subtype Ws_Type is Unbounded_String;
 
+   subtype Rest_Type is Unbounded_String;
 
-   type Line_Entry is record
-      Ws : Ws_Type;
-      Bsl : Bsl_Type;
-      Dquote : Dquote_Type;
-      Squote : Squote_Type;
-      Other : Other_Type;
-   end record;
+   subtype Gap_Type is Unbounded_String;
+
+   subtype Plain_char_Type is Unbounded_String;
+
+   subtype Dq_char_Type is Unbounded_String;
+
+   subtype Sq_char_Type is Unbounded_String;
+
+   subtype Plain_Type is Unbounded_String;
+
+   type Item_Type;
+   type Piece_Type;
+   type Dquoted_Type;
+   type Squoted_Type;
+
+   type Item_Access is access Item_Type;
+   type Piece_Access is access Piece_Type;
+   type Dquoted_Access is access Dquoted_Type;
+   type Squoted_Access is access Squoted_Type;
+
    package Line_Vectors is new Ada.Containers.Vectors
-     (Positive, Line_Entry);
+     (Positive, Item_Access);
    subtype Line_Type is Line_Vectors.Vector;
+
+   package Cmd_word_Vectors is new Ada.Containers.Vectors
+     (Positive, Piece_Access);
+   subtype Cmd_word_Type is Cmd_word_Vectors.Vector;
+
+   type Item_Type is record
+      Gap : Gap_Type;
+      Cmd_word : Cmd_word_Type;
+   end record;
+
+   type Dquoted_Type is record
+      Quote_mark : Quote_mark_Type;
+      Dq_body : Dq_body_Type;
+   end record;
+
+   type Squoted_Type is record
+      Quote_mark : Quote_mark_Type;
+      Sq_body : Sq_body_Type;
+   end record;
+
+   type Piece_Type is record
+      Plain : Plain_Type;
+      Escaped : Escaped_Type;
+      Dquoted : Dquoted_Access;
+      Squoted : Squoted_Access;
+      Bad_quote : Bad_quote_Type;
+      Bad_slash : Bad_slash_Type;
+   end record;
 
 end Service_Words;

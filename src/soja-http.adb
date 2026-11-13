@@ -4,11 +4,14 @@ with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
 with Ada.Streams;
 
+with Http_Head;
 with Http_Head.Parser;
 
 package body Soja.Http is
 
    use Ada.Streams;
+   use type Http_Head.Request_line_Access;
+   use type Http_Head.Field_Access;
 
    CRLF : constant String := ASCII.CR & ASCII.LF;
 
@@ -46,92 +49,19 @@ package body Soja.Http is
    --  Reading a request
    ----------------------------------------------------------------------
 
-   --  A line of the head, split into what the grammar tokenises (white
-   --  space, colons, words):
-   --  Fields: the white-space separated runs (colons included);
-   --  and, for a header line, Name and Value.
-   procedure Split_Line
-     (Line : String;
-      Fields : out Unbounded_String; Count : out Natural;
-      Name, Value : out Unbounded_String; Name_Ok : out Boolean)
-   is
-      Tree : constant Http_Head.Line_Type :=
-        Http_Head.Parser.Parse_Text (Line);
-      --  The request line's fields are kept separated by a line feed, which
-      --  cannot occur in a line.
-      Cur   : Unbounded_String;
-      Seen_Colon : Boolean := False;
-      Gap_Before_Colon : Boolean := False;
-      Blank : Boolean := True;
+   --  One line of the head, read by the generated parser
+   --  (grammars/http-head.hbnf): a request line or a header field.
+   function Parse_Line (Line : String) return Http_Head.Head_line_Type is
    begin
-      Fields := Null_Unbounded_String;
-      Count := 0;
-      Name := Null_Unbounded_String;
-      Value := Null_Unbounded_String;
-      Name_Ok := True;
-      for E of Tree loop
-         if Length (E.Ws) > 0 then
-            if Length (Cur) > 0 then
-               Append (Fields, Cur & ASCII.LF);
-               Count := Count + 1;
-               Cur := Null_Unbounded_String;
-            end if;
-            if Seen_Colon then
-               Append (Value, E.Ws);
-            elsif Length (Name) > 0 then
-               Gap_Before_Colon := True;
-            end if;
-         elsif Length (E.Word) = 0 then
-            --  A colon: hbnf keeps no text for a literal, so it is the
-            --  element in which nothing else is set.
-            Append (Cur, ':');
-            if Seen_Colon then
-               Append (Value, ':');
-            else
-               Seen_Colon := True;
-               if Gap_Before_Colon or else Length (Name) = 0 then
-                  Name_Ok := False;
-               end if;
-            end if;
-         else
-            Append (Cur, E.Word);
-            if Seen_Colon then
-               Append (Value, E.Word);
-            else
-               Append (Name, E.Word);
-            end if;
-         end if;
-         Blank := False;
-      end loop;
-      if Length (Cur) > 0 then
-         Append (Fields, Cur & ASCII.LF);
-         Count := Count + 1;
-      end if;
-      if Blank or else not Seen_Colon then
-         Name_Ok := False;
-      end if;
-      Value := To_Unbounded_String (Trim_Blanks (To_String (Value)));
+      return Http_Head.Parser.Parse_Text (Line);
    exception
-      when Http_Head.Parser.Parse_Error =>
+      when Http_Head.Parser.Parse_Error | Constraint_Error =>
          raise Bad_Request with "malformed HTTP request";
-   end Split_Line;
+   end Parse_Line;
 
-   --  "HTTP/1.1" -> 1, 1.
-   procedure Parse_Version
-     (Text : String; Major, Minor : out Natural)
-   is
-   begin
-      if Text'Length /= 8
-        or else Text (Text'First .. Text'First + 4) /= "HTTP/"
-        or else Text (Text'First + 6) /= '.'
-        or else Text (Text'First + 5) not in '0' .. '9'
-        or else Text (Text'First + 7) not in '0' .. '9'
-      then
-         raise Bad_Request with "malformed HTTP version " & '"' & Text & '"';
-      end if;
-      Major := Character'Pos (Text (Text'First + 5)) - Character'Pos ('0');
-      Minor := Character'Pos (Text (Text'First + 7)) - Character'Pos ('0');
-   end Parse_Version;
+   --  A version number is one digit, as in HTTP/1.1.
+   function Valid_Version (Major, Minor : Long_Long_Integer) return Boolean is
+     (Major in 0 .. 9 and then Minor in 0 .. 9);
 
    procedure Read_Request
      (S : in out Soja.Byte_Stream.Stream'Class; R : out Request)
@@ -144,39 +74,49 @@ package body Soja.Http is
       Done     : Boolean := False;
 
       procedure Handle_Line (Line : String) is
-         Fields, Name, Value : Unbounded_String;
-         Count : Natural;
-         Name_Ok : Boolean;
       begin
-         Split_Line (Line, Fields, Count, Name, Value, Name_Ok);
-         if not Got_Line then
-            --  METHOD SP target SP HTTP/x.y
-            declare
-               F : constant String := To_String (Fields);
-               LF : constant String := "" & ASCII.LF;
-               A : constant Natural := Ada.Strings.Fixed.Index (F, LF);
-               B : constant Natural :=
-                 (if A > 0 then Ada.Strings.Fixed.Index (F, LF, A + 1)
-                  else 0);
-            begin
-               if Count /= 3 or else A = 0 or else B = 0 then
+         if Got_Line and then Line'Length = 0 then
+            Done := True;
+            return;
+         end if;
+         declare
+            Parsed : Http_Head.Head_line_Type := Parse_Line (Line);
+         begin
+            if not Got_Line then
+               --  METHOD SP target SP HTTP/x.y
+               if Parsed.Request_line = null then
+                  Http_Head.Parser.Free_Head_line (Parsed);
                   raise Bad_Request with "malformed HTTP request";
                end if;
-               R.Method := To_Unbounded_String (F (F'First .. A - 1));
-               R.Target := To_Unbounded_String (F (A + 1 .. B - 1));
-               Parse_Version (F (B + 1 .. F'Last - 1), R.Major, R.Minor);
-            end;
-            Got_Line := True;
-         elsif Line'Length = 0 then
-            Done := True;
-         else
-            if not Name_Ok then
-               raise Bad_Request with "malformed MIME header line";
+               declare
+                  RL : Http_Head.Request_line_Type renames
+                    Parsed.Request_line.all;
+                  V  : Http_Head.Version_Type renames RL.Version.all;
+               begin
+                  if not Valid_Version (V.Major, V.Minor) then
+                     Http_Head.Parser.Free_Head_line (Parsed);
+                     raise Bad_Request with "malformed HTTP version";
+                  end if;
+                  R := (Method => RL.Method, Target => RL.Target,
+                        Major  => Natural (V.Major),
+                        Minor  => Natural (V.Minor), others => <>);
+               end;
+               Got_Line := True;
+            else
+               if Parsed.Field = null then
+                  Http_Head.Parser.Free_Head_line (Parsed);
+                  raise Bad_Request with "malformed MIME header line";
+               end if;
+               R.Headers.Append
+                 (Header'
+                    (Name  => To_Unbounded_String
+                                (Lower (To_String (Parsed.Field.Field_name))),
+                     Value => To_Unbounded_String
+                                (Trim_Blanks
+                                   (To_String (Parsed.Field.Field_value)))));
             end if;
-            R.Headers.Append
-              (Header'(Name  => To_Unbounded_String (Lower (To_String (Name))),
-                       Value => Value));
-         end if;
+            Http_Head.Parser.Free_Head_line (Parsed);
+         end;
       end Handle_Line;
    begin
       R := (others => <>);

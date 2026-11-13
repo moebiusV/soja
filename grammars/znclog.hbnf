@@ -1,0 +1,71 @@
+; znclog.hbnf -- one line of a ZNC-style log, without its line end (soju's
+; msgstore/znclog reader.go, UnmarshalLine).  The line rules are those of
+; hbnf's corpus/znclog/znclog.hbnf, which is checked against the Go splitting on
+; 30000 fuzzed lines; here each kind of line is a rule of its own so that the
+; tree says which it is.
+;
+;     [12:34:56] <nick> text                         a message
+;     [12:34:56] -nick- text                         a notice
+;     [12:34:56] * nick text                         an action
+;     [12:34:56] *** Joins: nick (user@host)         the events:
+;     [12:34:56] *** Parts: nick (user@host) (why)     Joins, Parts, Quits
+;     [12:34:56] *** nick is now known as other        a nick change
+;     [12:34:56] *** nick was kicked by op (why)       a kick
+;     [12:34:56] *** nick changes topic to 'topic'     a topic
+;     [12:34:56] *** nick sets mode: +o other          a mode
+;
+; The text after a delimiter is free and may hold it: the sender of a message
+; is what is before the first "> ", and the rest of the line is the text
+; whatever it holds (`<a> b> c`).  A line that is none of these is `other` (the
+; caller skips it).  The time is hh:mm:ss in two digits; its range is the
+; caller's to check.
+;
+; Each kind starts with a lookahead (`&`) for its first characters.  It
+; consumes nothing; it is there so that the kind is a record in the tree (a
+; rule of text rules only is read as one text, and the caller could not tell
+; the kinds apart).
+
+prefix none
+whitespace none
+include "common.hbnf"
+
+znc-line = stamp log-entry
+
+log-entry = privmsg | notice | action | event | other
+
+stamp = "[" 2*2DIGIT ":" 2*2DIGIT ":" 2*2DIGIT "] "
+
+privmsg = &"<" "<" sender-gt "> " text at-end
+notice  = &"-" "-" sender-dash "- " text at-end
+action  = &"* " "* " sender-sp " " text at-end
+
+; The events.  What stands in parentheses or quotes is isolated as a word or as
+; the rest of the line; the caller takes the parentheses off the mask and the
+; reason and the quotes off the topic (strings.TrimPrefix and TrimSuffix, as Go
+; does) and splits the mask at its first "@".
+event = &"*** " "*** " ( joined-why | joined | renamed | kicked | retopic | remode | unknown )
+
+joined-why = &join-start join-word " " nick " " mask " " reason at-end
+joined     = &join-start join-word " " nick " " mask at-end
+renamed    = !join-start nick " is now known as " text at-end
+kicked     = !join-start nick " was kicked by " kicker " " reason at-end
+retopic    = !join-start nick " changes topic to " text at-end
+remode     = !join-start nick " sets mode: " text at-end
+unknown    = text at-end
+
+other = text at-end
+
+join-start  = join-word " "
+join-word   = "Joins:" | "Parts:" | "Quits:"
+sender-gt   = *( ~( ">" | LF ) | ">" !" " )
+sender-dash = *( ~( "-" | LF ) | "-" !" " )
+sender-sp   = *~( " " | LF )
+nick        = *~( " " | LF )
+kicker      = *~( " " | LF )
+mask        = *~( " " | LF )
+reason      = *~LF
+text        = *~LF
+
+; The end of the line.  (Any code point counts as one: OCTET stops at U+00FF.)
+at-end      = !rune
+rune        = 0x00..0x10FFFF

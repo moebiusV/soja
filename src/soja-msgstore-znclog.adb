@@ -7,6 +7,10 @@ with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 
 with Soja.Irc.Messages;     use Soja.Irc.Messages;
 with Soja.Irc.Xirc;
+with Soja.Utf8;
+
+with Znc_Line;
+with Znc_Line.Parser;
 
 package body Soja.Msgstore.Znclog is
 
@@ -105,8 +109,6 @@ package body Soja.Msgstore.Znclog is
    --  Reading
    ----------------------------------------------------------------------
 
-   Timestamp_Prefix_Len : constant := 11;   --  "[01:02:03] "
-
    function Starts_With (S, Prefix : String) return Boolean is
      (S'Length >= Prefix'Length
       and then S (S'First .. S'First + Prefix'Length - 1) = Prefix);
@@ -120,27 +122,36 @@ package body Soja.Msgstore.Znclog is
         and then S (S'Last - Suffix'Length + 1 .. S'Last) = Suffix
       then S (S'First .. S'Last - Suffix'Length) else S);
 
-   --  strings.SplitN (S, Sep, 2): Ok is False when Sep is not in S.
-   procedure Split_First
-     (S, Sep : String; Left, Right : out Unbounded_String; Ok : out Boolean)
-   is
-      I : constant Natural := Ada.Strings.Fixed.Index (S, Sep);
+   --  strings.Split (S, " "): the fields between the spaces, the empty ones
+   --  too.
+   function Split_Spaces (S : String) return Param_Vectors.Vector is
+      Result : Param_Vectors.Vector;
+      From   : Positive := S'First;
    begin
-      Ok := I > 0;
-      if Ok then
-         Left := To_Unbounded_String (S (S'First .. I - 1));
-         Right := To_Unbounded_String (S (I + Sep'Length .. S'Last));
-      else
-         Left := To_Unbounded_String (S);
-         Right := Null_Unbounded_String;
-      end if;
-   end Split_First;
+      for I in S'Range when S (I) = ' ' loop
+         Result.Append (To_Unbounded_String (S (From .. I - 1)));
+         From := I + 1;
+      end loop;
+      Result.Append (To_Unbounded_String (S (From .. S'Last)));
+      return Result;
+   end Split_Spaces;
 
    function Digits_At (S : String; I : Positive) return Integer is
      (if S (I) in '0' .. '9' and then S (I + 1) in '0' .. '9'
       then (Character'Pos (S (I)) - 48) * 10 + (Character'Pos (S (I + 1)) - 48)
       else -1);
 
+   --  What is in parentheses: "(why)" is "why".
+   function Unparen (S : String) return String is
+     (Trim_Suffix (Trim_Prefix (S, "("), ")"));
+
+   function Who (Name : String) return Prefix_Access is
+     (new Soja.Irc.Messages.Prefix'(Name => To_Unbounded_String (Name),
+                                    others => <>));
+
+   --  The line is read by the generated parser (grammars/znclog.hbnf), which
+   --  says what kind of line it is and where its words are; what is left is
+   --  to take off the parentheses and quotes and to build the message.
    procedure Unmarshal_Line
      (Line    : String;
       User    : Soja.Database.User;
@@ -152,212 +163,164 @@ package body Soja.Msgstore.Znclog is
       T       : out Ada.Calendar.Time;
       Found   : out Boolean)
    is
-      F : constant Integer := Line'First;
-      Hour, Minute, Second : Integer;
+      use Znc_Line;
+      use type Param_Vectors.Vector;
+
+      Tree   : Znc_line_Type;
       Cmd    : Unbounded_String;
       Prefix : Prefix_Access;
       Params : Param_Vectors.Vector;
+
+      --  A message of Sender: to the entity, or to us when the entity is the
+      --  sender (a direct message).  Our nick is not in the logs, so take it
+      --  from the settings: it may not be the one we had then, but we cannot
+      --  do better.
+      procedure Chat (Command, Sender, Text : String) is
+         To : constant String :=
+           (if Entity = Sender then Soja.Database.Get_Nick (User, Network)
+            else Entity);
+      begin
+         Cmd := To_Unbounded_String (Command);
+         Prefix := Who (Sender);
+         Params := [To_Unbounded_String (To), To_Unbounded_String (Text)];
+      end Chat;
+
+      --  Joins, Parts and Quits: <nick> (<user>@<host>) [(<reason>)].  A mask
+      --  without an "@" is not an event.
+      procedure Membership
+        (Word : Join_word_Type; Nick, Mask, Reason : String)
+      is
+         Bare : constant String := Unparen (Mask);
+         At_I : constant Natural := Ada.Strings.Fixed.Index (Bare, "@");
+         Why  : constant String := Unparen (Reason);
+      begin
+         if At_I = 0 then
+            return;
+         end if;
+         Prefix := new Soja.Irc.Messages.Prefix'
+           (Name => To_Unbounded_String (Nick),
+            User => To_Unbounded_String (Bare (Bare'First .. At_I - 1)),
+            Host => To_Unbounded_String (Bare (At_I + 1 .. Bare'Last)));
+         case Word is
+            when Join_word_Joins =>
+               Cmd := To_Unbounded_String ("JOIN");
+               Params := [To_Unbounded_String (Entity)];
+            when Join_word_Parts =>
+               Cmd := To_Unbounded_String ("PART");
+               Params := [To_Unbounded_String (Entity)];
+               if Why /= "" then
+                  Params.Append (To_Unbounded_String (Why));
+               end if;
+            when Join_word_Quits =>
+               Cmd := To_Unbounded_String ("QUIT");
+               if Why /= "" then
+                  Params.Append (To_Unbounded_String (Why));
+               end if;
+         end case;
+      end Membership;
+
+      --  The message of one kind of line; Cmd stays empty for a line that is
+      --  not a message (or an event when events are not asked for).
+      procedure Read_Entry (E : Log_entry_Type) is
+      begin
+         if E.Privmsg /= null then
+            Chat ("PRIVMSG", To_String (E.Privmsg.Sender_gt),
+                  To_String (E.Privmsg.Text));
+         elsif E.Notice /= null then
+            Chat ("NOTICE", To_String (E.Notice.Sender_dash),
+                  To_String (E.Notice.Text));
+         elsif E.Action /= null then
+            Chat ("PRIVMSG", To_String (E.Action.Sender_sp),
+                  ASCII.SOH & "ACTION " & To_String (E.Action.Text)
+                  & ASCII.SOH);
+         elsif E.Event = null or else not Events then
+            null;
+         elsif E.Event.Event_1.Joined_why /= null then
+            declare
+               J : Joined_why_Type renames E.Event.Event_1.Joined_why.all;
+            begin
+               Membership (J.Join_word, To_String (J.Nick),
+                           To_String (J.Mask), To_String (J.Reason));
+            end;
+         elsif E.Event.Event_1.Joined /= null then
+            declare
+               J : Joined_Type renames E.Event.Event_1.Joined.all;
+            begin
+               Membership (J.Join_word, To_String (J.Nick),
+                           To_String (J.Mask), "");
+            end;
+         elsif E.Event.Event_1.Renamed /= null then
+            declare
+               R : Renamed_Type renames E.Event.Event_1.Renamed.all;
+            begin
+               Cmd := To_Unbounded_String ("NICK");
+               Prefix := Who (To_String (R.Nick));
+               Params := [R.Text];
+            end;
+         elsif E.Event.Event_1.Kicked /= null then
+            declare
+               K : Kicked_Type renames E.Event.Event_1.Kicked.all;
+               Why : constant String := Unparen (To_String (K.Reason));
+            begin
+               Cmd := To_Unbounded_String ("KICK");
+               Prefix := Who (To_String (K.Kicker));
+               Params := [To_Unbounded_String (Entity), K.Nick];
+               if Why /= "" then
+                  Params.Append (To_Unbounded_String (Why));
+               end if;
+            end;
+         elsif E.Event.Event_1.Retopic /= null then
+            declare
+               R : Retopic_Type renames E.Event.Event_1.Retopic.all;
+            begin
+               Cmd := To_Unbounded_String ("TOPIC");
+               Prefix := Who (To_String (R.Nick));
+               Params := [To_Unbounded_String (Entity),
+                          To_Unbounded_String
+                            (Trim_Suffix
+                               (Trim_Prefix (To_String (R.Text), "'"), "'"))];
+            end;
+         elsif E.Event.Event_1.Remode /= null then
+            declare
+               R : Remode_Type renames E.Event.Event_1.Remode.all;
+            begin
+               Cmd := To_Unbounded_String ("MODE");
+               Prefix := Who (To_String (R.Nick));
+               Params := [To_Unbounded_String (Entity)]
+                         & Split_Spaces (To_String (R.Text));
+            end;
+         end if;
+      end Read_Entry;
+
+      Hour, Minute, Second : Integer;
    begin
       Found := False;
       T := Soja.Database.Null_Time;
 
-      if Line'Length < Timestamp_Prefix_Len then
-         raise Store_Error with "malformed timestamp prefix: too short";
-      end if;
-      Hour := Digits_At (Line, F + 1);
-      Minute := Digits_At (Line, F + 4);
-      Second := Digits_At (Line, F + 7);
-      if Line (F) /= '[' or else Line (F + 3) /= ':'
-        or else Line (F + 6) /= ':'
-        or else Line (F + 9) /= ']' or else Line (F + 10) /= ' '
-        or else Hour not in 0 .. 23 or else Minute not in 0 .. 59
+      --  Bytes that are not UTF-8 would be refused by the parser, and with
+      --  them the whole day's file: they are replaced instead.
+      begin
+         Tree := Znc_Line.Parser.Parse_Text (Soja.Utf8.To_Valid (Line));
+      exception
+         when Znc_Line.Parser.Parse_Error =>
+            raise Store_Error with "malformed timestamp prefix";
+      end;
+
+      Hour := Digits_At (To_String (Tree.Stamp), 2);
+      Minute := Digits_At (To_String (Tree.Stamp), 5);
+      Second := Digits_At (To_String (Tree.Stamp), 8);
+      if Hour not in 0 .. 23 or else Minute not in 0 .. 59
         or else Second not in 0 .. 59
       then
+         Znc_Line.Parser.Free_Znc_line (Tree);
          raise Store_Error with "malformed timestamp prefix";
       end if;
 
-      declare
-         Body_Text : constant String :=
-           Line (F + Timestamp_Prefix_Len .. Line'Last);
-         Left, Right : Unbounded_String;
-         Ok          : Boolean;
-      begin
-         if Events and then Starts_With (Body_Text, "*** ") then
-            Split_First (Body_Text (Body_Text'First + 4 .. Body_Text'Last),
-                         " ", Left, Right, Ok);
-            if not Ok then
-               return;
-            end if;
-            declare
-               Head : constant String := To_String (Left);
-               Tail : constant String := To_String (Right);
-            begin
-               if Head = "Joins:" or else Head = "Parts:"
-                 or else Head = "Quits:"
-               then
-                  --  <nick> (<user>@<host>) [(<reason>)]
-                  declare
-                     Nick, Rest, Mask_Word, Reason_Word : Unbounded_String;
-                     Has_Rest : Boolean;
-                  begin
-                     Split_First (Tail, " ", Nick, Rest, Has_Rest);
-                     if not Has_Rest then
-                        return;
-                     end if;
-                     Split_First (To_String (Rest), " ", Mask_Word,
-                                  Reason_Word, Ok);
-                     declare
-                        Mask : constant String := Trim_Suffix
-                          (Trim_Prefix (To_String (Mask_Word), "("), ")");
-                        User_Part, Host_Part : Unbounded_String;
-                        Has_At : Boolean;
-                        Reason : constant String :=
-                          (if Ok then Trim_Suffix
-                             (Trim_Prefix (To_String (Reason_Word), "("), ")")
-                           else "");
-                     begin
-                        Split_First (Mask, "@", User_Part, Host_Part, Has_At);
-                        if not Has_At then
-                           return;
-                        end if;
-                        Prefix := new Soja.Irc.Messages.Prefix'
-                          (Name => Nick, User => User_Part, Host => Host_Part);
-                        if Head = "Joins:" then
-                           Cmd := To_Unbounded_String ("JOIN");
-                           Params.Append (To_Unbounded_String (Entity));
-                        elsif Head = "Parts:" then
-                           Cmd := To_Unbounded_String ("PART");
-                           Params.Append (To_Unbounded_String (Entity));
-                           if Reason /= "" then
-                              Params.Append (To_Unbounded_String (Reason));
-                           end if;
-                        else
-                           Cmd := To_Unbounded_String ("QUIT");
-                           if Reason /= "" then
-                              Params.Append (To_Unbounded_String (Reason));
-                           end if;
-                        end if;
-                     end;
-                  end;
-               else
-                  --  <nick> <what happened>
-                  declare
-                     Nick : constant String := Head;
-                  begin
-                     if Starts_With (Tail, "is now known as ") then
-                        Cmd := To_Unbounded_String ("NICK");
-                        Prefix := new Soja.Irc.Messages.Prefix'
-                          (Name => To_Unbounded_String (Nick), others => <>);
-                        Params.Append (To_Unbounded_String
-                          (Tail (Tail'First + 16 .. Tail'Last)));
-                     elsif Starts_With (Tail, "was kicked by ") then
-                        declare
-                           Rest : constant String :=
-                             Tail (Tail'First + 14 .. Tail'Last);
-                           By, Why : Unbounded_String;
-                        begin
-                           Split_First (Rest, " ", By, Why, Ok);
-                           if not Ok then
-                              return;
-                           end if;
-                           Cmd := To_Unbounded_String ("KICK");
-                           Prefix := new Soja.Irc.Messages.Prefix'
-                             (Name => By, others => <>);
-                           Params.Append (To_Unbounded_String (Entity));
-                           Params.Append (To_Unbounded_String (Nick));
-                           declare
-                              Reason : constant String := Trim_Suffix
-                                (Trim_Prefix (To_String (Why), "("), ")");
-                           begin
-                              if Reason /= "" then
-                                 Params.Append (To_Unbounded_String (Reason));
-                              end if;
-                           end;
-                        end;
-                     elsif Starts_With (Tail, "changes topic to ") then
-                        Cmd := To_Unbounded_String ("TOPIC");
-                        Prefix := new Soja.Irc.Messages.Prefix'
-                          (Name => To_Unbounded_String (Nick), others => <>);
-                        Params.Append (To_Unbounded_String (Entity));
-                        Params.Append (To_Unbounded_String
-                          (Trim_Suffix
-                             (Trim_Prefix
-                                (Tail (Tail'First + 17 .. Tail'Last), "'"),
-                              "'")));
-                     elsif Starts_With (Tail, "sets mode: ") then
-                        declare
-                           Modes : constant String :=
-                             Tail (Tail'First + 11 .. Tail'Last);
-                           From  : Positive := Modes'First;
-                        begin
-                           Cmd := To_Unbounded_String ("MODE");
-                           Prefix := new Soja.Irc.Messages.Prefix'
-                             (Name => To_Unbounded_String (Nick),
-                              others => <>);
-                           Params.Append (To_Unbounded_String (Entity));
-                           --  strings.Split (r, " "): empty fields stay.
-                           for I in Modes'Range loop
-                              if Modes (I) = ' ' then
-                                 Params.Append (To_Unbounded_String
-                                   (Modes (From .. I - 1)));
-                                 From := I + 1;
-                              end if;
-                           end loop;
-                           Params.Append (To_Unbounded_String
-                             (Modes (From .. Modes'Last)));
-                        end;
-                     else
-                        return;
-                     end if;
-                  end;
-               end if;
-            end;
-
-         else
-            declare
-               Sender, Text : Unbounded_String;
-               Chat_Entity  : Unbounded_String := To_Unbounded_String (Entity);
-            begin
-               if Starts_With (Body_Text, "<") then
-                  Cmd := To_Unbounded_String ("PRIVMSG");
-                  Split_First
-                    (Body_Text (Body_Text'First + 1 .. Body_Text'Last),
-                     "> ", Sender, Text, Ok);
-               elsif Starts_With (Body_Text, "-") then
-                  Cmd := To_Unbounded_String ("NOTICE");
-                  Split_First
-                    (Body_Text (Body_Text'First + 1 .. Body_Text'Last),
-                     "- ", Sender, Text, Ok);
-               elsif Starts_With (Body_Text, "* ") then
-                  Cmd := To_Unbounded_String ("PRIVMSG");
-                  Split_First
-                    (Body_Text (Body_Text'First + 2 .. Body_Text'Last),
-                     " ", Sender, Text, Ok);
-                  if Ok then
-                     Text := To_Unbounded_String
-                       (ASCII.SOH & "ACTION " & To_String (Text) & ASCII.SOH);
-                  end if;
-               else
-                  return;
-               end if;
-               if not Ok then
-                  return;
-               end if;
-
-               Prefix := new Soja.Irc.Messages.Prefix'
-                 (Name => Sender, others => <>);
-               if Entity = To_String (Sender) then
-                  --  A direct message to us.  Our nick is not in the logs, so
-                  --  take it from the settings: it may not be the one we had
-                  --  then, but we cannot do better.
-                  Chat_Entity := To_Unbounded_String
-                    (Soja.Database.Get_Nick (User, Network));
-               end if;
-               Params.Append (Chat_Entity);
-               Params.Append (Text);
-            end;
-         end if;
-      end;
+      Read_Entry (Tree.Log_entry.all);
+      Znc_Line.Parser.Free_Znc_line (Tree);
+      if Cmd = Null_Unbounded_String then
+         return;
+      end if;
 
       declare
          Year   : Ada.Calendar.Year_Number;

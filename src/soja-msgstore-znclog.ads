@@ -2,10 +2,12 @@
 --  module ("[12:34:56] <nick> text"), which the file message store writes and
 --  reads, so that the logs can be read (and written) by other tools.
 --
---  Lines are read by splitting at the first delimiter the way the Go code
---  does, not with an hbnf grammar: what follows a delimiter is free text that
---  may itself contain the delimiter ("<a> b> c"), which hbnf's lexer cannot
---  express (see PORTING.md).
+--  Lines are read by the parser hbnf generates from grammars/znclog.hbnf: the
+--  text after a delimiter, which may itself contain it ("<a> b> c"), is the
+--  rest of the line.  The grammar's line rules are those of hbnf's
+--  corpus/znclog/znclog.hbnf, checked against the Go splitting on 30000
+--  fuzzed lines.  What is left to the code is to take parentheses and quotes
+--  off the words and to build the message.
 pragma Ada_2022;
 
 with Ada.Calendar;

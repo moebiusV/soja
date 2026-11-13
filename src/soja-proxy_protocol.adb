@@ -309,90 +309,57 @@ package body Soja.Proxy_Protocol is
              = Sig (Sig'First .. Sig'First + N - 1);
    end Starts_Like;
 
-   function Valid_Port (S : String) return Boolean is
-      N : Natural := 0;
-   begin
-      if S'Length = 0 or else S'Length > 5 then
-         return False;
-      end if;
-      for C of S loop
-         if C not in '0' .. '9' then
-            return False;
-         end if;
-         N := N * 10 + (Character'Pos (C) - 48);
-      end loop;
-      return N <= 65_535;
-   end Valid_Port;
+   use type Proxy_V1.Family_Type;
+   use type Proxy_V1.Tcp_Access;
 
-   --  The v1 line (without its CRLF).
+   function Valid_Port (N : Long_Long_Integer) return Boolean is
+     (N in 0 .. 65_535);
+
+   --  What a TCP line says, when its addresses are of the family it names and
+   --  its ports are in range.
+   procedure Read_Tcp
+     (T : Proxy_V1.Tcp_Type; Result : in out Info; Ok : out Boolean)
+   is
+      Src, Dst : Soja.Config.IP_Addr;
+      Want_V4  : constant Boolean := T.Family = Proxy_V1.Family_TCP4;
+   begin
+      Ok := Parse_IP (To_String (T.Source), Src)
+        and then Parse_IP (To_String (T.Target), Dst)
+        and then Is_V4 (Src) = Want_V4 and then Is_V4 (Dst) = Want_V4
+        and then Valid_Port (T.Source_port)
+        and then Valid_Port (T.Target_port);
+      if Ok then
+         Result :=
+           (Local       => False,
+            Source_Host => To_Unbounded_String (Image (Src)),
+            Source_Port => Natural (T.Source_port),
+            Dest_Host   => To_Unbounded_String (Image (Dst)),
+            Dest_Port   => Natural (T.Target_port));
+      end if;
+   end Read_Tcp;
+
+   --  The v1 line (without its CRLF), read by the generated parser
+   --  (grammars/proxy-v1.hbnf); `PROXY UNKNOWN` leaves the connection's own
+   --  address.
    procedure Examine_V1 (Line : String; Result : out Info) is
-      Tree  : Proxy_V1.Line_Type;
-      Words : array (1 .. 8) of Unbounded_String;
-      Count : Natural := 0;
-      Gap_Seen : Boolean := False;
+      Tree : Proxy_V1.Line_Type;
+      Ok   : Boolean := True;
    begin
       Result := (others => <>);
       begin
          Tree := Proxy_V1.Parser.Parse_Text (Line);
       exception
-         when Proxy_V1.Parser.Parse_Error =>
+         --  (A port too big for 64 bits is a Constraint_Error.)
+         when Proxy_V1.Parser.Parse_Error | Constraint_Error =>
             raise Proxy_Error with "malformed PROXY header";
       end;
-
-      --  Words with exactly one space between them.
-      for E of Tree loop
-         if Length (E.Gap) > 0 then
-            if Length (E.Gap) /= 1 or else Count = 0 or else Gap_Seen then
-               raise Proxy_Error with "malformed PROXY header";
-            end if;
-            Gap_Seen := True;
-         else
-            if Count > 0 and then not Gap_Seen then
-               raise Proxy_Error with "malformed PROXY header";
-            end if;
-            if Count = Words'Last then
-               raise Proxy_Error with "malformed PROXY header";
-            end if;
-            Count := Count + 1;
-            Words (Count) := E.Word;
-            Gap_Seen := False;
-         end if;
-      end loop;
-      if Gap_Seen or else Count < 2 or else To_String (Words (1)) /= "PROXY"
-      then
+      if Tree.Line_1.Tcp /= null then
+         Read_Tcp (Tree.Line_1.Tcp.all, Result, Ok);
+      end if;
+      Proxy_V1.Parser.Free_Line (Tree);
+      if not Ok then
          raise Proxy_Error with "malformed PROXY header";
       end if;
-
-      declare
-         Proto : constant String := To_String (Words (2));
-      begin
-         if Proto = "UNKNOWN" then
-            return;   --  anything may follow; the connection's address stays
-         end if;
-         if (Proto /= "TCP4" and then Proto /= "TCP6") or else Count /= 6 then
-            raise Proxy_Error with "malformed PROXY header";
-         end if;
-
-         declare
-            Src, Dst : Soja.Config.IP_Addr;
-            Want_V4  : constant Boolean := Proto = "TCP4";
-         begin
-            if not Parse_IP (To_String (Words (3)), Src)
-              or else not Parse_IP (To_String (Words (4)), Dst)
-              or else Is_V4 (Src) /= Want_V4
-              or else Is_V4 (Dst) /= Want_V4
-              or else not Valid_Port (To_String (Words (5)))
-              or else not Valid_Port (To_String (Words (6)))
-            then
-               raise Proxy_Error with "malformed PROXY header";
-            end if;
-            Result.Local := False;
-            Result.Source_Host := To_Unbounded_String (Image (Src));
-            Result.Dest_Host := To_Unbounded_String (Image (Dst));
-            Result.Source_Port := Natural'Value (To_String (Words (5)));
-            Result.Dest_Port := Natural'Value (To_String (Words (6)));
-         end;
-      end;
    end Examine_V1;
 
    procedure Examine

@@ -1,20 +1,50 @@
 ; service-words.hbnf -- BouncerServ's command line (service.go splitWords).
 ;
-; A line is a run of bytes, each in exactly one class: whitespace, backslash,
-; double quote, single quote, anything else.  hbnf's Ada lexer cannot carry
-; "inside a quote" state from one token to the next, so the quoting rules
-; live in the walker (soja-service-words.adb), which reads the classified
-; bytes exactly as splitWords reads runes.
+; A line is white space and words.  A word (cmd-word, as `word` is hbnf's own) is one or more pieces: plain text, a
+; backslash and the character after it, a "double quoted" or a 'single quoted'
+; string (a backslash inside takes the next character as it is; the other
+; quote is text), run together: ab"c d"e is one word.  The quotes and the
+; backslashes are taken off by the caller (soja-service_words.adb), which
+; joins the pieces.
 ;
-; Deviation from Go (PORTING.md): only ASCII whitespace separates words; Go's
-; unicode.IsSpace also takes U+0085, U+00A0 and the other Unicode spaces.
+; Two pieces stand for what Go refuses, so that the caller can raise its
+; messages: a quote never closed (the rest of the line is in it), and a
+; backslash at the end.
+;
+; White space is what Go's unicode.IsSpace says.  A line is text: bytes that
+; are not UTF-8 are refused (Go would turn each into U+FFFD).
 
-language Ada
+prefix none
+whitespace none
+include "common.hbnf"
 
-line = *( ws | bsl | dquote | squote | other )
+line  = *item
+item  = gap | cmd-word
+cmd-word = 1*piece
+piece = plain | escaped | dquoted | squoted | bad-quote | bad-slash
 
-ws     = %x09-0D | %x20
-bsl    = %x5C
-dquote = %x22
-squote = %x27
-other  = %x00-08 | %x0E-1F | %x21 | %x23-26 | %x28-5B | %x5D-FF
+plain     = 1*plain-char
+escaped   = 0x5C rune
+dquoted   = &"\"" quote-mark dq-body 0x22
+squoted   = &"'" quote-mark sq-body 0x27
+bad-quote = quote-mark rest
+bad-slash = 0x5C
+
+; The quote that opens a string.  (It is an enumeration so that a quoted piece
+; is a record in the tree: a grammar of characters only is read as text, and
+; the caller could not tell the pieces apart.)
+quote-mark = "\"" | "'"
+dq-body    = *( dq-char | escaped )
+sq-body    = *( sq-char | escaped )
+rest       = *rune
+
+gap        = 1*space-char
+plain-char = ~( space-char | 0x5C | 0x22 | 0x27 )
+dq-char    = ~( 0x22 | 0x5C )
+sq-char    = ~( 0x27 | 0x5C )
+rune       = 0x00..0x10FFFF
+
+; unicode.IsSpace: '\t', '\n', '\v', '\f', '\r', ' ', U+0085, U+00A0 and the
+; Z category (U+1680, U+2000 .. U+200A, U+2028, U+2029, U+202F, U+205F, U+3000).
+space-char = 0x09..0x0D | 0x20 | 0x85 | 0xA0 | 0x1680 | 0x2000..0x200A
+           | 0x2028 | 0x2029 | 0x202F | 0x205F | 0x3000

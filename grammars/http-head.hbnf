@@ -1,22 +1,38 @@
-; http-head.hbnf -- one line of an HTTP/1.x request head (the request line or a
-; header field), without its CRLF.
+; http-head.hbnf -- one line of the head of an HTTP/1.x request, without its
+; line end: the request line or a header field.
 ;
-; The grammar only tokenises: white space, colons, and runs of anything else.
-; The walker (soja-http.adb) puts them back together: the request line is
-; three white-space separated fields (method, target, version); a header line
-; is a name, the first colon, and the rest of the line (colons and all) as the
-; value.  (The line framing, CRLF and the blank line that ends the head, is
-; done by the reader, as for IRC.)
+;     GET /socket?x=1 HTTP/1.1
+;     Connection: keep-alive, Upgrade
+;
+; A field name is a token and the colon follows it at once (a space before it
+; is refused, as net/http does); the value is the rest of the line, its leading
+; blanks skipped, its trailing ones left for the caller (soja-http.adb) to
+; trim.  (The `&token-char` looks at the name's first character and consumes
+; nothing; it is there so that a field is a record in the tree: a rule of text
+; rules only is read as one text, and the caller could not tell the name from
+; the value.)  Bytes are read as UTF-8 text: a value in another encoding is refused,
+; where net/http keeps its bytes.
+;
+; Cutting the head into lines (CR LF, or LF alone as net/http takes it) and
+; finding its end, the empty line, is the reader's work, not the grammar's.
 
-language Ada
-
+prefix none
+whitespace none
 include "common.hbnf"
 
-line = *( ws | colon | word )
+head-line    = request-line | field
+request-line = method SP target SP version
+method       = 1*token-char
+target       = 1*VCHAR
+version      = "HTTP/" major "." minor
+major        = int
+minor        = int
+field        = &token-char field-name colon *WSP field-value
+field-name   = 1*token-char
+field-value  = *~( CR | LF )
 
-ws    = 1*WSP
-colon = ":"
-; Anything but white space, control characters and the colon (bytes above
-; 7F are the bytes of UTF-8 text).
-TEXTCHAR = %x21-39 | %x3B-7E | %x80-FF
-word     = 1*TEXTCHAR
+; The colon, with the blank that usually follows it.
+colon        = ": " | ":"
+
+token-char   = ALPHA | DIGIT | "!" | "#" | "$" | "%" | "&" | "'" | "*" | "+"
+             | "-" | "." | "^" | "_" | "`" | "|" | "~"

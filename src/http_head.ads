@@ -8,13 +8,27 @@ package Http_Head is
    use Ada.Strings.Unbounded;
    use Interfaces;
 
-   subtype Colon_Type is Unbounded_String;
+   subtype Major_Type is Long_Long_Integer;
 
-   -- Anything but white space, control characters and the colon (bytes above
-   -- 7F are the bytes of UTF-8 text).
-   subtype TEXTCHAR_Type is Unbounded_String;
+   subtype Minor_Type is Long_Long_Integer;
 
-   subtype Word_Type is Unbounded_String;
+   -- The colon, with the blank that usually follows it.
+   type Colon_Type is (Colon_Op_1, Colon_Op_2);
+
+   subtype Token_char_Type is Unbounded_String;
+
+   -- common.hbnf — the character classes and core rules any grammar shares.
+   -- 
+   -- The RFC 5234 Appendix B.1 character classes (DIGIT, ALPHA, HEXDIG, ...) and
+   -- the one multi-character core rule, CRLF.  It includes ascii.hbnf for the
+   -- named ASCII characters, so a grammar that includes this one file gets the
+   -- whole set.
+   -- --- RFC 5234 Appendix B.1 character classes (each matches one code point) ---
+   subtype DIGIT_Type is Unbounded_String;
+
+   subtype ALPHA_Type is Unbounded_String;
+
+   subtype VCHAR_Type is Unbounded_String;
 
    subtype WSP_Type is Unbounded_String;
  -- white space
@@ -24,21 +38,61 @@ package Http_Head is
 
    subtype HTAB_Type is Unbounded_String;
 
+   subtype Not_x0_9_B_C_E_10FFFF_Type is Unbounded_String;
+
+   subtype Word_Type is Unbounded_String;
+
    subtype Int_Type is Unbounded_String;
 
    subtype Str_Type is Unbounded_String;
 
    subtype Ws_Type is Unbounded_String;
 
+   subtype Field_1_Type is Unbounded_String;
 
+   subtype SP_2_Type is Unbounded_String;
 
-   type Line_Entry is record
-      Ws : Ws_Type;
-      Colon : Colon_Type;
-      Word : Unbounded_String;
+   subtype Method_Type is Unbounded_String;
+
+   subtype Target_Type is Unbounded_String;
+
+   subtype Field_name_Type is Unbounded_String;
+
+   subtype Field_value_Type is Unbounded_String;
+
+   type Head_line_Type;
+   type Request_line_Type;
+   type Version_Type;
+   type Field_Type;
+
+   type Head_line_Access is access Head_line_Type;
+   type Request_line_Access is access Request_line_Type;
+   type Version_Access is access Version_Type;
+   type Field_Access is access Field_Type;
+
+   type Version_Type is record
+      Major : Major_Type;
+      Minor : Minor_Type;
    end record;
-   package Line_Vectors is new Ada.Containers.Vectors
-     (Positive, Line_Entry);
-   subtype Line_Type is Line_Vectors.Vector;
+
+   type Field_Type is record
+      Field_name : Field_name_Type;
+      Colon : Colon_Type;
+      Field_1 : Field_1_Type;
+      Field_value : Field_value_Type;
+   end record;
+
+   type Request_line_Type is record
+      Method : Method_Type;
+      SP : SP_Type;
+      Target : Target_Type;
+      SP_2 : SP_2_Type;
+      Version : Version_Access;
+   end record;
+
+   type Head_line_Type is record
+      Request_line : Request_line_Access;
+      Field : Field_Access;
+   end record;
 
 end Http_Head;

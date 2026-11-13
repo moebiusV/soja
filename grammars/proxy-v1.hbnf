@@ -1,16 +1,26 @@
 ; proxy-v1.hbnf -- the text form of the HAProxy PROXY protocol header, without
-; its CRLF:  PROXY <TCP4|TCP6|UNKNOWN> <src> <dst> <sport> <dport>
+; its CRLF (go-proxyproto's v1 parser):
 ;
-; The grammar only splits the line into words and single or repeated gaps;
-; the walker (soja-proxy_protocol.adb) checks the shape: exactly one space
-; between words, the protocol, and that addresses and ports are valid.
-; (The binary form, version 2, is not text and is parsed by hand.)
+;     PROXY <TCP4|TCP6> <source> <target> <source port> <target port>
+;     PROXY UNKNOWN [anything]
+;
+; One space between the words, nothing after the last.  What the generated
+; parser does not check, soja-proxy_protocol.adb does: that the addresses are
+; of the family named and the ports in range.  (The binary form, version 2, is
+; not text and is read by hand.)
 
-language Ada
-
+prefix none
+whitespace none
 include "common.hbnf"
 
-line = *( gap | word )
+line        = "PROXY" sep ( unknown | tcp )
+unknown     = "UNKNOWN" [ sep *OCTET ]
+tcp         = family sep source sep target sep source-port sep target-port
+family      = "TCP4" | "TCP6"
+source      = 1*VCHAR
+target      = 1*VCHAR
+source-port = int
+target-port = int
 
-gap  = 1*SP
-word = 1*VCHAR
+; The spaces between the words are only separators.
+hidden sep = SP

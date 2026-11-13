@@ -8,10 +8,22 @@ package Proxy_V1 is
    use Ada.Strings.Unbounded;
    use Interfaces;
 
+   subtype Unknown_Type is Unbounded_String;
+
+   type Family_Type is (Family_TCP4, Family_TCP6);
+
+   subtype Source_port_Type is Long_Long_Integer;
+
+   subtype Target_port_Type is Long_Long_Integer;
+
    subtype VCHAR_Type is Unbounded_String;
+
+   subtype OCTET_Type is Unbounded_String;
 
    -- --- blanks and DEL ---
    subtype SP_Type is Unbounded_String;
+
+   subtype Word_Type is Unbounded_String;
 
    subtype Int_Type is Unbounded_String;
 
@@ -19,18 +31,45 @@ package Proxy_V1 is
 
    subtype Ws_Type is Unbounded_String;
 
-   subtype Gap_Type is Unbounded_String;
+   subtype Source_Type is Unbounded_String;
 
-   subtype Word_Type is Unbounded_String;
+   subtype Target_Type is Unbounded_String;
 
+   -- The spaces between the words are only separators.
+   subtype Sep_Type is Unbounded_String;
 
+   subtype Sep_2_Type is Unbounded_String;
 
-   type Line_Entry is record
-      Gap : Gap_Type;
-      Word : Unbounded_String;
+   subtype Sep_3_Type is Unbounded_String;
+
+   subtype Sep_4_Type is Unbounded_String;
+
+   type Line_Type;
+   type Tcp_Type;
+   type Line_1_Type;
+
+   type Line_Access is access Line_Type;
+   type Tcp_Access is access Tcp_Type;
+   type Line_1_Access is access Line_1_Type;
+
+   type Tcp_Type is record
+      Family : Family_Type;
+      Source : Source_Type;
+      Sep_2 : Sep_2_Type;
+      Target : Target_Type;
+      Sep_3 : Sep_3_Type;
+      Source_port : Source_port_Type;
+      Sep_4 : Sep_4_Type;
+      Target_port : Target_port_Type;
    end record;
-   package Line_Vectors is new Ada.Containers.Vectors
-     (Positive, Line_Entry);
-   subtype Line_Type is Line_Vectors.Vector;
+
+   type Line_1_Type is record
+      Unknown : Unknown_Type;
+      Tcp : Tcp_Access;
+   end record;
+
+   type Line_Type is record
+      Line_1 : Line_1_Access;
+   end record;
 
 end Proxy_V1;

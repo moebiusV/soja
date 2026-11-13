@@ -7,59 +7,61 @@ with Service_Words.Parser;
 
 package body Soja.Service_Words is
 
-   use Soja.Irc.Genmsg.String_Vectors;
+   use Standard.Service_Words;
 
+
+   --  The text with each backslash taken off and the character after it kept
+   --  (a backslash takes the next character as it is).
+   function Unescape (S : String) return String is
+      Result : Unbounded_String;
+      I      : Natural := S'First;
+   begin
+      while I <= S'Last loop
+         if S (I) = '\' and then I < S'Last then
+            I := I + 1;
+         end if;
+         Append (Result, S (I));
+         I := I + 1;
+      end loop;
+      return To_String (Result);
+   end Unescape;
+
+   --  What a piece adds to its word: plain text as it is, an escaped
+   --  character without its backslash, a quoted string without its quotes.
+   function Value (P : Piece_Type) return String is
+     (if Length (P.Plain) > 0 then To_String (P.Plain)
+      elsif Length (P.Escaped) > 0 then Unescape (To_String (P.Escaped))
+      elsif P.Dquoted /= null then Unescape (To_String (P.Dquoted.Dq_body))
+      elsif P.Squoted /= null then Unescape (To_String (P.Squoted.Sq_body))
+      else "");
+
+   --  The pieces that stand for what Go refuses: a quote never closed, and a
+   --  backslash at the end.
+   function Unterminated_Quote (T : Line_Type) return Boolean is
+     (for some Item of T =>
+        (for some P of Item.Cmd_word => Length (P.Bad_quote) > 0));
+
+   function Unterminated_Backslash (T : Line_Type) return Boolean is
+     (for some Item of T =>
+        (for some P of Item.Cmd_word => Length (P.Bad_slash) > 0));
+
+   --  A word is its pieces run together.
+   function Word_Text (Pieces : Cmd_word_Type) return String is
+      Result : Unbounded_String;
+   begin
+      for P of Pieces loop
+         Append (Result, Value (P.all));
+      end loop;
+      return To_String (Result);
+   end Word_Text;
+
+   --  The line is read by the generated parser
+   --  (grammars/service-words.hbnf); the words are what is left of it.
    function Split_Words (S : String)
       return Soja.Irc.Genmsg.String_Vectors.Vector
    is
-      Tree    : Standard.Service_Words.Line_Type;
-      Words   : Soja.Irc.Genmsg.String_Vectors.Vector;
-      Current : Unbounded_String;
-      In_Word : Boolean := False;       --  a word has begun
-      Delim   : Character := ' ';       --  ' ' (none), '"' or '''
-      Escape  : Boolean := False;
-
-      procedure Take (Byte : Character; Cls : Character) is
-         --  Cls: 'w' whitespace, '\' backslash, 'q' a quote, 'o' other.
-      begin
-         if Escape then
-            --  The last byte was a backslash: take this one as it is.
-            Append (Current, Byte);
-            In_Word := True;
-            Escape := False;
-         elsif Cls = '\' then
-            Escape := True;
-            In_Word := True;
-         elsif Delim = ' ' and then Cls = 'w' then
-            --  The end of the word.  (Go tests the previous byte for white
-            --  space, so an escaped space at the end of a word hid it;
-            --  tracking In_Word fixes that, see SOJU-BUGS.md.)
-            if In_Word then
-               Words.Append (To_String (Current));
-               Current := Null_Unbounded_String;
-               In_Word := False;
-            end if;
-         elsif Byte = Delim then
-            Delim := ' ';              --  back to space-delimited words
-         elsif Cls = 'q' then
-            if Delim = ' ' then
-               Delim := Byte;          --  the start of a quoted word
-               In_Word := True;
-            else
-               Append (Current, Byte); --  the other quote, literally
-            end if;
-         else
-            Append (Current, Byte);
-            In_Word := True;
-         end if;
-      end Take;
-
-      procedure Take_Token (Text : Unbounded_String; Cls : Character) is
-      begin
-         for K in 1 .. Length (Text) loop
-            Take (Element (Text, K), Cls);
-         end loop;
-      end Take_Token;
+      Tree  : Line_Type;
+      Words : Soja.Irc.Genmsg.String_Vectors.Vector;
    begin
       begin
          Tree := Standard.Service_Words.Parser.Parse_Text (S);
@@ -68,29 +70,19 @@ package body Soja.Service_Words is
             raise Split_Error with "failed to parse command";
       end;
 
-      for E of Tree loop
-         if Length (E.Ws) > 0 then
-            Take_Token (E.Ws, 'w');
-         elsif Length (E.Bsl) > 0 then
-            Take_Token (E.Bsl, '\');
-         elsif Length (E.Dquote) > 0 then
-            Take_Token (E.Dquote, 'q');
-         elsif Length (E.Squote) > 0 then
-            Take_Token (E.Squote, 'q');
-         else
-            Take_Token (E.Other, 'o');
-         end if;
-      end loop;
-
-      if In_Word then
-         Words.Append (To_String (Current));
-      end if;
-      if Delim /= ' ' then
+      --  (Go reports the quote first when both are there.)
+      if Unterminated_Quote (Tree) then
+         Standard.Service_Words.Parser.Free_Line (Tree);
          raise Split_Error with "unterminated quoted string";
-      end if;
-      if Escape then
+      elsif Unterminated_Backslash (Tree) then
+         Standard.Service_Words.Parser.Free_Line (Tree);
          raise Split_Error with "unterminated backslash sequence";
       end if;
+
+      for Item of Tree when not Item.Cmd_word.Is_Empty loop
+         Words.Append (Word_Text (Item.Cmd_word));
+      end loop;
+      Standard.Service_Words.Parser.Free_Line (Tree);
       return Words;
    end Split_Words;
 

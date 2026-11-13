@@ -1,19 +1,17 @@
 ; ident-query.hbnf -- an RFC 1413 query line: "<port> , <port>" (identd.go
 ; parseIdentQuery).  White space may surround either number and the comma.
 ;
-; hbnf's lexer cannot tell two uses of one token class apart, so the grammar
-; only tokenises (white space, numbers, commas) and the walker
-; (soja-identd.adb) checks that they come as: number comma number.
+; The whole line is the grammar; the generated parser returns the two numbers
+; (Query_Type.Local and .Remote) and refuses anything else, with the position.
+; The range of a port (1 .. 65535) is checked by the caller (soja-identd.adb).
 ;
-; Deviation from Go: only ASCII digits make a number (strconv.Atoi also takes
-; a leading sign; "+80" is the one spelling that differs).
+; Deviation from Go: strconv.Atoi also takes a leading '+' ("+80"); `int`
+; does not.
 
-language Ada
-
+prefix none
+whitespace none
 include "common.hbnf"
 
-query = *( ws | num | comma )
-
-ws    = 1*WSP
-num   = 1*DIGIT
-comma = ","
+query  = *WSP local *WSP "," *WSP remote *WSP
+local  = int
+remote = int

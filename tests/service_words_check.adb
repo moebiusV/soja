@@ -62,5 +62,22 @@ begin
    Expect ("'abc", "!unterminated quoted string");
    Expect ("abc\", "!unterminated backslash sequence");
    Expect ("""abc\", "!unterminated quoted string");
+   --  White space is what Go's unicode.IsSpace says: U+00A0 and U+3000 and
+   --  U+0085 separate words (they did not, with the ASCII-only grammar).
+   Expect ("a" & Character'Val (16#C2#) & Character'Val (16#A0#) & "b",
+           "[a][b]");
+   Expect ("a" & Character'Val (16#E3#) & Character'Val (16#80#)
+           & Character'Val (16#80#) & "b", "[a][b]");
+   Expect ("a" & Character'Val (16#C2#) & Character'Val (16#85#) & "b",
+           "[a][b]");
+   --  ...but an escaped or quoted one does not.
+   Expect ("a\" & Character'Val (16#C2#) & Character'Val (16#A0#) & "b",
+           "[a" & Character'Val (16#C2#) & Character'Val (16#A0#) & "b]");
+   Expect ("""a" & Character'Val (16#C2#) & Character'Val (16#A0#) & "b""",
+           "[a" & Character'Val (16#C2#) & Character'Val (16#A0#) & "b]");
+   --  Other multi-byte text is kept, in words and escaped.
+   Expect ("h\é ""日本""", "[hé][日本]");
+   --  Bytes that are not UTF-8 are refused (Go would make each a U+FFFD).
+   Expect ("a" & Character'Val (16#FF#) & "b", "!failed to parse command");
    Ada.Text_IO.Put_Line ("ALL PASS");
 end Service_Words_Check;
