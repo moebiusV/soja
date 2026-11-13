@@ -54,6 +54,11 @@ listen ident://127.0.0.1:1130
 listen unix+admin://$D/admin.sock
 listen unix://$D/irc.sock
 listen ircs://127.0.0.1:6698
+listen ws+insecure://127.0.0.1:8081
+listen http+insecure://127.0.0.1:8082
+listen wss://127.0.0.1:8443
+listen ws+unix://$D/ws.sock
+http-origin *.allowed.example
 tls $D/tls.crt $D/tls.key
 hostname soja.example.net
 $STORE_LINE

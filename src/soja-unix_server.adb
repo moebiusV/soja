@@ -5,12 +5,14 @@ with Interfaces.C;
 
 with GNAT.OS_Lib;
 
+with Soja.Byte_Stream.Unix;
 with Soja.Conn.Unix;
 
 package body Soja.Unix_Server is
 
    use Ada.Strings.Unbounded;
    use type GNAT.Sockets.Selector_Status;
+   use type Soja.Server.Web_Handler;
 
    protected body Stop_Flag is
       procedure Request is
@@ -61,7 +63,11 @@ package body Soja.Unix_Server is
 
    --  One task per connection (server.go's `go handler(...)`).
    task type Conn_Task
-     (IC : not null Soja.Conn.IRC_Conn_Access; H : Soja.Server.Handler)
+     (IC     : Soja.Conn.IRC_Conn_Access;
+      Stream : Soja.Byte_Stream.Stream_Access;
+      H      : Soja.Server.Handler;
+      Server : access Soja.Server.Server;
+      Web    : Soja.Server.Web_Handler)
    is
       entry Start;
    end Conn_Task;
@@ -69,13 +75,20 @@ package body Soja.Unix_Server is
    task body Conn_Task is
    begin
       accept Start;
-      H (IC);
+      if Web /= null then
+         Web (Server.all, Stream, H);
+      else
+         H (IC);
+      end if;
    end Conn_Task;
 
    type Conn_Task_Access is access Conn_Task;
 
    procedure Serve
-     (L : not null Listener_Access; H : Soja.Server.Handler)
+     (L      : not null Listener_Access;
+      H      : Soja.Server.Handler;
+      Server : access Soja.Server.Server := null;
+      Web    : Soja.Server.Web_Handler := null)
    is
       Sel  : aliased GNAT.Sockets.Selector_Type;
       Rset, Wset : GNAT.Sockets.Socket_Set_Type;
@@ -98,9 +111,15 @@ package body Soja.Unix_Server is
                GNAT.Sockets.Accept_Socket (L.Sock, Client, Addr);
                declare
                   IC : constant Soja.Conn.IRC_Conn_Access :=
-                    new Soja.Conn.Unix.Unix_IRC_Conn'
-                      (Soja.Conn.Unix.Create (Client));
-                  T  : constant Conn_Task_Access := new Conn_Task (IC, H);
+                    (if Web = null
+                     then new Soja.Conn.Unix.Unix_IRC_Conn'
+                            (Soja.Conn.Unix.Create (Client))
+                     else null);
+                  St : constant Soja.Byte_Stream.Stream_Access :=
+                    (if Web = null then null
+                     else Soja.Byte_Stream.Unix.Create (Client));
+                  T  : constant Conn_Task_Access :=
+                    new Conn_Task (IC, St, H, Server, Web);
                begin
                   T.Start;
                end;

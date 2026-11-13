@@ -386,6 +386,47 @@ files' modification time (second granularity), and their names are the
   error) and SB-18 (the store kept the user's nick from creation; it is told
   of updates).
 
+### WebSocket and HTTP listeners (`Soja.Web`, `Soja.Conn.Ws`, `Soja.Http`)
+
+`wss://` (default port 443), `ws+insecure://` (80) and `ws+unix://` serve a
+WebSocket upgrade on any path, as `Server.ServeHTTP` does; `https://`,
+`http+insecure://` and `http+unix://` route like cmd/soju's mux: `/socket` is
+the WebSocket, `/uploads` and `/uploads/...` are the file-upload handler,
+anything else is a 404.  soja has no uploader, so `/uploads` answers as soju
+does without one: CSP and CORS headers, 403 for an unauthorized Origin, else
+404.  nhooyr.io/websocket's rules are kept: HTTP/1.1, a GET with `Connection:
+Upgrade` and `Upgrade: websocket`, version 13, a key (426, 405 and 400
+otherwise); the Origin must be the request's host or match an `http-origin`
+pattern (`Soja.Glob`, Go's `path.Match`, compared without regard to case), else
+403; subprotocol `text.ircv3.net` when offered; no compression; messages up to
+32768 bytes; one IRC message per text frame, invalid UTF-8 refused (1007) on
+the way in and replaced by U+FFFD on the way out.  Behind a trusted proxy
+(`accept-proxy-ip`) the client address comes from `Forwarded` (`for`) or
+`X-Forwarded-For`.  The framing, the handshake and the SHA-1/base64 are hand
+written over `Soja.Byte_Stream` (TCP, TLS and unix sockets alike).
+
+Deviations: one request per connection (Go keeps HTTP connections alive);
+no closing-handshake wait on `Close` (the close frame is sent, then the socket
+is shut); `Forwarded` is parsed the way `mime.ParseMediaType` does, but only for
+the `for` parameter; the Origin is split into host with a small URL reader, not
+`net/url` (a control character or space is refused).  The request line and
+header fields are tokenised by `grammars/http-head.hbnf`, in the older
+token-and-walker style; moving it to a full grammar goes with the other three
+(see "What hbnf can do").
+
+The socket is released once the connection is closed, the handler has
+returned and no task is inside a read or write, so a late write from the writer
+task finds the connection closed, not a freed socket.
+
+**Listener robustness (a soja bug, fixed with this change).**  `Server.Serve`
+let one exception end the accept loop: a client that connected and reset made
+`Peer_Addr` fail ("Socket not connected") and the listener stopped accepting
+for good.  Error paths also left descriptors open (`AWS.Net.Free` only frees
+memory; `Shutdown` closes the descriptor), so resets used up the process's
+descriptors.  A connection that fails setup is now dropped and the loop goes
+on; the end-to-end test sends more resetting connections than the default
+descriptor limit and checks the listeners still serve.
+
 ### Read markers (`READ` / `MARKREAD`)
 
 `Cmd_Read` in `Soja.Core.Downstream_Commands` (`downstream.go`'s `READ`,
@@ -412,9 +453,11 @@ SIGHUP reloads the configuration (`pragma Interrupt_State (SIGINT, User)` in
 without echo through `stty`).  The default config path is `/etc/soju/config`.
 What it refuses or changes, loudly:
 
-- Listeners: `ircs://`, `irc+insecure://`, `unix://`, `ident://` and
-  `unix+admin://` only; any other scheme (ws, http, prometheus, pprof) is a
-  startup error.  `accept-proxy-ip` (PROXY protocol) works on the TCP listeners.
+- Listeners: `ircs://`, `irc+insecure://`, `unix://`, `ident://`,
+  `unix+admin://`, the WebSocket ones (`wss://`, `ws+insecure://`,
+  `ws+unix://`) and the HTTP ones (`https://`, `http+insecure://`,
+  `http+unix://`); any other scheme (prometheus, pprof) is a startup error.
+  `accept-proxy-ip` (PROXY protocol) works on the IRC TCP listeners.
 - Auth drivers other than `internal` (pam, oauth2) are a startup error: a
   bouncer that cannot check passwords must not start as if it could.
 - All three message stores (`memory`, `db`, `fs`) work;

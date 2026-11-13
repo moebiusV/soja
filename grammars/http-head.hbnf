@@ -1,0 +1,22 @@
+; http-head.hbnf -- one line of an HTTP/1.x request head (the request line or a
+; header field), without its CRLF.
+;
+; The grammar only tokenises: white space, colons, and runs of anything else.
+; The walker (soja-http.adb) puts them back together: the request line is
+; three white-space separated fields (method, target, version); a header line
+; is a name, the first colon, and the rest of the line (colons and all) as the
+; value.  (The line framing, CRLF and the blank line that ends the head, is
+; done by the reader, as for IRC.)
+
+language Ada
+
+include "common.hbnf"
+
+line = *( ws | colon | word )
+
+ws    = 1*WSP
+colon = ":"
+; Anything but white space, control characters and the colon (bytes above
+; 7F are the bytes of UTF-8 text).
+TEXTCHAR = %x21-39 | %x3B-7E | %x80-FF
+word     = 1*TEXTCHAR

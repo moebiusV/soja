@@ -24,6 +24,7 @@ with Soja.Logging;
 with Soja.Proxy_Protocol;
 with Soja.Server;
 with Soja.Unix_Server;
+with Soja.Web;
 with Soja_Signals;
 
 procedure Soja_Main is
@@ -216,11 +217,12 @@ procedure Soja_Main is
    task type Listener_Task
      (L : not null AWS.Net.Socket_Access;
       Cert, Key : not null String_Access;
+      Web : Soja.Server.Web_Handler;
       Name : not null String_Access);
 
    task body Listener_Task is
    begin
-      Soja.Server.Serve (Srv, L, Cert.all, Key.all);
+      Soja.Server.Serve (Srv, L, Cert.all, Key.all, Web);
       Serving.Done;
    exception
       when E : others =>
@@ -269,11 +271,12 @@ procedure Soja_Main is
    task type Unix_Task
      (L : not null Soja.Unix_Server.Listener_Access;
       H : Soja.Server.Handler;
+      Web : Soja.Server.Web_Handler;
       Name : not null String_Access);
 
    task body Unix_Task is
    begin
-      Soja.Unix_Server.Serve (L, H);
+      Soja.Unix_Server.Serve (L, H, Srv'Access, Web);
       Serving.Done;
    exception
       when E : others =>
@@ -283,8 +286,10 @@ procedure Soja_Main is
    end Unix_Task;
    type Unix_Task_Access is access Unix_Task;
 
+   --  Web: the connections are HTTP or WebSocket (ws+unix, http+unix).
    procedure Start_Unix_Listener
-     (Listen, Rest : String; Admin : Boolean)
+     (Listen, Rest : String; Admin : Boolean;
+      Web : Soja.Server.Web_Handler := null)
    is
       Has_Path : constant Boolean :=
         Rest'Length > 0 and then Rest (Rest'First) = '/';
@@ -318,7 +323,7 @@ procedure Soja_Main is
       Serving.Add;
       Runner := new Unix_Task
         (L, (if Admin then Soja.Bouncer.Handle_Admin'Access
-             else Soja.Bouncer.Handle'Access), new String'(Listen));
+             else Soja.Bouncer.Handle'Access), Web, new String'(Listen));
    end Start_Unix_Listener;
 
    --  withDefaultPort for a "host[:port]" (or "[v6]:port") string; Host and
@@ -379,9 +384,18 @@ procedure Soja_Main is
       Port   : Natural;
       TLS    : Boolean;
       Is_Ident : Boolean := False;
+      Web    : Soja.Server.Web_Handler := null;
    begin
       if Scheme = "unix+admin" or else Scheme = "unix" then
          Start_Unix_Listener (Listen, Rest, Admin => Scheme = "unix+admin");
+         Log.Print ("server listening on " & Quote (Listen));
+         return;
+      end if;
+      if Scheme = "ws+unix" or else Scheme = "http+unix" then
+         Start_Unix_Listener
+           (Listen, Rest, Admin => False,
+            Web => (if Scheme = "ws+unix" then Soja.Web.Handle_Ws'Access
+                    else Soja.Web.Handle_Http'Access));
          Log.Print ("server listening on " & Quote (Listen));
          return;
       end if;
@@ -395,6 +409,20 @@ procedure Soja_Main is
       elsif Scheme = "irc+insecure" then
          Split_Host_Port (Host_Port, "6667", Host, Port);
          TLS := False;
+      elsif Scheme = "wss" or else Scheme = "https" then
+         if Raw.TLS = null then
+            Fatal ("failed to listen on " & Quote (Listen)
+                   & ": missing TLS configuration");
+         end if;
+         Split_Host_Port (Host_Port, "443", Host, Port);
+         TLS := True;
+         Web := (if Scheme = "wss" then Soja.Web.Handle_Ws'Access
+                 else Soja.Web.Handle_Http'Access);
+      elsif Scheme = "ws+insecure" or else Scheme = "http+insecure" then
+         Split_Host_Port (Host_Port, "80", Host, Port);
+         TLS := False;
+         Web := (if Scheme = "ws+insecure" then Soja.Web.Handle_Ws'Access
+                 else Soja.Web.Handle_Http'Access);
       elsif Scheme = "ident" then
          Split_Host_Port (Host_Port, "113", Host, Port);
          TLS := False;
@@ -443,6 +471,7 @@ procedure Soja_Main is
                     (if TLS then To_String (Raw.TLS.Cert_Path) else ""),
                   Key  => new String'
                     (if TLS then To_String (Raw.TLS.Key_Path) else ""),
+                  Web  => Web,
                   Name => new String'(Listen));
             end;
          end if;

@@ -1,13 +1,12 @@
 pragma Ada_2022;
 
-with AWS.Net;
 with AWS.Net.SSL;
 with AWS.Net.Std;
 with GNAT.Sockets;
 with Ada.Exceptions;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 
-with Soja.Config;
+with Soja.Byte_Stream.Net;
 with Soja.Conn.Net;
 with Soja.Proxy_Protocol;
 
@@ -33,9 +32,12 @@ package body Soja.Server is
    --  it).  It is read here, on the connection's own task, not in the accept
    --  loop; for TLS it comes inside the TLS stream, as in soju (the proxy
    --  listener wraps the TLS one).
+   --  Web: the connection is a Stream for the web handler, not an IC.
    task type Conn_Task
      (S : not null access Server;
-      IC : not null Soja.Conn.IRC_Conn_Access; H : Handler;
+      IC : Soja.Conn.IRC_Conn_Access;
+      Stream : Soja.Byte_Stream.Stream_Access;
+      H : Handler; Web : Web_Handler;
       Proxy : Boolean; Peer : not null access constant String)
    is
       entry Start;
@@ -46,6 +48,10 @@ package body Soja.Server is
       Serve_It       : Boolean := True;
    begin
       accept Start;
+      if Web /= null then
+         Web (S.all, Stream, H);
+         Serve_It := False;
+      end if;
       if Proxy then
          begin
             Soja.Conn.Net.Read_Proxy_Header
@@ -65,6 +71,22 @@ package body Soja.Server is
          H (IC);
       end if;
    end Conn_Task;
+
+   type Peer_Ref is access constant String;
+
+   --  Gives a socket we could not use back: closes the descriptor (Shutdown
+   --  closes it; Free alone only releases the memory) and frees the object.
+   procedure Drop (Sock : in out AWS.Net.Socket_Access) is
+   begin
+      if Sock /= null then
+         begin
+            Sock.Shutdown (AWS.Net.Shut_Read_Write);
+         exception
+            when others => null;
+         end;
+         AWS.Net.Free (Sock);
+      end if;
+   end Drop;
 
    --  A package-level access type, so a connection task's master is the
    --  package (not the accept loop's block) and it outlives the block.
@@ -129,9 +151,9 @@ package body Soja.Server is
      (S        : in out Server;
       Listener : not null AWS.Net.Socket_Access;
       TLS_Cert : String := "";
-      TLS_Key  : String := "")
+      TLS_Key  : String := "";
+      Web      : Web_Handler := null)
    is
-      use type AWS.Net.Socket_Access;
 
       Config   : AWS.Net.SSL.Config := AWS.Net.SSL.Null_Config;
       Use_TLS  : constant Boolean := TLS_Cert'Length > 0;
@@ -147,6 +169,63 @@ package body Soja.Server is
       Rset : GNAT.Sockets.Socket_Set_Type;
       Wset : GNAT.Sockets.Socket_Set_Type;
       St   : GNAT.Sockets.Selector_Status;
+      Fails : Natural := 0;   --  accepts that failed in a row
+      --  Hands an accepted socket to a connection task.  A connection that
+      --  fails here (the client already reset it: no peer address, a TLS
+      --  setup error) is dropped; it must not stop the listener.
+      procedure Start_Connection (Sock : in out AWS.Net.Socket_Access) is
+      begin
+         if Sock = null then
+            return;   --  the accept failed
+         end if;
+         declare
+            IC    : Soja.Conn.IRC_Conn_Access;
+            Strm  : Soja.Byte_Stream.Stream_Access;
+            Peer  : constant Peer_Ref := new String'(Sock.Peer_Addr);
+            Addr  : Soja.Config.IP_Addr;
+            Proxy : constant Boolean :=
+              Web = null
+              and then Soja.Proxy_Protocol.Parse_IP (Peer.all, Addr)
+              and then Soja.Proxy_Protocol.Contains
+                         (Soja.Server.Config (S).Accept_Proxy_IPs, Addr);
+         begin
+            if Use_TLS then
+               declare
+                  SSL_Sock : constant AWS.Net.SSL.Socket_Type :=
+                    AWS.Net.SSL.Secure_Server (Sock.all, Config);
+               begin
+                  AWS.Net.Free (Sock);
+                  Sock := new AWS.Net.SSL.Socket_Type'(SSL_Sock);
+               end;
+            end if;
+            if Web /= null then
+               Strm := Soja.Byte_Stream.Net.Create (Sock);
+            else
+               IC := new Soja.Conn.Net.Net_IRC_Conn'
+                 (Soja.Conn.Net.Create (Sock));
+            end if;
+
+            declare
+               T : constant Conn_Task_Access :=
+                 new Conn_Task
+                   (S'Unchecked_Access, IC, Strm, S.H, Web, Proxy, Peer);
+            begin
+               T.Start;   -- begin serving the connection
+            end;
+         end;
+      exception
+         when AWS.Net.Socket_Error =>
+            --  Routine: the client went away first.
+            Drop (Sock);
+         when E : others =>
+            Drop (Sock);
+            if S.Logger /= null then
+               S.Logger.Print
+                 ("dropped a connection: "
+                  & Ada.Exceptions.Exception_Message (E));
+            end if;
+      end Start_Connection;
+
    begin
       S.Listener := Listener;
 
@@ -169,13 +248,28 @@ package body Soja.Server is
          if St = GNAT.Sockets.Completed
            and then not GNAT.Sockets.Is_Empty (Rset)
          then
+            New_Sock := AWS.Net.Socket (False);
             begin
-               New_Sock := AWS.Net.Socket (False);
                Accept_Socket (Listener.all, New_Sock.all);
             exception
                when AWS.Net.Socket_Error =>
-                  exit;   -- listener closed by Shutdown
+                  --  A failed accept is retried, unless the listener was
+                  --  closed by Shutdown.  (A client that connects and resets
+                  --  gives such an error too.)
+                  Drop (New_Sock);
+                  exit when S.Flag.Is_Set;
+                  --  Clients that reset are routine and cost nothing; a
+                  --  listener that keeps failing (no descriptors left) must
+                  --  not spin.
+                  Fails := Fails + 1;
+                  if Fails > 10 then
+                     delay 0.05;
+                  end if;
+                  New_Sock := null;
             end;
+            if New_Sock /= null then
+               Fails := 0;
+            end if;
 
             --  A certificate reload (SIGHUP) since the last connection: take
             --  the new keypair.  The old config is not released: open
@@ -212,38 +306,7 @@ package body Soja.Server is
                end;
             end if;
 
-            declare
-               IC    : Soja.Conn.IRC_Conn_Access;
-               Peer  : constant access constant String :=
-                 new String'(New_Sock.Peer_Addr);
-               Addr  : Soja.Config.IP_Addr;
-               Proxy : constant Boolean :=
-                 Soja.Proxy_Protocol.Parse_IP (Peer.all, Addr)
-                 and then Soja.Proxy_Protocol.Contains
-                            (Soja.Server.Config (S).Accept_Proxy_IPs, Addr);
-            begin
-               if Use_TLS then
-                  declare
-                     SSL_Sock : AWS.Net.SSL.Socket_Type :=
-                       AWS.Net.SSL.Secure_Server (New_Sock.all, Config);
-                  begin
-                     AWS.Net.Free (New_Sock);
-                     IC := new Soja.Conn.Net.Net_IRC_Conn'
-                       (Soja.Conn.Net.Create
-                          (new AWS.Net.SSL.Socket_Type'(SSL_Sock)));
-                  end;
-               else
-                  IC := new Soja.Conn.Net.Net_IRC_Conn'
-                    (Soja.Conn.Net.Create (New_Sock));
-               end if;
-
-               declare
-                  T : Conn_Task_Access :=
-                    new Conn_Task (S'Unchecked_Access, IC, S.H, Proxy, Peer);
-               begin
-                  T.Start;   -- begin serving the connection
-               end;
-            end;
+            Start_Connection (New_Sock);
          end if;
 
          exit when S.Flag.Is_Set;

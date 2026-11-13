@@ -24,8 +24,14 @@ package Soja.Unix_Server is
    --  Serve: accept connections and run H on a task for each, until Stop.
    --  The socket file is removed on the way out (as closing a Go
    --  UnixListener does).
+   --  With Web (and the server it needs, for its configuration), each
+   --  connection is served by Web instead of directly by H (the ws+unix and
+   --  http+unix listeners).
    procedure Serve
-     (L : not null Listener_Access; H : Soja.Server.Handler);
+     (L      : not null Listener_Access;
+      H      : Soja.Server.Handler;
+      Server : access Soja.Server.Server := null;
+      Web    : Soja.Server.Web_Handler := null);
 
    procedure Stop (L : not null Listener_Access);
 

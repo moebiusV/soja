@@ -10,7 +10,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(__file__))
-from e2e_client import Client, Fail  # noqa: E402
+from e2e_client import Client, Fail, WsClient, ws_request  # noqa: E402
 
 SOJA = os.environ["SOJA_BIN"]
 SOJUCTL = os.environ["SOJUCTL_BIN"]
@@ -198,6 +198,142 @@ def main():
     u.send("PRIVMSG BouncerServ :network status")
     u.expect(r"test .*connected")
     u.close()
+
+    log("WebSocket listeners (ws, wss, ws+unix, http)")
+    for how, kw in (("ws+insecure", dict(port=8081)),
+                    ("wss", dict(port=8443, tls=True)),
+                    ("ws+unix", dict(unix=os.path.join(DIR, "ws.sock"))),
+                    ("http /socket", dict(port=8082, path="/socket"))):
+        w = WsClient.connect(f"{how}:alice", **kw)
+        w.register("alice", "alice/test", "secret")
+        w.send("PING :wsping")
+        w.expect(r"PONG .*wsping")
+        w.send("PRIVMSG BouncerServ :network status")
+        w.expect(r"test .*connected")
+        # a long message crosses the 16-bit frame length
+        w.send("PRIVMSG alice :" + "x" * 400)
+        w.expect(r"PRIVMSG alice :?x{400}")
+        w.send_raw_frame(9, b"ping-data")        # a ping gets a pong
+        end = time.time() + 5
+        while True:
+            f = w.next_frame(end)
+            if f is None:
+                raise Fail(f"{how}: no pong")
+            if f[0] == 10 and f[1] == b"ping-data":
+                break
+        w.close()
+    w = WsClient.connect("ws:whois", port=8081)
+    w.register("alice", "alice", "secret")
+    w.send("WHOIS alice")
+    w.expect(r" 311 alice alice alice 127\.0\.0\.1 ")
+    w.close()
+    # the subprotocol is chosen when offered
+    s, status, h, _, _ = ws_request(
+        port=8081, extra=["Sec-WebSocket-Protocol: foo, text.ircv3.net"])
+    s.close()
+    if " 101 " not in status or h.get("sec-websocket-protocol") != "text.ircv3.net":
+        raise Fail(f"subprotocol: {status!r} {h!r}")
+    # origins: the request's host and http-origin patterns pass, others do not
+    for origin, want in (("http://127.0.0.1:8081", "101"),
+                         ("https://app.allowed.example", "101"),
+                         ("https://evil.example", "403"),
+                         ("null", "403")):
+        s, status, _, _, _ = ws_request(port=8081,
+                                        extra=[f"Origin: {origin}"])
+        s.close()
+        if f" {want} " not in status:
+            raise Fail(f"origin {origin!r}: {status!r}, wanted {want}")
+    # not a WebSocket request, wrong paths and methods
+    for kw, want in ((dict(port=8081, extra=["X-Dummy: 1"], method="POST"), "405"),
+                     (dict(port=8082, path="/"), "404"),
+                     (dict(port=8082, path="/uploads/x"), "404")):
+        s, status, _, _, _ = ws_request(**kw)
+        s.close()
+        if f" {want} " not in status:
+            raise Fail(f"{kw}: {status!r}, wanted {want}")
+    # behind a trusted proxy (accept-proxy-ip localhost) the address comes
+    # from Forwarded, and an untrusted peer cannot spoof it (checked by the
+    # unit tests; here localhost is the trusted one)
+    for fwd, want in (("for=192.0.2.7", r"192\.0\.2\.7"),
+                      ('for="192.0.2.8:4000"', r"192\.0\.2\.8")):
+        w = WsClient.connect("ws:fwd", port=8081,
+                             extra=[f"Forwarded: {fwd}"])
+        w.register("alice", "alice", "secret")
+        w.send("WHOIS alice")
+        w.expect(rf" 311 alice alice alice {want} ")
+        w.close()
+    w = WsClient.connect("ws:xff", port=8081,
+                         extra=["X-Forwarded-For: 192.0.2.9"])
+    w.register("alice", "alice", "secret")
+    w.send("WHOIS alice")
+    w.expect(r" 311 alice alice alice 192\.0\.2\.9 ")
+    w.close()
+    # a protocol violation (an unmasked frame) is refused with a close frame
+    s, status, _, _, _ = ws_request(port=8081)
+    s.sendall(b"\x81\x04PING")                 # unmasked
+    data = b""
+    try:
+        while len(data) < 4:
+            chunk = s.recv(64)
+            if not chunk:
+                break
+            data += chunk
+    except OSError:
+        pass
+    s.close()
+    if not data or data[0] & 0x0F != 8:
+        raise Fail(f"an unmasked frame was not answered with a close: {data!r}")
+
+    log("no descriptors leak from closed WebSocket connections")
+
+    def open_fds():
+        return len(os.listdir(f"/proc/{soja_proc.pid}/fd"))
+
+    before = open_fds()
+    for i in range(30):
+        w = WsClient.connect(f"ws:leak{i}", port=8081)
+        w.register("alice", "alice", "secret")
+        w.close()
+    # connections that end without a close frame, and a refused handshake
+    for i in range(10):
+        s, _, _, _, _ = ws_request(port=8081)
+        s.close()
+        s, _, _, _, _ = ws_request(port=8081, extra=["Origin: https://evil.example"])
+        s.close()
+    time.sleep(2)
+    after = open_fds()
+    if after > before + 4:
+        raise Fail(f"descriptors leaked: {before} open before, {after} after")
+
+    log("connections that reset do not stop the listeners or leak descriptors")
+    import struct
+    import threading
+
+    def hammer(port, n):
+        for _ in range(n):
+            try:
+                c = socket.create_connection(("127.0.0.1", port), timeout=2)
+                c.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER,
+                             struct.pack("ii", 1, 0))   # close sends RST
+                c.close()
+            except OSError:
+                pass
+    # more connections than the default descriptor limit (1024)
+    before = open_fds()
+    ts = [threading.Thread(target=hammer, args=(p, 100))
+          for p in (BOUNCER, 8081, 8082) for _ in range(6)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    time.sleep(2)
+    if open_fds() > before + 20:
+        raise Fail(f"descriptors leaked by resets: {before} -> {open_fds()}")
+    wait_port(BOUNCER)
+    bouncer().close()
+    w = WsClient.connect("ws:after-storm", port=8081)
+    w.register("alice", "alice", "secret")
+    w.close()
 
     log("the PROXY protocol, from a trusted peer")
     p = Client(BOUNCER, "proxied")

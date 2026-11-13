@@ -6,6 +6,7 @@ pragma Ada_2022;
 with Ada.Strings.Unbounded;
 
 with AWS.Net;
+with Soja.Byte_Stream;
 with Soja.Config;
 with Soja.Conn;
 with Soja.Database;
@@ -68,6 +69,15 @@ package Soja.Server is
    type Server is tagged limited private;
    type Server_Access is access all Server;
 
+   --  What a web listener (ws, wss, http, https and their unix/insecure
+   --  forms) runs for each connection instead of the IRC handler: serve one
+   --  HTTP request on Stream, upgrading it to a WebSocket that H then handles
+   --  (server.go's Server.ServeHTTP and the HTTP mux).  Owns the stream.
+   type Web_Handler is access procedure
+     (S      : in out Server;
+      Stream : not null Soja.Byte_Stream.Stream_Access;
+      H      : Handler);
+
    --  Server.Config / SetConfig.  SetConfig swaps the whole object (as Go's
    --  atomic.Value does); readers holding the old one keep a valid snapshot.
    function Config (S : Server) return Server_Config_Access;
@@ -93,11 +103,13 @@ package Soja.Server is
    --  that runs the handler.  When TLS_Cert/TLS_Key are non-empty, each
    --  accepted socket is wrapped in TLS.  Returns when Shutdown is requested
    --  (which closes the listener).
+   --  With Web, connections are served by it instead (no PROXY protocol).
    procedure Serve
      (S        : in out Server;
       Listener : not null AWS.Net.Socket_Access;
       TLS_Cert : String := "";
-      TLS_Key  : String := "");
+      TLS_Key  : String := "";
+      Web      : Web_Handler := null);
 
    procedure Shutdown (S : in out Server);
 

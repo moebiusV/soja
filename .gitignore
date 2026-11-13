@@ -69,3 +69,4 @@ tests/sqlite_features_check
 tests/dbmsg_check
 tests/dbstore_check
 tests/fsstore_check
+tests/web_check
