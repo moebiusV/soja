@@ -33,6 +33,13 @@ package Soja.Web is
       Stream : not null Soja.Byte_Stream.Stream_Access;
       H      : Soja.Server.Handler);
 
+   --  Web_Handler for the http+prometheus listener: whatever is asked, the
+   --  metrics (promhttp.HandlerFor).  H is not used.
+   procedure Handle_Metrics
+     (S      : in out Soja.Server.Server;
+      Stream : not null Soja.Byte_Stream.Stream_Access;
+      H      : Soja.Server.Handler);
+
    --  The Sec-WebSocket-Accept value for a Sec-WebSocket-Key (RFC 6455 4.2.2).
    --  Exposed for the tests.
    function Accept_Key (Key : String) return String;

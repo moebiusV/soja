@@ -427,6 +427,22 @@ descriptors.  A connection that fails setup is now dropped and the loop goes
 on; the end-to-end test sends more resetting connections than the default
 descriptor limit and checks the listeners still serve.
 
+### Prometheus metrics (`Soja.Metrics`, `http+prometheus://`)
+
+`http+prometheus://localhost:<port>` serves the text exposition format on
+any path, plain HTTP, host `localhost` only (as in soju; a port is required).
+The nine `soju_*` metrics of `registerMetrics` are there: gauges
+`soju_users_active`, `soju_downstreams_active`, `soju_upstreams_active` and
+counters for messages in and out of each side, `soju_upstream_connect_errors_total`
+and `soju_worker_panics_total`.  Counting is done by `Soja.Conn` (a message
+read, a message queued for writing), set per connection in `Conn_Options`.
+Deviations: only the `soju_*` metrics (no `go_*`, `process_*` or `promhttp_*`
+ones: there is no Go runtime), values are written as integers (the client
+library writes floats, `1e+06` for a million), no OpenMetrics negotiation, and
+`soju_worker_panics_total` stays 0 (a failing task logs and ends).  The pure
+part, `Render`, is an expression function over a snapshot; the counters are one
+protected object.  `http+pprof://` is Go's profiler and has no counterpart.
+
 ### Read markers (`READ` / `MARKREAD`)
 
 `Cmd_Read` in `Soja.Core.Downstream_Commands` (`downstream.go`'s `READ`,
@@ -456,7 +472,8 @@ What it refuses or changes, loudly:
 - Listeners: `ircs://`, `irc+insecure://`, `unix://`, `ident://`,
   `unix+admin://`, the WebSocket ones (`wss://`, `ws+insecure://`,
   `ws+unix://`) and the HTTP ones (`https://`, `http+insecure://`,
-  `http+unix://`); any other scheme (prometheus, pprof) is a startup error.
+  `http+unix://`), `http+prometheus://localhost:<port>`; any other scheme
+  (pprof) is a startup error.
   `accept-proxy-ip` (PROXY protocol) works on the IRC TCP listeners.
 - Auth drivers other than `internal` (pam, oauth2) are a startup error: a
   bouncer that cannot check passwords must not start as if it could.

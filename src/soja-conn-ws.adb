@@ -128,25 +128,22 @@ package body Soja.Conn.Ws is
       end if;
    end Enter;
 
+   --  The eight bytes of a 64-bit length, most significant first.
+   function Length_64 (Len : Natural) return String is
+     ([for I in 1 .. 8 => Character'Val ((Len / (256 ** (8 - I))) mod 256)]);
+
+   --  The frame header: FIN and the opcode (no RSV, no mask), then the length
+   --  in the shortest of the three forms.
+   function Frame_Header (Opcode, Len : Natural) return String is
+     (Character'Val (128 + Opcode)
+      & (if Len < 126 then "" & Character'Val (Len)
+         elsif Len <= 65_535
+         then Character'Val (126) & Character'Val (Len / 256)
+              & Character'Val (Len mod 256)
+         else Character'Val (127) & Length_64 (Len)));
+
    function Encode_Frame (Opcode : Natural; Payload : String) return String is
-      Len    : constant Natural := Payload'Length;
-      Header : Unbounded_String;
-   begin
-      Append (Header, Character'Val (128 + Opcode));   --  FIN, no RSV
-      if Len < 126 then
-         Append (Header, Character'Val (Len));
-      elsif Len <= 65_535 then
-         Append (Header, Character'Val (126));
-         Append (Header, Character'Val (Len / 256));
-         Append (Header, Character'Val (Len mod 256));
-      else
-         Append (Header, Character'Val (127));
-         for I in reverse 0 .. 7 loop
-            Append (Header, Character'Val ((Len / (256 ** I)) mod 256));
-         end loop;
-      end if;
-      return To_String (Header) & Payload;
-   end Encode_Frame;
+     (Frame_Header (Opcode, Payload'Length) & Payload);
 
    --  Sends one frame, serialised with the other writers.
    procedure Send_Frame
@@ -167,13 +164,12 @@ package body Soja.Conn.Ws is
       Leave (St);
    end Send_Frame;
 
+   --  A close frame's payload: the status, then a reason that fits (a control
+   --  frame holds 125 bytes).
    function Close_Payload (Code : Natural; Reason : String) return String is
-      R : constant String :=
-        (if Reason'Length > 123
-         then Reason (Reason'First .. Reason'First + 122) else Reason);
-   begin
-      return Character'Val (Code / 256) & Character'Val (Code mod 256) & R;
-   end Close_Payload;
+     (Character'Val (Code / 256) & Character'Val (Code mod 256)
+      & (if Reason'Length > 123
+         then Reason (Reason'First .. Reason'First + 122) else Reason));
 
    procedure Shutdown_Stream (St : in out State) is
    begin

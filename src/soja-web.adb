@@ -15,6 +15,7 @@ with Soja.Conn.Ws;
 with Soja.Glob;
 with Soja.Http;
 with Soja.Logging;
+with Soja.Metrics;
 with Soja.Proxy_Protocol;
 
 package body Soja.Web is
@@ -30,25 +31,22 @@ package body Soja.Web is
    function Lower (S : String) return String is
      (Ada.Characters.Handling.To_Lower (S));
 
-   function Accept_Key (Key : String) return String is
-      Hex    : constant String := GNAT.SHA1.Digest (Key & GUID);
-      Digest : Ada.Streams.Stream_Element_Array (1 .. 20);
+   function Nibble (C : Character) return Natural is
+     (if C in '0' .. '9' then Character'Pos (C) - Character'Pos ('0')
+      else Character'Pos (Ada.Characters.Handling.To_Lower (C))
+           - Character'Pos ('a') + 10);
 
-      function Nibble (C : Character) return Natural is
-        (if C in '0' .. '9' then Character'Pos (C) - Character'Pos ('0')
-         else Character'Pos (Ada.Characters.Handling.To_Lower (C))
-              - Character'Pos ('a') + 10);
-   begin
-      for I in Digest'Range loop
-         declare
-            K : constant Positive := Hex'First + 2 * Natural (I - 1);
-         begin
-            Digest (I) := Ada.Streams.Stream_Element
-              (Nibble (Hex (K)) * 16 + Nibble (Hex (K + 1)));
-         end;
-      end loop;
-      return AWS.Translator.Base64_Encode (Digest);
-   end Accept_Key;
+   --  The bytes a hexadecimal text spells.
+   function From_Hex (Hex : String)
+      return Ada.Streams.Stream_Element_Array
+   is
+     ([for I in 1 .. Ada.Streams.Stream_Element_Offset (Hex'Length / 2) =>
+         Ada.Streams.Stream_Element
+           (Nibble (Hex (Hex'First + 2 * Natural (I - 1))) * 16
+            + Nibble (Hex (Hex'First + 2 * Natural (I - 1) + 1)))]);
+
+   function Accept_Key (Key : String) return String is
+     (AWS.Translator.Base64_Encode (From_Hex (GNAT.SHA1.Digest (Key & GUID))));
 
    --  net.SplitHostPort's host, for "host:port" or "[v6]:port"; "" if there
    --  is none ("@" of a unix peer, say).
@@ -316,6 +314,28 @@ package body Soja.Web is
             Stream.Release;
          end if;
    end Serve;
+
+   procedure Handle_Metrics
+     (S      : in out Soja.Server.Server;
+      Stream : not null Soja.Byte_Stream.Stream_Access;
+      H      : Soja.Server.Handler)
+   is
+      pragma Unreferenced (H);
+      Req : Soja.Http.Request;
+   begin
+      Soja.Http.Read_Request (Stream.all, Req);
+      Soja.Http.Write_Response
+        (Stream.all, 200,
+         "Content-Type: " & Soja.Metrics.Content_Type & CRLF,
+         (if To_String (Req.Method) = "HEAD" then ""
+          else Soja.Server.Metrics_Text (S)));
+      Stream.Shutdown;
+      Stream.Release;
+   exception
+      when others =>
+         Stream.Shutdown;
+         Stream.Release;
+   end Handle_Metrics;
 
    procedure Handle_Ws
      (S      : in out Soja.Server.Server;

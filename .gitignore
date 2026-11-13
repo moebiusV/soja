@@ -70,3 +70,4 @@ tests/dbmsg_check
 tests/dbstore_check
 tests/fsstore_check
 tests/web_check
+tests/metrics_check

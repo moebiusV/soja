@@ -513,6 +513,53 @@ def main():
     r.close()
 
     # --- 7: restart: reconnect and rejoin the saved channels once ---
+    log("Prometheus metrics")
+    import urllib.request
+
+    def scrape():
+        with urllib.request.urlopen("http://localhost:9100/metrics",
+                                    timeout=5) as r:
+            if not r.headers["Content-Type"].startswith("text/plain"):
+                raise Fail(f"metrics content type {r.headers['Content-Type']!r}")
+            out = {}
+            for line in r.read().decode().splitlines():
+                if line and not line.startswith("#"):
+                    name, value = line.split(" ")
+                    out[name] = int(value)
+            return out
+
+    m1 = scrape()
+    for name in ("soju_users_active", "soju_downstreams_active",
+                 "soju_upstreams_active", "soju_downstream_in_messages_total",
+                 "soju_downstream_out_messages_total",
+                 "soju_upstream_in_messages_total",
+                 "soju_upstream_out_messages_total",
+                 "soju_upstream_connect_errors_total",
+                 "soju_worker_panics_total"):
+        if name not in m1:
+            raise Fail(f"metric {name} missing: {sorted(m1)}")
+    if m1["soju_users_active"] < 1 or m1["soju_upstreams_active"] < 1:
+        raise Fail(f"gauges look wrong: {m1}")
+    if m1["soju_downstream_in_messages_total"] < 10 \
+            or m1["soju_upstream_in_messages_total"] < 10:
+        raise Fail(f"counters look wrong: {m1}")
+    # traffic moves the counters, and a closed client moves the gauge back
+    c = bouncer()
+    during = scrape()
+    c.send("PING :metrics")
+    c.expect(r"PONG")
+    c.close()
+    time.sleep(1)
+    m2 = scrape()
+    if during["soju_downstreams_active"] <= m1["soju_downstreams_active"] - 1 \
+            or m2["soju_downstream_in_messages_total"] \
+            <= m1["soju_downstream_in_messages_total"] \
+            or m2["soju_downstream_out_messages_total"] \
+            <= m1["soju_downstream_out_messages_total"]:
+        raise Fail(f"counters did not move: {m1} -> {during} -> {m2}")
+    if m2["soju_downstreams_active"] >= during["soju_downstreams_active"]:
+        raise Fail(f"gauge did not drop: {during} -> {m2}")
+
     log("restart soja")
     a.close()
     stop_soja()

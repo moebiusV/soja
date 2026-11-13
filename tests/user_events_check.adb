@@ -160,7 +160,8 @@ procedure User_Events_Check is
       UC.Nick := To_Unbounded_String ("alice");
       UC.Conn := Soja.Conn.New_Conn
         (T.all'Unchecked_Access,
-         (Logger => null, Rate_Limit_Delay => 0.0, Rate_Limit_Burst => 0));
+         (Logger => null, Rate_Limit_Delay => 0.0, Rate_Limit_Burst => 0,
+         others => <>));
       N_Conns := N_Conns + 1;
       Conns (N_Conns) := UC.Conn;
       UC.Channels := Upstream_Channel_Maps.New_Map (CM);

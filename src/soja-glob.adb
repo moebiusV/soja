@@ -2,18 +2,17 @@ pragma Ada_2022;
 
 package body Soja.Glob is
 
-   --  The length in bytes of the UTF-8 character starting at S (I).
+   --  The length in bytes of the UTF-8 character starting at S (I), cut off
+   --  at the end of S.
    function Char_Len (S : String; I : Positive) return Positive is
-      B : constant Natural := Character'Pos (S (I));
-      N : constant Positive :=
-        (if B < 16#80# then 1
-         elsif B >= 16#F0# then 4
-         elsif B >= 16#E0# then 3
-         elsif B >= 16#C0# then 2
-         else 1);
-   begin
-      return Positive'Min (N, S'Last - I + 1);
-   end Char_Len;
+     (Positive'Min
+        (S'Last - I + 1,
+         (case Character'Pos (S (I)) is
+             when 16#00# .. 16#7F# => 1,
+             when 16#C0# .. 16#DF# => 2,
+             when 16#E0# .. 16#EF# => 3,
+             when 16#F0# .. 16#FF# => 4,
+             when others           => 1)));
 
    --  The code point of the character at S (I .. I + Len - 1).
    function Code_Point (S : String; I : Positive; Len : Positive)

@@ -423,6 +423,19 @@ procedure Soja_Main is
          TLS := False;
          Web := (if Scheme = "ws+insecure" then Soja.Web.Handle_Ws'Access
                  else Soja.Web.Handle_Http'Access);
+      elsif Scheme = "http+prometheus" then
+         --  Only localhost, for security reasons: a reverse proxy can expose
+         --  it.  A port is required.
+         if Ada.Strings.Fixed.Index (Host_Port, ":") = 0 then
+            Fatal ("invalid host in URI " & Quote (Listen)
+                   & ": missing port");
+         end if;
+         Split_Host_Port (Host_Port, "0", Host, Port);
+         if To_String (Host) /= "localhost" then
+            Fatal ("Prometheus listening host must be localhost");
+         end if;
+         TLS := False;
+         Web := Soja.Web.Handle_Metrics'Access;
       elsif Scheme = "ident" then
          Split_Host_Port (Host_Port, "113", Host, Port);
          TLS := False;

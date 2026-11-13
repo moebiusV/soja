@@ -22,6 +22,7 @@ with Soja.Irc.Cap_Registry;
 with Soja.Irc.Genmsg;
 with Soja.Irc.Helpers;
 with Soja.Irc.Numerics;
+with Soja.Metrics;
 with Soja.Msgstore.Db;
 with Soja.Msgstore.Fs;
 with Soja.Msgstore.Memory;
@@ -233,7 +234,10 @@ package body Soja.Core is
       DC.Conn := Soja.Conn.New_Conn
         (IC, (Logger           => Logger,
               Rate_Limit_Delay => 0.0,
-              Rate_Limit_Burst => 0));
+              Rate_Limit_Burst => 0,
+              Counters         => Srv.Counters,
+              Read_Kind        => Soja.Metrics.Downstream_In,
+              Write_Kind       => Soja.Metrics.Downstream_Out));
       DC.Srv := Srv;
       DC.Logger := Logger;
       DC.ID := ID;
@@ -606,7 +610,10 @@ package body Soja.Core is
          Upc.Conn := Soja.Conn.New_Conn
            (IC, (Logger           => Logger,
                  Rate_Limit_Delay => Soja.Server.Upstream_Message_Delay,
-                 Rate_Limit_Burst => Soja.Server.Upstream_Message_Burst));
+                 Rate_Limit_Burst => Soja.Server.Upstream_Message_Burst,
+                 Counters         => Net.User.Srv.Counters,
+                 Read_Kind        => Soja.Metrics.Upstream_In,
+                 Write_Kind       => Soja.Metrics.Upstream_Out));
          Upc.Srv := Net.User.Srv;
          Upc.Logger := Logger;
          Upc.Network := Net;
@@ -1538,6 +1545,8 @@ package body Soja.Core is
          Err := Run_Conn (Net);
          Net.User.Srv.Add_Upstreams (-1);
          if Err.Text /= Null_Unbounded_String then
+            Net.User.Srv.Counters.Increment
+              (Soja.Metrics.Upstream_Connect_Errors);
             Net.Logger.Print
               ("connection error to " & To_String (Net.Network_Record.Addr)
                & ": " & To_String (Err.Text));

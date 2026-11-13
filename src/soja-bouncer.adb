@@ -124,6 +124,7 @@ package body Soja.Bouncer is
                & Ada.Exceptions.Exception_Information (E));
       end;
       B.Users.Remove (Name);
+      B.Srv.Add_Users (-1);
       B.Tasks.Done;
    end User_Runner;
 
@@ -146,6 +147,7 @@ package body Soja.Bouncer is
            "user " & Soja.Irc.Helpers.Quote (To_String (Rec.Username))
            & " already exists";
       end if;
+      B.Srv.Add_Users (1);
       B.Tasks.Add;
       Runner := new User_Runner (B'Unchecked_Access, U);
       return U;
@@ -581,7 +583,7 @@ package body Soja.Bouncer is
              ("admin " & Soja.Irc.Helpers.Quote (Remote) & ": "));
       C      : constant Soja.Conn.Conn_Access := Soja.Conn.New_Conn
         (IC, (Logger => Logger, Rate_Limit_Delay => 0.0,
-              Rate_Limit_Burst => 0));
+              Rate_Limit_Burst => 0, others => <>));
       Printer : aliased Admin_Printer (C, B.Srv);
 
       procedure Reply (M : Message; With_Prefix : Boolean := True) is

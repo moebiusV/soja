@@ -28,7 +28,7 @@ check against a real ngircd (`tests/e2e.sh`) covers registering, adding a
 network, joining, messaging both ways, a kick that is not undone, replay on
 reconnect and a restart.
 
-Not there yet (see `PORTING.md`): the Prometheus and pprof listeners, file upload,
+Not there yet (see `PORTING.md`): the pprof listener (Go's profiler), file upload,
 web push, PAM and OAuth 2 authentication, SASL EXTERNAL certificate
 generation.
 `soja` refuses to start with an authentication driver it cannot honour.

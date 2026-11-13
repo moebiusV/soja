@@ -7,6 +7,7 @@ package body Soja.Conn is
 
    use type Ada.Real_Time.Time;
    use type Logging.Logger_Access;
+   use type Soja.Metrics.Counter_Store_Access;
 
    ---------
    -- Out_Queue --
@@ -135,6 +136,9 @@ package body Soja.Conn is
    begin
       C.Underlying := Underlying;
       C.Logger := Options.Logger;
+      C.Counters := Options.Counters;
+      C.Read_Kind := Options.Read_Kind;
+      C.Write_Kind := Options.Write_Kind;
       C.Writer := new Writer
         (Underlying, C.Queue'Access, Options.Logger,
          Long_Long_Integer (Options.Rate_Limit_Delay * 1.0E9),
@@ -146,10 +150,19 @@ package body Soja.Conn is
    -- Read_Message --
    ---------
 
+   --  Counts a message, when the connection is counted.
+   procedure Count (C : Conn; Kind : Soja.Metrics.Counter_Kind) is
+   begin
+      if C.Counters /= null then
+         C.Counters.Increment (Kind);
+      end if;
+   end Count;
+
    function Read_Message (C : not null access Conn) return Message is
       M : Message;
    begin
       M := C.Underlying.Read_Message;
+      Count (C.all, C.Read_Kind);
       if C.Logger /= null then
          C.Logger.Debug ("received: " & Image (M));
       end if;
@@ -164,6 +177,9 @@ package body Soja.Conn is
       Accepted : Boolean;
    begin
       C.Queue.Send (new Message'(M), Accepted);
+      if Accepted then
+         Count (C.all, C.Write_Kind);
+      end if;
    end Send_Message;
 
    ---------

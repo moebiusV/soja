@@ -76,7 +76,8 @@ begin
    declare
       C : Conn_Access := New_Conn
         (F'Unchecked_Access,
-         (Logger => null, Rate_Limit_Delay => 0.0, Rate_Limit_Burst => 0));
+         (Logger => null, Rate_Limit_Delay => 0.0, Rate_Limit_Burst => 0,
+         others => <>));
    begin
       Send_Message (C, Parse_Message ("PRIVMSG #chan one"));
       Send_Message (C, Parse_Message ("PRIVMSG #chan two"));
@@ -101,7 +102,8 @@ begin
    declare
       C : Conn_Access := New_Conn
         (F'Unchecked_Access,
-         (Logger => null, Rate_Limit_Delay => 0.0, Rate_Limit_Burst => 0));
+         (Logger => null, Rate_Limit_Delay => 0.0, Rate_Limit_Burst => 0,
+         others => <>));
    begin
       Close (C);
       Send_Message (C, Parse_Message ("PRIVMSG #chan dropped"));

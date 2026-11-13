@@ -10,6 +10,7 @@ pragma Ada_2022;
 with Ada.Real_Time;
 with Soja.Irc.Messages;
 with Soja.Logging;
+with Soja.Metrics;
 
 package Soja.Conn is
 
@@ -32,6 +33,12 @@ package Soja.Conn is
       Logger           : Logging.Logger_Access := null;
       Rate_Limit_Delay : Duration := 0.0;   -- x/time/rate's Every(): 0 = none
       Rate_Limit_Burst : Natural := 0;
+      --  Counted when set: a message read, a message queued for writing.
+      Counters         : Soja.Metrics.Counter_Store_Access := null;
+      Read_Kind        : Soja.Metrics.Counter_Kind :=
+        Soja.Metrics.Downstream_In;
+      Write_Kind       : Soja.Metrics.Counter_Kind :=
+        Soja.Metrics.Downstream_Out;
    end record;
 
    type Conn is limited private;
@@ -103,6 +110,9 @@ private
       Logger     : Logging.Logger_Access;
       Queue      : aliased Out_Queue;
       Writer     : Writer_Access;
+      Counters   : Soja.Metrics.Counter_Store_Access;
+      Read_Kind  : Soja.Metrics.Counter_Kind;
+      Write_Kind : Soja.Metrics.Counter_Kind;
    end record;
 
 end Soja.Conn;

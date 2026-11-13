@@ -362,6 +362,11 @@ package body Soja.Server is
    end Shutdown;
 
    protected body Gauges is
+      procedure Add_Users (By : Integer) is
+      begin
+         Value.Users := Natural'Max (0, Value.Users + By);
+      end Add_Users;
+
       procedure Add_Downstreams (By : Integer) is
       begin
          Value.Downstreams := Natural'Max (0, Value.Downstreams + By);
@@ -375,6 +380,11 @@ package body Soja.Server is
       function Get return Server_Stats is (Value);
    end Gauges;
 
+   procedure Add_Users (S : in out Server; By : Integer) is
+   begin
+      S.Gauge.Add_Users (By);
+   end Add_Users;
+
    procedure Add_Downstreams (S : in out Server; By : Integer) is
    begin
       S.Gauge.Add_Downstreams (By);
@@ -386,5 +396,16 @@ package body Soja.Server is
    end Add_Upstreams;
 
    function Stats (S : Server) return Server_Stats is (S.Gauge.Get);
+
+   function Counters (S : in out Server)
+      return Soja.Metrics.Counter_Store_Access is
+     (S.Counted'Unchecked_Access);
+
+   function To_Gauges (Stats : Server_Stats) return Soja.Metrics.Gauges is
+     ((Users => Stats.Users, Downstreams => Stats.Downstreams,
+       Upstreams => Stats.Upstreams));
+
+   function Metrics_Text (S : Server) return String is
+     (Soja.Metrics.Render (To_Gauges (S.Gauge.Get), S.Counted.Snapshot));
 
 end Soja.Server;

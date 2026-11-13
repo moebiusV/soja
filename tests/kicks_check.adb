@@ -126,7 +126,8 @@ procedure Kicks_Check is
       R.UC.Nick := To_Unbounded_String ("alice");
       Conns (N_Runs) := Soja.Conn.New_Conn
         (Runs_Trans (N_Runs)'Unchecked_Access,
-         (Logger => null, Rate_Limit_Delay => 0.0, Rate_Limit_Burst => 0));
+         (Logger => null, Rate_Limit_Delay => 0.0, Rate_Limit_Burst => 0,
+         others => <>));
       R.UC.Conn := Conns (N_Runs);
       R.UC.Channels := Upstream_Channel_Maps.New_Map
         (Soja.Irc.Case_Mapping.Case_RFC1459);

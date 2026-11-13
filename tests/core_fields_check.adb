@@ -208,7 +208,8 @@ begin
       UC.Nick := To_Unbounded_String ("alice_");
       UC.Conn := Soja.Conn.New_Conn
         (Fake'Unchecked_Access,
-         (Logger => null, Rate_Limit_Delay => 0.0, Rate_Limit_Burst => 0));
+         (Logger => null, Rate_Limit_Delay => 0.0, Rate_Limit_Burst => 0,
+         others => <>));
 
       --  New_Upstream_Channel: name, back-pointer, member map on the
       --  network's case-mapping.

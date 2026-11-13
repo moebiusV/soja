@@ -184,7 +184,8 @@ begin
    UC.Nick := To_Unbounded_String ("alice");
    UC.Conn := Soja.Conn.New_Conn
      (UC_Wire'Unchecked_Access,
-      (Logger => null, Rate_Limit_Delay => 0.0, Rate_Limit_Burst => 0));
+      (Logger => null, Rate_Limit_Delay => 0.0, Rate_Limit_Burst => 0,
+         others => <>));
    UC.Channels := Upstream_Channel_Maps.New_Map (Soja.Irc.Case_Mapping.Case_RFC1459);
    UC.Users := Upstream_User_Maps.New_Map (Soja.Irc.Case_Mapping.Case_RFC1459);
    UC.Monitored := Flag_Maps.New_Map (Soja.Irc.Case_Mapping.Case_RFC1459);

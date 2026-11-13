@@ -12,6 +12,7 @@ with Soja.Conn;
 with Soja.Database;
 with Soja.Identd;
 with Soja.Logging;
+with Soja.Metrics;
 
 package Soja.Server is
 
@@ -127,13 +128,23 @@ package Soja.Server is
    --  The gauges of server.go's metrics that BouncerServ's "server status"
    --  reports: connected clients and running upstream connections.
    type Server_Stats is record
+      Users       : Natural := 0;
       Downstreams : Natural := 0;
       Upstreams   : Natural := 0;
    end record;
 
+   procedure Add_Users (S : in out Server; By : Integer);
    procedure Add_Downstreams (S : in out Server; By : Integer);
    procedure Add_Upstreams (S : in out Server; By : Integer);
    function Stats (S : Server) return Server_Stats;
+
+   --  The message counters connections increment (set in their
+   --  Conn_Options).
+   function Counters (S : in out Server)
+      return Soja.Metrics.Counter_Store_Access;
+
+   --  What a scrape of the http+prometheus listener returns.
+   function Metrics_Text (S : Server) return String;
 
 private
 
@@ -152,6 +163,7 @@ private
    end Config_Holder;
 
    protected type Gauges is
+      procedure Add_Users (By : Integer);
       procedure Add_Downstreams (By : Integer);
       procedure Add_Upstreams (By : Integer);
       function Get return Server_Stats;
@@ -169,6 +181,7 @@ private
    type Server is tagged limited record
       TLS_Gen  : Generation_Counter;
       Gauge    : Gauges;
+      Counted  : aliased Soja.Metrics.Counter_Store;
       Cfg      : Config_Holder;
       Logger   : Soja.Logging.Logger_Access;
       DB       : Soja.Database.Database_Access;
