@@ -18,13 +18,32 @@ behavioural requirements.
 
 ## Status
 
-Early — the translation proceeds module by module from `upstream/soju`.
+The core bouncer works: `soja` accepts clients on `ircs://` and
+`irc+insecure://`, authenticates them against the SQLite database, connects to
+the upstream networks, and relays channels, messages, modes, topics, WHO /
+WHOIS / MONITOR, kicks and invites; BouncerServ manages networks, channels,
+SASL and users; `sojadb` creates users and changes passwords.  An end-to-end
+check against a real ngircd (`tests/e2e.sh`) covers registering, adding a
+network, joining, messaging both ways, a kick that is not undone, replay on
+reconnect and a restart.
+
+Not there yet (see `PORTING.md`): the `soju.im/bouncer-networks` command, chat
+history (`CHATHISTORY`, the database and file message stores), `sojuctl`,
+the unix, WebSocket, HTTP, ident and Prometheus listeners, file upload, web
+push, PAM and OAuth 2 authentication, SASL EXTERNAL certificate generation.
+`soja` refuses to start with an authentication driver it cannot honour.
+
+soju bugs found while translating are fixed here and written up, ready to be
+sent upstream, in `SOJU-BUGS.md`.
 
 ## Build
 
 ```
 # inside the ada-on-alpine container
-gprbuild -P soja.gpr
+gprbuild -P soja.gpr                       # the library
+(cd cmd/soja && gprbuild -P soja.gpr)      # the daemon: cmd/soja/soja
+(cd cmd/sojadb && gprbuild -P sojadb.gpr)  # cmd/sojadb/sojadb
+sh tests/e2e.sh                            # end to end, against ngircd
 ```
 
 ## License
