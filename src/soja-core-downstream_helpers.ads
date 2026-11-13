@@ -82,7 +82,8 @@ package Soja.Core.Downstream_Helpers is
 
    --  dc.ackMsgID / handlePong: record that this client received ID.
    procedure Ack_Msg_ID (DC : not null Downstream_Conn_Access; ID : String);
-   procedure Handle_Pong (DC : not null Downstream_Conn_Access; Token : String);
+   procedure Handle_Pong (DC : not null Downstream_Conn_Access; Token :
+     String);
 
    --  sendTopic / sendNames / forwardChannel (downstream.go): replay a joined
    --  channel's topic, read marker and member list to a client.

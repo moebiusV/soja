@@ -31,7 +31,8 @@ package Soja.Core.Service is
       is abstract;
    --  Running users, and (at most Limit of) them.
    function Count (D : Directory) return Natural is abstract;
-   function Snapshot (D : Directory; Limit : Natural) return User_Vectors.Vector
+   function Snapshot (D : Directory; Limit : Natural) return
+     User_Vectors.Vector
       is abstract;
    --  Server.createUser; Service_Error carries the reason on failure.
    function Create (D : Directory; Rec : in out Soja.Database.User)

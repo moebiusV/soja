@@ -143,8 +143,10 @@ package body Soja.Config is
       begin
          case C is
             when '0' .. '9' => return Character'Pos (C) - Character'Pos ('0');
-            when 'a' .. 'f' => return Character'Pos (C) - Character'Pos ('a') + 10;
-            when 'A' .. 'F' => return Character'Pos (C) - Character'Pos ('A') + 10;
+            when 'a' .. 'f' => return Character'Pos (C) - Character'Pos ('a')
+              + 10;
+            when 'A' .. 'F' => return Character'Pos (C) - Character'Pos ('A')
+              + 10;
             when others     => return 99;
          end case;
       end Hex_Digit;
@@ -181,7 +183,8 @@ package body Soja.Config is
                      Octet := 0;
                      N := 0;
                   elsif A (I) in '0' .. '9' then
-                     Octet := Octet * 10 + (Character'Pos (A (I)) - Character'Pos ('0'));
+                     Octet := Octet * 10 + (Character'Pos (A (I)) -
+                       Character'Pos ('0'));
                      N := N + 1;
                   else
                      Error ("failed to parse CIDR: " & A);
@@ -281,7 +284,8 @@ package body Soja.Config is
             Error ("failed to parse CIDR: " & S);
       end;
 
-      if (Is_V4 and then Prefix > 32) or else (not Is_V4 and then Prefix > 128) then
+      if (Is_V4 and then Prefix > 32) or else (not Is_V4 and then Prefix >
+        128) then
          Error ("failed to parse CIDR: " & S);
       end if;
 
@@ -521,12 +525,16 @@ package body Soja.Config is
                      begin
                         if Nw.Family = IPv4 then
                            if Has_V4 then
-                              Error ("directive upstream-user-ip: found two IPv4 CIDRs");
+                              Error
+                                ("directive upstream-user-ip: "
+                                 & "found two IPv4 CIDRs");
                            end if;
                            Has_V4 := True;
                         else
                            if Has_V6 then
-                              Error ("directive upstream-user-ip: found two IPv6 CIDRs");
+                              Error
+                                ("directive upstream-user-ip: "
+                                 & "found two IPv6 CIDRs");
                            end if;
                            Has_V6 := True;
                         end if;
@@ -538,10 +546,13 @@ package body Soja.Config is
             elsif Name = "disable-inactive-user" then
                Want (1);
                declare
-                  Dur : constant Duration := Parse_Duration (To_String (P (1)));
+                  Dur : constant Duration := Parse_Duration (To_String (P
+                    (1)));
                begin
                   if Dur < 0.0 then
-                     Error ("directive disable-inactive-user: duration must be positive");
+                     Error
+                       ("directive disable-inactive-user: "
+                        & "duration must be positive");
                   end if;
                   Srv.Disable_Inactive_Users_Delay := Dur;
                end;
@@ -570,7 +581,8 @@ package body Soja.Config is
          declare
             Driver, Source : Unbounded_String;
          begin
-            Parse_Driver_Source ("message-store", Msg_Store_Raw, Driver, Source);
+            Parse_Driver_Source ("message-store", Msg_Store_Raw, Driver,
+              Source);
             if Driver /= "memory" and then Driver /= "db"
               and then Driver /= "fs"
             then

@@ -70,7 +70,8 @@ package body Soja.Core.Downstream_Handshake is
    ----------------------------------------------------------------------
 
    function Default_Sanity_Check (Addr : String) return String is
-      Colon : constant Natural := Ada.Strings.Fixed.Index (Addr, ":", Ada.Strings.Backward);
+      Colon : constant Natural := Ada.Strings.Fixed.Index (Addr, ":",
+        Ada.Strings.Backward);
       Host  : constant String :=
         (if Colon = 0 then Addr else Addr (Addr'First .. Colon - 1));
       Port  : constant Positive :=
@@ -201,7 +202,8 @@ package body Soja.Core.Downstream_Handshake is
             end if;
 
             declare
-               Caps    : constant String_Vectors.Vector := Fields (Param (M, 1));
+               Caps    : constant String_Vectors.Vector := Fields (Param (M,
+                 1));
                Ack     : Boolean := True;
                Names   : String_Vectors.Vector;
                Enables : array (1 .. Natural (Caps.Length)) of Boolean;
@@ -212,7 +214,8 @@ package body Soja.Core.Downstream_Handshake is
                   declare
                      Lowered : constant String := Lower (Raw);
                      Enable  : constant Boolean :=
-                       Lowered'Length = 0 or else Lowered (Lowered'First) /= '-';
+                       Lowered'Length = 0 or else Lowered (Lowered'First) /=
+                         '-';
                      Name    : constant String :=
                        (if Enable then Lowered
                         else Lowered (Lowered'First + 1 .. Lowered'Last));
@@ -491,7 +494,8 @@ package body Soja.Core.Downstream_Handshake is
                      end;
                   end if;
                else
-                  Failure := To_Unbounded_String ("unsupported SASL mechanism");
+                  Failure := To_Unbounded_String
+                    ("unsupported SASL mechanism");
                end if;
 
                if Length (Failure) > 0 then
@@ -500,7 +504,8 @@ package body Soja.Core.Downstream_Handshake is
                      & Quote (To_String (DC.Registration.Nick)) & ": "
                      & To_String (Failure));
                   End_SASL
-                    (DC, Make (ERR_SASLFAIL, [Nick_Of (DC), To_String (Reason)]));
+                    (DC, Make (ERR_SASLFAIL, [Nick_Of (DC), To_String
+                      (Reason)]));
                   return Success;
                end if;
 
@@ -800,7 +805,8 @@ package body Soja.Core.Downstream_Handshake is
       Res : Irc_Error_Result;
    begin
       if not DC.Registered then
-         raise Program_Error with "tried to welcome an unregistered connection";
+         raise Program_Error with
+           "tried to welcome an unregistered connection";
       end if;
       DC.User := U;
 
@@ -822,7 +828,8 @@ package body Soja.Core.Downstream_Handshake is
             DC.Nick := UC.Nick;
          elsif DC.Network /= null then
             DC.Nick := To_Unbounded_String
-              (Soja.Database.Get_Nick (U.User_Record, DC.Network.Network_Record));
+              (Soja.Database.Get_Nick (U.User_Record,
+                DC.Network.Network_Record));
          else
             DC.Nick := U.User_Record.Username;
          end if;
@@ -979,7 +986,8 @@ package body Soja.Core.Downstream_Handshake is
 
       --  History: only for the first connected client with that name on the
       --  network, and for clients that don't ask for it with CHATHISTORY.
-      if DC.Network /= null and then not Is_Enabled (DC.Caps, "draft/chathistory")
+      if DC.Network /= null and then not Is_Enabled (DC.Caps,
+        "draft/chathistory")
         and then U.Msg_Store /= null
       then
          declare
@@ -1014,7 +1022,8 @@ package body Soja.Core.Downstream_Handshake is
                         --  Fast-forward history to the last message.
                         begin
                            Soja.User.Store_ID
-                             (Net.Delivered, Target, To_String (DC.Client_Name),
+                             (Net.Delivered, Target, To_String
+                               (DC.Client_Name),
                               U.Msg_Store.Last_Msg_ID
                                 (Net.Network_Record,
                                  Soja.Irc.Case_Mapping.Fold

@@ -149,7 +149,8 @@ package body Soja.Core.Service is
    function Child (Parent : Natural; Name : String) return Natural is
    begin
       for I in 1 .. Natural (Nodes.Length) loop
-         if Nodes (I).Parent = Parent and then To_String (Nodes (I).Name) = Name
+         if Nodes (I).Parent = Parent and then To_String (Nodes (I).Name) =
+           Name
          then
             return I;
          end if;
@@ -207,7 +208,8 @@ package body Soja.Core.Service is
             N     : Node renames Nodes (Index);
             Words : String_Vector := Prefix;
          begin
-            if (not N.Admin or else Admin) and then (N.Global or else not Global)
+            if (not N.Admin or else Admin) and then (N.Global or else not
+              Global)
             then
                Words.Append (Name);
                if not Has_Children (Index) then
@@ -262,7 +264,8 @@ package body Soja.Core.Service is
             end;
          end;
       else
-         Say_Available (Ctx, 0, String_Vector'(Soja.Irc.Genmsg.String_Vectors.Empty_Vector));
+         Say_Available (Ctx, 0,
+           String_Vector'(Soja.Irc.Genmsg.String_Vectors.Empty_Vector));
       end if;
    end Handle_Help;
 
@@ -450,7 +453,8 @@ package body Soja.Core.Service is
       end if;
       if Is_Set (FS, "connect-command") then
          declare
-            Commands : constant String_Vector := Get_List (FS, "connect-command");
+            Commands : constant String_Vector := Get_List (FS,
+              "connect-command");
          begin
             if Commands.Length = 1 and then Commands (1) = "" then
                Rec.Connect_Commands.Clear;
@@ -492,7 +496,8 @@ package body Soja.Core.Service is
       end if;
 
       declare
-         Rec : Soja.Database.Network := Soja.Database.New_Network (FS.Get ("addr"));
+         Rec : Soja.Database.Network := Soja.Database.New_Network (FS.Get
+           ("addr"));
       begin
          Update_Network_From_Flags (FS, Rec);
          declare
@@ -522,7 +527,8 @@ package body Soja.Core.Service is
             Statuses : String_Vector;
             Details  : Unbounded_String;
             UC       : constant Upstream_Conn_Access := Net.Conn;
-            Name     : Unbounded_String := To_Unbounded_String (Net_Name (Net));
+            Name     : Unbounded_String := To_Unbounded_String (Net_Name
+              (Net));
          begin
             if UC /= null then
                if Length (Ctx.Nick) > 0 and then Ctx.Nick /= UC.Nick then
@@ -765,7 +771,8 @@ package body Soja.Core.Service is
          if To_String (Net.Network_Record.SASL.Mechanism) /= "EXTERNAL" then
             Fail ("CertFP not set up");
          end if;
-         Say_Fingerprints (Ctx, To_String (Net.Network_Record.SASL.External_Cert));
+         Say_Fingerprints (Ctx, To_String
+           (Net.Network_Record.SASL.External_Cert));
       end;
    end Handle_Certfp_Fingerprints;
 
@@ -779,7 +786,8 @@ package body Soja.Core.Service is
       declare
          Net  : constant Network_Access :=
            Network_From_Flag (Ctx, FS.Get ("network"));
-         Mech : constant String := To_String (Net.Network_Record.SASL.Mechanism);
+         Mech : constant String := To_String
+           (Net.Network_Record.SASL.Mechanism);
          UC   : constant Upstream_Conn_Access := Net.Conn;
       begin
          if Mech = "PLAIN" then
@@ -932,7 +940,8 @@ package body Soja.Core.Service is
                   if Ch.Detached then
                      Append (Status, ", detached");
                   end if;
-                  Say (Ctx, To_String (Name) & " [" & To_String (Status) & "]");
+                  Say (Ctx, To_String (Name) & " [" & To_String (Status) &
+                    "]");
                   N := N + 1;
                end;
             end loop;
@@ -960,7 +969,8 @@ package body Soja.Core.Service is
       end if;
    end Handle_Channel_Status;
 
-   function Parse_Filter (Filter : String) return Soja.Database.Message_Filter is
+   function Parse_Filter (Filter : String) return Soja.Database.Message_Filter
+     is
    begin
       if Filter = "default" then
          return Soja.Database.Filter_Default;
@@ -1212,7 +1222,9 @@ package body Soja.Core.Service is
       if FS.Get ("username") = "" then
          Fail ("flag -username is required");
       end if;
-      if FS.Get ("password") /= "" and then FS.Get_Bool ("disable-password") then
+      if FS.Get ("password") /= ""
+        and then FS.Get_Bool ("disable-password")
+      then
          Fail ("flags -password and -disable-password are mutually exclusive");
       end if;
       if FS.Get ("password") = "" and then not FS.Get_Bool ("disable-password")
@@ -1555,7 +1567,8 @@ package body Soja.Core.Service is
             else Soja.Server.Logger (Ctx.Srv.all));
          Msg    : Message := Soja.Irc.Genmsg.Make
            ("NOTICE",
-            ["$" & To_String (Soja.Server.Config (Ctx.Srv.all).Hostname), Text]);
+            ["$" & To_String (Soja.Server.Config (Ctx.Srv.all).Hostname),
+              Text]);
          Sent, Total : Natural;
       begin
          Logger.Print ("broadcasting bouncer-wide NOTICE: " & Text);

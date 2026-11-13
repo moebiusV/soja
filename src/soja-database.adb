@@ -85,7 +85,8 @@ package body Soja.Database is
    -- Check_Password --
    ---------
 
-   function Check_Password (U : in out User; Password : String) return Boolean is
+   function Check_Password (U : in out User; Password : String) return Boolean
+     is
       Stored : constant String := To_String (U.Password);
       Pw     : Stream_Element_Array (1 .. Password'Length);
    begin

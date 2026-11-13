@@ -193,7 +193,8 @@ package Soja.Core is
    --  is underway).  OAUTHBEARER's options are deferred with oauth2 auth.
    type Downstream_SASL is record
       Mechanism      : Unbounded_String;
-      Challenged     : Boolean := False;   --  the server's first challenge is out
+      --  the server's first challenge is out
+      Challenged     : Boolean := False;
       Plain_Set      : Boolean := False;   --  Go's plain != nil
       Plain_Username : Unbounded_String;
       Plain_Password : Unbounded_String;
@@ -630,7 +631,8 @@ package Soja.Core is
    function Get_Network (U : not null User_Access; Name : String)
       return Network_Access;
 
-   function Get_Network_By_ID (U : not null User_Access; ID : Long_Long_Integer)
+   function Get_Network_By_ID (U : not null User_Access; ID :
+     Long_Long_Integer)
       return Network_Access;
 
    --  network.run(): the reconnect loop, spawned as a task by user.run().  It
@@ -659,7 +661,8 @@ package Soja.Core is
    end record;
 
    --  registrationError's carry: whether registration failed, why, and whether
-   --  the failure is temporary (reconnect will retry) or a configuration error.
+   --  the failure is temporary (reconnect will retry) or a configuration
+   --  error.
    type Registration_Result is record
       Success   : Boolean;
       Reason    : Unbounded_String;

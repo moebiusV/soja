@@ -1229,7 +1229,8 @@ package body Soja.Core.Upstream_Dispatch is
          if Is_Our_Nick (UC, To_String (Msg.Prefix.Name)) then
             UC.Logger.Print ("parted channel " & Quote (Name));
             declare
-               Uch : constant Upstream_Channel_Access := UC.Channels.Get (Name);
+               Uch : constant Upstream_Channel_Access := UC.Channels.Get
+                 (Name);
 
                procedure Forget (Nick : String;
                   Set : Soja.Irc.Members.Membership_Set_Access)
@@ -1249,7 +1250,8 @@ package body Soja.Core.Upstream_Dispatch is
             end;
          else
             declare
-               Ch   : constant Upstream_Channel_Access := UC.Channels.Get (Name);
+               Ch   : constant Upstream_Channel_Access := UC.Channels.Get
+                 (Name);
                Nick : constant String := To_String (Msg.Prefix.Name);
             begin
                if Ch = null then
@@ -1375,7 +1377,8 @@ package body Soja.Core.Upstream_Dispatch is
          return R;
       end if;
       declare
-         Ch : constant Upstream_Channel_Access := UC.Channels.Get (Param (Msg, 1));
+         Ch : constant Upstream_Channel_Access := UC.Channels.Get (Param (Msg,
+           1));
       begin
          if Ch = null then
             Forward_Msg_By_ID (UC, Downstream_ID, Msg);
@@ -1398,7 +1401,8 @@ package body Soja.Core.Upstream_Dispatch is
          return R;
       end if;
       declare
-         Ch : constant Upstream_Channel_Access := UC.Channels.Get (Param (Msg, 0));
+         Ch : constant Upstream_Channel_Access := UC.Channels.Get (Param (Msg,
+           0));
       begin
          if Ch = null then
             return Unknown_Channel (Param (Msg, 0));
@@ -1540,7 +1544,8 @@ package body Soja.Core.Upstream_Dispatch is
          Channel  : constant String := Param (Msg, 1);
          Mode_Str : constant String :=
            (if Msg.Params.Length > 2 then Param (Msg, 2) else "");
-         Ch       : constant Upstream_Channel_Access := UC.Channels.Get (Channel);
+         Ch       : constant Upstream_Channel_Access := UC.Channels.Get
+           (Channel);
       begin
          if Ch = null then
             Forward_Msg_By_ID (UC, Downstream_ID, Msg);
@@ -1577,7 +1582,8 @@ package body Soja.Core.Upstream_Dispatch is
       end if;
       declare
          Channel : constant String := Param (Msg, 1);
-         Ch      : constant Upstream_Channel_Access := UC.Channels.Get (Channel);
+         Ch      : constant Upstream_Channel_Access := UC.Channels.Get
+           (Channel);
       begin
          if Ch = null then
             Forward_Msg_By_ID (UC, Downstream_ID, Msg);
@@ -1608,7 +1614,8 @@ package body Soja.Core.Upstream_Dispatch is
       end if;
       declare
          Channel : constant String := Param (Msg, 1);
-         Ch      : constant Upstream_Channel_Access := UC.Channels.Get (Channel);
+         Ch      : constant Upstream_Channel_Access := UC.Channels.Get
+           (Channel);
       begin
          if Ch = null then
             Forward_Msg_By_ID (UC, Downstream_ID, Msg);
@@ -1843,7 +1850,8 @@ package body Soja.Core.Upstream_Dispatch is
             if Has_Tag (Msg.Tags, "+draft/channel-context") then
                declare
                   Ctx : constant Upstream_Channel_Access :=
-                    UC.Channels.Get (Get_Tag (Msg.Tags, "+draft/channel-context"));
+                    UC.Channels.Get (Get_Tag (Msg.Tags,
+                      "+draft/channel-context"));
                begin
                   if Ctx /= null and then Ctx.Members.Has (Sender) then
                      Buffer_Name := Ctx.Name;
@@ -1864,7 +1872,8 @@ package body Soja.Core.Upstream_Dispatch is
                   Highlight := Soja.Core.Network_Ops.Is_Highlight (Net, Msg);
                   if Ch.Detach_On = Filter_Message
                     or else Ch.Detach_On = Filter_Default
-                    or else (Ch.Detach_On = Filter_Highlight and then Highlight)
+                    or else (Ch.Detach_On = Filter_Highlight and then
+                      Highlight)
                   then
                      Update_Channel_Auto_Detach (UC, Buffer);
                   end if;
@@ -1979,7 +1988,8 @@ package body Soja.Core.Upstream_Dispatch is
    function Handle_Whox_Reply
      (UC : not null Upstream_Conn_Access; Msg : Message) return Handle_Result
    is
-      Pending : constant Pending_Command := Current_Pending_Command (UC, "WHO");
+      Pending : constant Pending_Command := Current_Pending_Command (UC,
+        "WHO");
    begin
       if not Pending.Found then
          return Fail ("unexpected RPL_WHOSPCRPL: no matching pending WHO");
@@ -2041,7 +2051,8 @@ package body Soja.Core.Upstream_Dispatch is
    function Handle_Whois_Reply
      (UC : not null Upstream_Conn_Access; Msg : Message) return Handle_Result
    is
-      Pending : constant Pending_Command := Current_Pending_Command (UC, "WHOIS");
+      Pending : constant Pending_Command := Current_Pending_Command (UC,
+        "WHOIS");
    begin
       if not Pending.Found then
          return Fail
@@ -2134,7 +2145,8 @@ package body Soja.Core.Upstream_Dispatch is
                  and then not UC.Network.Kicked.Has (Channel)
                then
                   for M of Generate_Join
-                             ([To_String (Saved.Name)], [To_String (Saved.Key)])
+                             ([To_String (Saved.Name)], [To_String
+                               (Saved.Key)])
                   loop
                      Send_Message (UC, M);
                   end loop;
@@ -2311,7 +2323,8 @@ package body Soja.Core.Upstream_Dispatch is
       if Is_Our_Nick (UC, To_String (Msg.Prefix.Name)) then
          declare
             New_Prefix : constant Soja.Irc.Messages.Prefix :=
-              (Name => UC.Nick, User => Msg.Params (1), Host => Msg.Params (2));
+              (Name => UC.Nick, User => Msg.Params (1), Host => Msg.Params
+                (2));
          begin
             UC.Logger.Print
               ("changed prefix from " & Quote (To_String (Msg.Prefix.Host))
@@ -2651,7 +2664,8 @@ package body Soja.Core.Upstream_Dispatch is
             Channels, Keys : String_Vectors.Vector;
 
             procedure Collect (Name : String; Ch : Channel_Access) is
-               Kick : constant Kick_Info_Access := UC.Network.Kicked.Get (Name);
+               Kick : constant Kick_Info_Access := UC.Network.Kicked.Get
+                 (Name);
             begin
                if Kick /= null then
                   --  We were kicked from this channel and have not rejoined

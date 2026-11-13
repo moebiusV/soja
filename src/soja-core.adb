@@ -201,7 +201,8 @@ package body Soja.Core is
       Net.Stopped := new Signal;
       Net.Channels := Channel_Maps.New_Map (CM);
       for Ch of Channels loop
-         Net.Channels.Set (To_String (Ch.Name), new Soja.Database.Channel'(Ch));
+         Net.Channels.Set (To_String (Ch.Name), new
+           Soja.Database.Channel'(Ch));
       end loop;
       Net.Delivered := Soja.User.New_Delivered_Store (CM);
       Net.Push_Targets := Time_Maps.New_Map (CM);
@@ -321,7 +322,8 @@ package body Soja.Core is
       return null;
    end Get_Network;
 
-   function Get_Network_By_ID (U : not null User_Access; ID : Long_Long_Integer)
+   function Get_Network_By_ID (U : not null User_Access; ID :
+     Long_Long_Integer)
       return Network_Access
    is
    begin
@@ -672,7 +674,8 @@ package body Soja.Core is
               Temporary => True);
    end Run_Until_Registered;
 
-   --  uc.readMessages: forward each upstream message to the user's event queue.
+   --  uc.readMessages: forward each upstream message to the user's event
+   --  queue.
    procedure Read_Messages (UC : not null Upstream_Conn_Access;
       Events : not null Event_Queue_Access)
    is
@@ -807,7 +810,8 @@ package body Soja.Core is
       return Irc_Error_Result
    is
    begin
-      return Soja.Core.Downstream_Handshake.Handle_Message_Unregistered (DC, M);
+      return Soja.Core.Downstream_Handshake.Handle_Message_Unregistered (DC,
+        M);
    end Handle_Message_Unregistered;
 
    function Register_Downstream (DC : not null Downstream_Conn_Access)
@@ -1316,7 +1320,8 @@ package body Soja.Core is
          delay 0.5;
       end loop;
       if not Ok then
-         A.UC.Logger.Print ("skipping a channel detach: the event queue is full");
+         A.UC.Logger.Print
+           ("skipping a channel detach: the event queue is full");
       end if;
    end Run;
 

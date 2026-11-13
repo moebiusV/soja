@@ -59,7 +59,8 @@ package body Soja.Core.User_Events is
                   (DC.Caps, "soju.im/bouncer-networks")
          then
             Send_Service_Notice
-              (DC, "connected to " & Soja.Database.Get_Name (Net.Network_Record));
+              (DC, "connected to " & Soja.Database.Get_Name
+                (Net.Network_Record));
          end if;
 
          Update_Nick (DC);
@@ -248,7 +249,8 @@ package body Soja.Core.User_Events is
       end loop;
 
       if DC.Network /= null then
-         Store_Client_Delivery_Receipts (DC.Network, To_String (DC.Client_Name));
+         Store_Client_Delivery_Receipts (DC.Network, To_String
+           (DC.Client_Name));
       end if;
 
       for UC of Upstreams (U) loop
@@ -367,7 +369,8 @@ package body Soja.Core.User_Events is
       if E.all in Upstream_Connected_Event then
          Upstream_Connected (Upstream_Connected_Event (E.all).UC);
       elsif E.all in Upstream_Disconnected_Event then
-         Handle_Upstream_Disconnected (U, Upstream_Disconnected_Event (E.all).UC);
+         Handle_Upstream_Disconnected (U, Upstream_Disconnected_Event
+           (E.all).UC);
       elsif E.all in Upstream_Connection_Error_Event then
          Upstream_Connection_Error
            (Upstream_Connection_Error_Event (E.all).Net,
@@ -378,7 +381,8 @@ package body Soja.Core.User_Events is
             To_String (Upstream_Error_Event (E.all).Error));
       elsif E.all in Upstream_Message_Event then
          Upstream_Message
-           (Upstream_Message_Event (E.all).UC, Upstream_Message_Event (E.all).Msg);
+           (Upstream_Message_Event (E.all).UC, Upstream_Message_Event
+             (E.all).Msg);
       elsif E.all in Channel_Detach_Event then
          Channel_Detach
            (Channel_Detach_Event (E.all).UC,

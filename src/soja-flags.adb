@@ -113,7 +113,8 @@ package body Soja.Flags is
                raise Flag_Error with "parse error";
             end if;
             Digits_Seen := True;
-            if Value > (Long_Long_Integer (Integer'Last) + 1) / Long_Long_Integer (Base)
+            if Value > (Long_Long_Integer (Integer'Last) + 1) /
+              Long_Long_Integer (Base)
             then
                raise Flag_Error with "value out of range";
             end if;

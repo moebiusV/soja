@@ -145,7 +145,8 @@ package body Soja.Core.Downstream_Commands is
       begin
          if Destination /= "" and then Destination /= Host then
             return IRC_Fail
-              (ERR_NOSUCHSERVER, [Nick_Of (DC), Destination, "No such server"]);
+              (ERR_NOSUCHSERVER, [Nick_Of (DC), Destination,
+                "No such server"]);
          end if;
          Reply := Make ("PONG", [Host, Param (M, 0)]);
          Reply.Prefix := Server_Prefix (DC.Srv);
@@ -375,10 +376,12 @@ package body Soja.Core.Downstream_Commands is
             begin
                if Name = "" or else Has_Illegal_Chan_Char (Name) then
                   Send_Message
-                    (DC, Make (ERR_BADCHANMASK, [Name, "Invalid channel name"]));
+                    (DC, Make (ERR_BADCHANMASK, [Name,
+                      "Invalid channel name"]));
                elsif not Soja.Core.Upstream_Dispatch.Is_Channel (UC, Name) then
                   Send_Message
-                    (DC, Make (ERR_NOSUCHCHANNEL, [Name, "Not a channel name"]));
+                    (DC, Make (ERR_NOSUCHCHANNEL, [Name,
+                      "Not a channel name"]));
                else
                   --  Most servers ignore duplicate JOIN messages.  We ignore
                   --  them here because some clients send JOINs in bulk when
@@ -664,7 +667,8 @@ package body Soja.Core.Downstream_Commands is
 
       if M.Params.Is_Empty then
          Send_Message
-           (DC, Make (RPL_ENDOFNAMES, [Nick_Of (DC), "*", "End of /NAMES list"]));
+           (DC, Make (RPL_ENDOFNAMES, [Nick_Of (DC), "*",
+             "End of /NAMES list"]));
          return Success;
       end if;
 
@@ -917,7 +921,8 @@ package body Soja.Core.Downstream_Commands is
                          [Nick, Service_Nick, "is the bouncer service"]));
             Send_Message
               (DC, Make (RPL_WHOISACCOUNT,
-                         [Nick, Service_Nick, Service_Nick, "is logged in as"]));
+                         [Nick, Service_Nick, Service_Nick,
+                           "is logged in as"]));
             Send_Message
               (DC, Make (RPL_WHOISBOT, [Nick, Service_Nick, "is a bot"]));
             Send_Message
@@ -1162,7 +1167,8 @@ package body Soja.Core.Downstream_Commands is
       return Irc_Error_Result
    is
       UC : Upstream_Conn_Access;
-      R  : constant Irc_Error_Result := Upstream_For_Command (DC, "INVITE", UC);
+      R  : constant Irc_Error_Result := Upstream_For_Command (DC, "INVITE",
+        UC);
    begin
       if R.Failed then
          return R;
@@ -1179,7 +1185,8 @@ package body Soja.Core.Downstream_Commands is
       --  bound and supports SASL.
       UC : constant Upstream_Conn_Access := Upstream_Of (DC);
    begin
-      if UC = null or else not Soja.Irc.Cap_Registry.Is_Enabled (UC.Caps, "sasl")
+      if UC = null or else not Soja.Irc.Cap_Registry.Is_Enabled (UC.Caps,
+        "sasl")
       then
          return IRC_Fail
            (ERR_SASLFAIL,

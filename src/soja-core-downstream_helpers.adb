@@ -456,7 +456,8 @@ package body Soja.Core.Downstream_Helpers is
       Members : String_Vectors.Vector;
       Multi   : constant Boolean := Is_Enabled (DC.Caps, "multi-prefix");
 
-      procedure Add (Nick : String; Set : Soja.Irc.Members.Membership_Set_Access)
+      procedure Add (Nick : String; Set :
+        Soja.Irc.Members.Membership_Set_Access)
       is
       begin
          Members.Append

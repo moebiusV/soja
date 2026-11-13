@@ -2,7 +2,6 @@
 pragma Ada_2022;
 
 with Ada.Command_Line;
-with Ada.Containers.Vectors;
 with Ada.Exceptions;
 with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
@@ -156,7 +155,8 @@ procedure Soja_Main is
          Cfg.Title := Raw.Title;
          --  Only the in-memory message store is ported so far.
          if To_String (Raw.Msg_Store.Driver) /= "memory" then
-            Log.Print ("warning: the " & Quote (To_String (Raw.Msg_Store.Driver))
+            Log.Print ("warning: the "
+                       & Quote (To_String (Raw.Msg_Store.Driver))
                        & " message store is not supported by soja yet; "
                        & "using the in-memory one (no history across "
                        & "restarts)");

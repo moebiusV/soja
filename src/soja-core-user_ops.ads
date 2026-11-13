@@ -26,7 +26,8 @@ package Soja.Core.User_Ops is
 
    --  user.addNetwork / removeNetwork.  Add starts the network's task;
    --  Remove stops it and closes the clients that are on it.
-   procedure Add_Network (U : not null User_Access; Net : not null Network_Access);
+   procedure Add_Network (U : not null User_Access; Net : not null
+     Network_Access);
    procedure Remove_Network
      (U : not null User_Access; Net : not null Network_Access);
 

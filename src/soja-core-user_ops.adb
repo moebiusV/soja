@@ -20,7 +20,8 @@ package body Soja.Core.User_Ops is
    function Image (N : Long_Long_Integer) return String is
      (Ada.Strings.Fixed.Trim (Long_Long_Integer'Image (N), Ada.Strings.Left));
 
-   function DB_Of (U : not null User_Access) return Soja.Database.Database_Access
+   function DB_Of (U : not null User_Access) return
+     Soja.Database.Database_Access
    is (Soja.Server.DB (U.Srv.all));
 
    function Lower (S : String) return String is
@@ -151,7 +152,8 @@ package body Soja.Core.User_Ops is
               (DC.Caps, "soju.im/bouncer-networks-notify")
          then
             Send_Message
-              (DC, Make ("BOUNCER", ["NETWORK", Image (Net_ID), Image (Attrs)]));
+              (DC, Make ("BOUNCER", ["NETWORK", Image (Net_ID), Image
+                (Attrs)]));
          end if;
       end loop;
    end Notify_Bouncer_Network_State;
@@ -490,7 +492,8 @@ package body Soja.Core.User_Ops is
                when E : Soja.Database.Database_Error =>
                   raise Operation_Error with
                     "failed to update user "
-                    & Soja.Irc.Helpers.Quote (To_String (U.User_Record.Username))
+                    & Soja.Irc.Helpers.Quote (To_String
+                      (U.User_Record.Username))
                     & ": " & Ada.Exceptions.Exception_Message (E);
             end;
          end if;

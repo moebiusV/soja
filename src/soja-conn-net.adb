@@ -16,7 +16,8 @@ package body Soja.Conn.Net is
    LF : constant Character := ASCII.LF;
    CR : constant Character := ASCII.CR;
 
-   function Create (Sock : not null AWS.Net.Socket_Access) return Net_IRC_Conn is
+   function Create (Sock : not null AWS.Net.Socket_Access) return Net_IRC_Conn
+     is
    begin
       return Net_IRC_Conn'
         (IRC_Conn with Sock => Sock, Buffer => Null_Unbounded_String);
@@ -32,7 +33,8 @@ package body Soja.Conn.Net is
    is
    begin
       for I in Chunk'First .. Last loop
-         Append (Buf, Character'Val (Ada.Streams.Stream_Element'Pos (Chunk (I))));
+         Append (Buf, Character'Val (Ada.Streams.Stream_Element'Pos (Chunk
+           (I))));
       end loop;
    end Append_Chunk;
 
@@ -64,7 +66,8 @@ package body Soja.Conn.Net is
             when E : AWS.Net.Socket_Error =>
                --  AWS reports an orderly close as an error: it is the EOF.
                if Ada.Strings.Fixed.Index
-                    (Ada.Exceptions.Exception_Message (E), "closed by peer") > 0
+                    (Ada.Exceptions.Exception_Message (E), "closed by peer") >
+                      0
                then
                   Last := Chunk'First - 1;
                else

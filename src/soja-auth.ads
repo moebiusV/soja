@@ -20,7 +20,8 @@ package Soja.Auth is
       External : Unbounded_String;
    end record;
 
-   --  Whether the driver can authenticate with a password (PlainAuthenticator).
+   --  Whether the driver can authenticate with a password
+   --  (PlainAuthenticator).
    function Supports_Plain (Driver : String) return Boolean;
 
    --  AuthPlain.  DB may be null only for drivers that don't use it.
