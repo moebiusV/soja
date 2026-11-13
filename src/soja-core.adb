@@ -14,6 +14,7 @@ with CryptoLib.Hashes;
 with Soja.Backoff;
 with Soja.Conn.Net;
 with Soja.Core.Upstream_Dispatch;
+with Soja.Core.User_Events;
 with Soja.Irc.Cap_Registry;
 with Soja.Irc.Genmsg;
 with Soja.Irc.Helpers;
@@ -260,38 +261,6 @@ package body Soja.Core is
 
    --  user.go's handleEvent: dispatch on the event variant.  Every handler is
    --  a stub until the connection methods they call are ported.
-   procedure Handle (U : not null User_Access; E : Event_Access) is
-      pragma Unreferenced (U);
-   begin
-      if E.all in Upstream_Message_Event then
-         null;   --  deferred: handleUpstreamMessage
-      elsif E.all in Upstream_Connection_Error_Event then
-         null;   --  deferred: handleUpstreamConnectionError
-      elsif E.all in Upstream_Connected_Event then
-         null;   --  deferred: handleUpstreamConnected
-      elsif E.all in Upstream_Disconnected_Event then
-         null;   --  deferred: handleUpstreamDisconnected
-      elsif E.all in Upstream_Error_Event then
-         null;   --  deferred: handleUpstreamError
-      elsif E.all in Downstream_Message_Event then
-         null;   --  deferred: handleDownstreamMessage
-      elsif E.all in Downstream_Connected_Event then
-         null;   --  deferred: handleDownstreamConnected
-      elsif E.all in Downstream_Disconnected_Event then
-         null;   --  deferred: handleDownstreamDisconnected
-      elsif E.all in Channel_Detach_Event then
-         null;   --  deferred: handleChannelDetach
-      elsif E.all in Broadcast_Event then
-         null;   --  deferred: handleBroadcast
-      elsif E.all in Stop_Event then
-         null;   --  deferred: stop the user
-      elsif E.all in Retry_Join_Event then
-         Soja.Core.Upstream_Dispatch.Retry_Join
-           (Retry_Join_Event (E.all).UC, To_String (Retry_Join_Event (E.all).Name));
-      elsif E.all in Try_Regain_Nick_Event then
-         null;   --  deferred: handleTryRegainNick
-      end if;
-   end Handle;
 
    -----------------------------
    --  network/user helpers  --
@@ -313,9 +282,15 @@ package body Soja.Core is
    end Is_Stopped;
 
    procedure Stop_Network (Net : not null Network_Access) is
+      UC : constant Upstream_Conn_Access := Net.Active_Conn;
    begin
       if not Is_Stopped (Net) then
          Net.Stopped.Set;
+      end if;
+      --  The run loop is blocked reading from the server (or dialing,
+      --  registering): closing the connection wakes it up.
+      if UC /= null then
+         Soja.Conn.Close (UC.Conn);
       end if;
    end Stop_Network;
 
@@ -721,23 +696,30 @@ package body Soja.Core is
                  Temporary => True);
       end if;
 
+      Net.Active_Conn := UC;
+      if Is_Stopped (Net) then
+         Soja.Conn.Close (UC.Conn);   --  stopped while dialing
+      end if;
+
       Register (UC);
 
       RR := Run_Until_Registered (UC);
       if not RR.Success then
          Soja.Conn.Close (UC.Conn);
+         Net.Active_Conn := null;
          return (Text => To_Unbounded_String
                    ("failed to register: " & To_String (RR.Reason)),
                  Temporary => RR.Temporary);
       end if;
 
-      Net.Conn := UC;
+      --  (The user's loop sets Net.Conn when it handles this event.)
       Net.User.Events.Enqueue (new Upstream_Connected_Event'(UC => UC));
 
       Read_Messages (UC, Net.User.Events);
 
       Net.User.Events.Enqueue (new Upstream_Disconnected_Event'(UC => UC));
       Soja.Conn.Close (UC.Conn);
+      Net.Active_Conn := null;
       return (Text => Null_Unbounded_String, Temporary => True);
    end Run_Conn;
 
@@ -1206,6 +1188,86 @@ package body Soja.Core is
             & Ada.Exceptions.Exception_Message (E));
    end Load_Kicks;
 
+   ---------------------------------------------------------------
+   -- Update_Result, Stop_User, downstream message dispatch --
+   ---------------------------------------------------------------
+
+   protected body Update_Result is
+      procedure Finish (Error : String) is
+      begin
+         Last := To_Unbounded_String (Error);
+         Is_Done := True;
+      end Finish;
+
+      entry Wait (Error : out Unbounded_String) when Is_Done is
+      begin
+         Error := Last;
+      end Wait;
+   end Update_Result;
+
+   function Stop_User
+     (U : not null User_Access; Timeout : Duration := 30.0) return Boolean
+   is
+      Queued : Boolean := False;
+   begin
+      if U.Done.Is_Set then
+         return True;   --  already stopped
+      end if;
+
+      select
+         U.Events.Enqueue (new Stop_Event);
+         Queued := True;
+      or
+         delay Timeout;
+      end select;
+      if not Queued then
+         return False;
+      end if;
+
+      select
+         U.Done.Wait;
+         return True;
+      or
+         delay Timeout;
+         return False;
+      end select;
+   end Stop_User;
+
+   function Has_Persistent_Msg_Store (U : not null User_Access)
+      return Boolean
+   is
+   begin
+      return U.Msg_Store /= null
+        and then not Soja.Msgstore.Memory.Is_Memory_Store (U.Msg_Store.all);
+   end Has_Persistent_Msg_Store;
+
+   --  Until the registered-client command dispatch (downstream.go's
+   --  handleMessageRegistered) is ported, every command is unknown.
+   function Handle_Message_Registered
+     (DC : not null Downstream_Conn_Access; M : Message)
+      return Irc_Error_Result
+   is
+      pragma Unreferenced (DC);
+   begin
+      return (Failed => True,
+              Err => Soja.Downstream.New_Unknown_Command_Error
+                       (To_String (M.Command)));
+   end Handle_Message_Registered;
+
+   function Handle_Downstream_Message
+     (DC : not null Downstream_Conn_Access; M : Message)
+      return Irc_Error_Result
+   is
+   begin
+      if To_String (M.Command) = "QUIT" then
+         Soja.Conn.Shutdown (DC.Conn);
+         return (Failed => False);   --  TODO (Go): stop handling commands
+      elsif DC.Registered then
+         return Handle_Message_Registered (DC, M);
+      end if;
+      return Handle_Message_Unregistered (DC, M);
+   end Handle_Downstream_Message;
+
    ----------------
    -- Append_Log --
    ----------------
@@ -1457,7 +1519,13 @@ package body Soja.Core is
               ("waiting " & Duration'Image (Delay_Needed)
                & " before trying to reconnect to "
                & To_String (Net.Network_Record.Addr));
-            delay Delay_Needed;
+            --  (Woken up early when the network is stopped.)
+            select
+               Net.Stopped.Wait;
+            or
+               delay Delay_Needed;
+            end select;
+            exit when Is_Stopped (Net);
          end if;
          Last_Try := Ada.Calendar.Clock;
 
@@ -1468,7 +1536,8 @@ package body Soja.Core is
                & ": " & To_String (Err.Text));
             Net.User.Events.Enqueue
               (new Upstream_Connection_Error_Event'
-                 (Net => Net, Error => Err.Text));
+                 (Net => Net,
+                  Error => "connection error: " & Err.Text));
             exit when not Err.Temporary;
          else
             Soja.Backoff.Reset (Backoff);
@@ -1493,14 +1562,53 @@ package body Soja.Core is
          begin
             Load_Kicks (Net);
             U.Networks.Append (Net);
+
+            if Has_Persistent_Msg_Store (U) then
+               for R of Soja.Database.List_Delivery_Receipts (DB.all, Rec.ID)
+               loop
+                  Soja.User.Store_ID
+                    (Net.Delivered, To_String (R.Target),
+                     To_String (R.Client), To_String (R.Internal_Msg_ID));
+               end loop;
+            end if;
+
             Spawn_Network (Net);
          end;
       end loop;
    end Load_Networks;
 
    procedure Run (U : not null User_Access) is
+      Stop : Boolean := False;
+
+      procedure Finish is
+      begin
+         if U.Msg_Store /= null then
+            begin
+               U.Msg_Store.Close;
+            exception
+               when E : others =>
+                  U.Logger.Print
+                    ("failed to close message store for user "
+                     & Soja.Irc.Helpers.Quote
+                         (To_String (U.User_Record.Username)) & ": "
+                     & Ada.Exceptions.Exception_Message (E));
+            end;
+         end if;
+         U.Done.Set;
+      end Finish;
    begin
-      Load_Networks (U);
+      begin
+         Load_Networks (U);
+      exception
+         when E : others =>
+            U.Logger.Print
+              ("failed to list networks for user "
+               & Soja.Irc.Helpers.Quote (To_String (U.User_Record.Username))
+               & ": " & Ada.Exceptions.Exception_Message (E));
+            Finish;
+            return;
+      end;
+
       loop
          declare
             E    : Event_Access;
@@ -1508,9 +1616,20 @@ package body Soja.Core is
          begin
             U.Events.Dequeue (E, Done);
             exit when Done;
-            Handle (U, E);
+            begin
+               Soja.Core.User_Events.Handle_Event (U, E, Stop);
+            exception
+               when Err : others =>
+                  --  A failing handler must not take the whole user down.
+                  U.Logger.Print
+                    ("event handler failed: "
+                     & Ada.Exceptions.Exception_Information (Err));
+            end;
+            exit when Stop;
          end;
       end loop;
+
+      Finish;
    end Run;
 
 end Soja.Core;

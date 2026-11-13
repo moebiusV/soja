@@ -428,6 +428,33 @@ this rule is written explicitly, not assumed. Reference anchors:
   actions (this and the idle detach) post to the queue without blocking for
   good, because stopping a timer waits for its action.
 
+- **The user's event loop and network/user operations (step 5).**  `Core.Run`
+  now loads the networks (and, for a persistent message store, their delivery
+  receipts), then runs `Soja.Core.User_Events.Handle_Event` for each event
+  until a `Stop_Event`, and finally closes the message store and sets `Done`.
+  Handlers: upstream connected / disconnected / connection error / error /
+  message, channel detach, downstream connected / disconnected / message,
+  broadcast, user update (with a completion object the sender waits on),
+  regain-nick and join-retry.  `Soja.Core.User_Ops` has `addNetwork`,
+  `removeNetwork`, `checkNetwork`, `createNetwork`, `updateNetwork`,
+  `deleteNetwork`, `updateUser` (as an `Update` callback on a copy of the
+  record), `handleUpstreamDisconnected`, `storeClientDeliveryReceipts`,
+  `bumpDownstreamInteractionTime`, the BOUNCER network attributes and state
+  notifications; Go's returned `error`s are `Operation_Error` exceptions.
+  Changes to what step 1-4 had:
+  - the user's loop (not the network's task) sets `Network.Conn`, on
+    `Upstream_Connected_Event`, as Go does;
+  - `Stop_Network` closes the upstream connection, whatever phase it is in,
+    and the reconnect wait is cut short when the network is stopped (Go does
+    both through a context); `Network.Active_Conn` tracks the connection;
+  - `connection error: ` is prefixed to the text of a failed run, as in Go;
+  - `Stop_User` asks the loop to stop and waits for it (with a timeout).
+  Still to come: `dc.welcome` (a client is accepted without a burst for now,
+  `Downstream_Helpers.Welcome` is a stub), the registered-client command
+  dispatch (every command answers 421 until step 7), and the BouncerServ
+  `eventUserRun` (step 9).  Not ported: the `UpstreamUserIPs` local-address
+  selection, and the filesystem store's rename on `updateNetwork`.
+
 - **Ordering**: `downstream.go`, `upstream.go`, `user.go` and `service.go`
   form one mutually-dependent core (the `network` type in `user.go` holds both
   an `upstreamConn` and downstream connections), so they are ported together,

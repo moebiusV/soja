@@ -263,6 +263,17 @@ highlight with an incomplete channel).
 
 ## Possible, not yet confirmed
 
+- `user.go` `updateNetwork` builds the replacement network with `newNetwork`,
+  whose `delivered` store is empty, while delivery receipts are only loaded
+  from the database in `user.run` at startup.  With a persistent message store,
+  after a network update the in-memory receipts are gone; when a client then
+  disconnects, `storeClientDeliveryReceipts` rewrites that client's rows from
+  the (now nearly empty) map, which looks like it drops its older receipts, so
+  the backlog for those targets would no longer be replayed.  Needs a test
+  against a real persistent (fs/db) store to confirm; soja copies Go's
+  behaviour for now (and the memory store is not persistent, so it is not
+  affected).
+
 - `irc.go:265`: `isHighlight` panics on an empty nick.  Not reachable in
   normal operation (the nick is never empty once configured); soja returns
   "not a highlight" instead.  Probably not worth a PR on its own.

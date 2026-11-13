@@ -53,6 +53,8 @@ package body Soja.Conn is
          Closed := True;
       end Close_Queue;
 
+      function Is_Closed return Boolean is (Closed);
+
    end Out_Queue;
 
    ---------
@@ -176,6 +178,11 @@ package body Soja.Conn is
    ---------
    -- Close --
    ---------
+
+   function Is_Closed (C : not null access Conn) return Boolean is
+   begin
+      return C.Queue.Is_Closed;
+   end Is_Closed;
 
    procedure Close (C : not null access Conn) is
    begin

@@ -122,6 +122,10 @@ package Soja.Core.Upstream_Dispatch is
      (UC : not null Upstream_Conn_Access; Mech : String) return Boolean;
    function Request_SASL (UC : not null Upstream_Conn_Access) return Boolean;
 
+   --  uc.updateAway: with auto-away enabled, mark us away while no client is
+   --  connected (or every client is away), and back otherwise.
+   procedure Update_Away (UC : not null Upstream_Conn_Access);
+
    --  uc.updateMonitor: sync the MONITOR list with what the clients watch.
    procedure Update_Monitor (UC : not null Upstream_Conn_Access);
 

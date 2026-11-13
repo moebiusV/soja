@@ -57,6 +57,9 @@ package Soja.Conn is
    --  Closes the connection.  Safe from any task.
    procedure Close (C : not null access Conn);
 
+   --  Whether Close (or the writer ending) has closed it (Go's isClosed).
+   function Is_Closed (C : not null access Conn) return Boolean;
+
    function Remote_Addr (C : not null access Conn) return String;
 
 private
@@ -73,6 +76,7 @@ private
       entry Take (M : out Message_Access; Stop : out Boolean);
       procedure Shutdown;
       procedure Close_Queue;
+      function Is_Closed return Boolean;
    private
       Buf      : Message_Array;
       Head     : Positive := 1;

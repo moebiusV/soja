@@ -569,6 +569,15 @@ package body Soja.Core.Downstream_Helpers is
       Send_Message (DC, M);
    end Send_Service_Privmsg;
 
+   function Welcome
+     (DC : not null Downstream_Conn_Access; U : not null User_Access)
+      return Irc_Error_Result
+   is
+      pragma Unreferenced (DC, U);
+   begin
+      return (Failed => False);
+   end Welcome;
+
    procedure Send_Kicked_Notices (DC : not null Downstream_Conn_Access) is
       procedure Notice (Name : String; Kick : Kick_Info_Access) is
          Reason : constant String := To_String (Kick.Reason);

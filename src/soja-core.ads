@@ -73,6 +73,8 @@ package Soja.Core is
      (Positive, Network_Access);
    package Downstream_Conn_Vectors is new Ada.Containers.Vectors
      (Positive, Downstream_Conn_Access);
+   package Upstream_Conn_Access_Vectors is new Ada.Containers.Vectors
+     (Positive, Upstream_Conn_Access);
 
    package Channel_Maps is new Soja.Irc.Case_Mapping_Maps
      (Element => Channel_Access, Null_Element => null);
@@ -253,6 +255,27 @@ package Soja.Core is
 
    type Stop_Event is new Event with null record;
 
+   --  eventUserUpdate: change the user's password/admin/enabled flags from
+   --  another task (BouncerServ, sojudb).  The sender waits on Result.
+   protected type Update_Result is
+      procedure Finish (Error : String);   --  "" when it worked
+      entry Wait (Error : out Unbounded_String);
+   private
+      Is_Done  : Boolean := False;
+      Last     : Unbounded_String;
+   end Update_Result;
+   type Update_Result_Access is access all Update_Result;
+
+   type User_Update_Event is new Event with record
+      Has_Password : Boolean := False;
+      Password     : Unbounded_String;
+      Has_Admin    : Boolean := False;
+      Admin        : Boolean := False;
+      Has_Enabled  : Boolean := False;
+      Enabled      : Boolean := False;
+      Result       : Update_Result_Access;
+   end record;
+
    --  A join retry timer fired (soja-specific: channel-full retries).
    type Retry_Join_Event is new Event with record
       UC   : Upstream_Conn_Access;
@@ -327,6 +350,7 @@ package Soja.Core is
       Delivered : Soja.User.Delivered_Store;
       Casemap   : Kind;
 
+      Active_Conn    : Upstream_Conn_Access;   --  being set up, or running
       Push_Targets   : Time_Maps.Map;
       Kicked         : Kick_Maps.Map;   --  channels we were kicked from
       Has_Last_Error : Boolean := False;   --  Go's lastError != nil
@@ -529,6 +553,14 @@ package Soja.Core is
    procedure Try_Regain_Nick
      (UC : not null Upstream_Conn_Access; Nick : String);
 
+   --  user.stop(): ask the user's loop to stop and wait until it has (False
+   --  when Timeout expires first).
+   function Stop_User
+     (U : not null User_Access; Timeout : Duration := 30.0) return Boolean;
+
+   --  user.hasPersistentMsgStore.
+   function Has_Persistent_Msg_Store (U : not null User_Access) return Boolean;
+
    --  user.run(): load the user's networks from the DB, spawn each network's
    --  run task, then drain the event queue, dispatching each event to its
    --  handler.  The per-event handlers are stubs (they call the not-yet-ported
@@ -554,7 +586,12 @@ package Soja.Core is
 
    function Is_Stopped (Net : not null Network_Access) return Boolean;
 
+   --  network.stop(): flag the network as stopped (its run loop ends) and
+   --  close its upstream connection, whatever phase it is in.
    procedure Stop_Network (Net : not null Network_Access);
+
+   --  Start the task running Run_Network (Go's `go network.run()`).
+   procedure Spawn_Network (Net : not null Network_Access);
 
    function Equal_Casemap (Net : not null Network_Access; A, B : String)
       return Boolean;
@@ -656,5 +693,10 @@ package Soja.Core is
    --  until the connection registers.  Returns False when the peer closed.
    function Run_Until_Registered_Downstream
      (DC : not null Downstream_Conn_Access) return Boolean;
+
+   --  dc.handleMessage: QUIT, then the registered or unregistered dispatch.
+   function Handle_Downstream_Message
+     (DC : not null Downstream_Conn_Access; M : Soja.Irc.Messages.Message)
+      return Irc_Error_Result;
 
 end Soja.Core;

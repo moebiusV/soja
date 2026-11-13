@@ -94,6 +94,13 @@ package Soja.Core.Downstream_Helpers is
    procedure Send_Service_Privmsg
      (DC : not null Downstream_Conn_Access; Text : String);
 
+   --  dc.welcome: the welcome burst of a newly registered client (001 ...,
+   --  ISUPPORT, MOTD, the network's channels and backlog).  Not ported yet
+   --  (downstream step): for now a client is accepted without any burst.
+   function Welcome
+     (DC : not null Downstream_Conn_Access; U : not null User_Access)
+      return Irc_Error_Result;
+
    --  Tell a client, as BouncerServ notices, about the channels we were kicked
    --  from and stayed out of, so it can decide to rejoin them.  Called when a
    --  client connects (the welcome burst).

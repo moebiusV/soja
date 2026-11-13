@@ -682,6 +682,33 @@ package body Soja.Core.Upstream_Dispatch is
      (Element_Type => String, Hash => Ada.Strings.Hash,
       Equivalent_Elements => "=");
 
+   procedure Update_Away (UC : not null Upstream_Conn_Access) is
+      Away : Boolean := True;
+   begin
+      if not UC.Network.Network_Record.Auto_Away then
+         return;
+      end if;
+
+      for DC of Downstreams (UC.Network) loop
+         if Length (DC.Away) = 0 then
+            Away := False;
+         end if;
+      end loop;
+      if Away = UC.Away then
+         return;
+      end if;
+
+      if Away then
+         Send_Message
+           (UC, Make ("AWAY",
+                      [(if Is_Available (UC.Caps, "draft/pre-away") then "*"
+                        else "Auto away")]));
+      else
+         Send_Message (UC, Make ("AWAY"));
+      end if;
+      UC.Away := Away;
+   end Update_Away;
+
    procedure Update_Monitor (UC : not null Upstream_Conn_Access) is
       Net : constant Network_Access := UC.Network;
 
