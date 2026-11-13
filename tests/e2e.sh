@@ -9,7 +9,7 @@
 # the scenario in tests/e2e_scenario.py.
 set -eu
 
-apk add --no-cache openssl-libs-static zlib-static ngircd python3 >/dev/null 2>&1
+apk add --no-cache openssl-libs-static zlib-static ngircd python3 openssl >/dev/null 2>&1
 (cd cmd/soja && gprbuild -q -P soja.gpr) >&2
 (cd cmd/sojadb && gprbuild -q -P sojadb.gpr) >&2
 (cd cmd/sojuctl && gprbuild -q -P sojuctl.gpr) >&2
@@ -36,11 +36,20 @@ EOT
 ngircd -n -f "$D/ngircd.conf" > "$D/ngircd.log" 2>&1 &
 echo $! > "$D/ngircd.pid"
 
+# Two self-signed certificates, for the certificate reload check.
+for n in a b; do
+  openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj "/CN=soja-$n" \
+    -keyout "$D/$n.key" -out "$D/$n.crt" 2>/dev/null
+done
+cp "$D/a.crt" "$D/tls.crt"; cp "$D/a.key" "$D/tls.key"
+
 cat > "$D/soja.conf" <<EOT
 listen irc+insecure://127.0.0.1:6697
 listen ident://127.0.0.1:1130
 listen unix+admin://$D/admin.sock
 listen unix://$D/irc.sock
+listen ircs://127.0.0.1:6698
+tls $D/tls.crt $D/tls.key
 hostname soja.example.net
 accept-proxy-ip localhost
 db sqlite3 $D/soja.db

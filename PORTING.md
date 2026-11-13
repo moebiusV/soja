@@ -341,8 +341,12 @@ What it refuses or changes, loudly:
   bouncer that cannot check passwords must not start as if it could.
 - Message stores other than `memory` fall back to memory, with a warning;
   `file-upload` is ignored, with a warning; only the SQLite database driver.
-- TLS certificates are read when the listener starts, so SIGHUP does not
-  reload them (Go swaps them atomically).
+- SIGHUP re-reads the TLS certificate and key (`Server.Reload_TLS`): new TLS
+  connections use the new pair, open ones keep theirs.  A pair that does not
+  load (missing, unparsable, mismatched) fails the reload, as in Go, and the
+  old one stays; the same check now runs at startup.  AWS does not reference-
+  count its SSL config, so the replaced one is left allocated (a few KB per
+  reload) rather than freed under connections that still use it.
 
 `tests/e2e.sh` (inside the toolchain container) builds both programs, starts
 ngircd and soja, and runs `tests/e2e_scenario.py`: register, create a network

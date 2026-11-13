@@ -2,7 +2,9 @@
 import os
 import re
 import signal
+import shutil
 import socket
+import ssl
 import subprocess
 import sys
 import time
@@ -212,6 +214,47 @@ def main():
     s2.close()
     if "NO-USER" not in r2:
         raise Fail(f"identd matched the wrong host: {r2!r}")
+
+    log("certificate reload on SIGHUP")
+
+    def served_cert():
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        with socket.create_connection(("127.0.0.1", 6698), timeout=5) as raw:
+            with ctx.wrap_socket(raw) as tls:
+                return tls.getpeercert(binary_form=True)
+
+    def reload():
+        soja_proc.send_signal(signal.SIGHUP)
+        time.sleep(1.0)
+
+    cert_a = served_cert()
+    shutil.copy(os.path.join(DIR, "b.crt"), os.path.join(DIR, "tls.crt"))
+    shutil.copy(os.path.join(DIR, "b.key"), os.path.join(DIR, "tls.key"))
+    if served_cert() != cert_a:
+        raise Fail("the new certificate was used before any SIGHUP")
+    reload()
+    cert_b = served_cert()
+    if cert_b == cert_a:
+        raise Fail("SIGHUP did not make soja serve the new certificate")
+    # a broken replacement is refused and the old one stays
+    with open(os.path.join(DIR, "tls.crt"), "w") as f:
+        f.write("not a certificate\n")
+    reload()
+    if served_cert() != cert_b:
+        raise Fail("a broken certificate replaced the working one")
+    # an ircs client still works (and a session survives): register over TLS
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    raw = socket.create_connection(("127.0.0.1", 6698), timeout=5)
+    tc = Client(None, "tls", sock=ctx.wrap_socket(raw))
+    tc.register("alice", "alice", "secret")
+    tc.close()
+    # put a good pair back, for the restart below
+    shutil.copy(os.path.join(DIR, "a.crt"), os.path.join(DIR, "tls.crt"))
+    shutil.copy(os.path.join(DIR, "a.key"), os.path.join(DIR, "tls.key"))
 
     log("messages both ways")
     b.send("PRIVMSG #t :hello from bob")

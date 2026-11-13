@@ -57,6 +57,10 @@ package Soja.Server is
       Auth_Driver       : Ada.Strings.Unbounded.Unbounded_String :=
         Ada.Strings.Unbounded.To_Unbounded_String ("internal");
       Has_File_Uploader : Boolean := False;
+      --  The `tls` keypair (PEM paths), "" when there is none.  A new
+      --  configuration with other paths takes effect at Reload_TLS.
+      TLS_Cert          : Ada.Strings.Unbounded.Unbounded_String;
+      TLS_Key           : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
    type Server_Config_Access is access all Server_Config;
@@ -97,6 +101,17 @@ package Soja.Server is
 
    procedure Shutdown (S : in out Server);
 
+   --  Check that a certificate and key can be used for serving TLS (they
+   --  exist, parse, and match); "" when they can, else why not.  (Go's
+   --  tls.LoadX509KeyPair.)
+   function Check_TLS (Cert, Key : String) return String;
+
+   --  The TLS certificate was replaced (SIGHUP): from now on, new TLS
+   --  connections use the keypair named by Config (S).TLS_Cert / TLS_Key,
+   --  read afresh.  Connections already open keep what they have.
+   procedure Reload_TLS (S : in out Server);
+   function TLS_Generation (S : Server) return Natural;
+
    --  The gauges of server.go's metrics that BouncerServ's "server status"
    --  reports: connected clients and running upstream connections.
    type Server_Stats is record
@@ -132,7 +147,15 @@ private
       Value : Server_Stats;
    end Gauges;
 
+   protected type Generation_Counter is
+      procedure Bump;
+      function Value return Natural;
+   private
+      Count : Natural := 0;
+   end Generation_Counter;
+
    type Server is tagged limited record
+      TLS_Gen  : Generation_Counter;
       Gauge    : Gauges;
       Cfg      : Config_Holder;
       Logger   : Soja.Logging.Logger_Access;

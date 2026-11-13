@@ -134,19 +134,18 @@ procedure Soja_Main is
          end;
 
          if Raw.TLS /= null then
-            if not GNAT.OS_Lib.Is_Regular_File
-                     (To_String (Raw.TLS.Cert_Path))
-            then
-               raise Program_Error with
-                 "failed to load TLS certificate and key: cannot read "
-                 & Quote (To_String (Raw.TLS.Cert_Path));
-            end if;
-            if not GNAT.OS_Lib.Is_Regular_File (To_String (Raw.TLS.Key_Path))
-            then
-               raise Program_Error with
-                 "failed to load TLS certificate and key: cannot read "
-                 & Quote (To_String (Raw.TLS.Key_Path));
-            end if;
+            declare
+               Why : constant String := Soja.Server.Check_TLS
+                 (To_String (Raw.TLS.Cert_Path),
+                  To_String (Raw.TLS.Key_Path));
+            begin
+               if Why /= "" then
+                  raise Program_Error with
+                    "failed to load TLS certificate and key: " & Why;
+               end if;
+            end;
+            Cfg.TLS_Cert := Raw.TLS.Cert_Path;
+            Cfg.TLS_Key := Raw.TLS.Key_Path;
          end if;
 
          if Raw.File_Upload /= null then
@@ -542,6 +541,8 @@ begin
             begin
                Loaded_Config := Load_Config;
                Srv.Set_Config (Loaded_Config.Cfg);
+               --  New TLS connections use the (re-read) certificate.
+               Srv.Reload_TLS;
             exception
                when E : Program_Error =>
                   Log.Print ("failed to reloading configuration: "

@@ -5,6 +5,7 @@ with AWS.Net.SSL;
 with AWS.Net.Std;
 with GNAT.Sockets;
 with Ada.Exceptions;
+with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 
 with Soja.Config;
 with Soja.Conn.Net;
@@ -135,6 +136,7 @@ package body Soja.Server is
       Config   : AWS.Net.SSL.Config := AWS.Net.SSL.Null_Config;
       Use_TLS  : constant Boolean := TLS_Cert'Length > 0;
       New_Sock : AWS.Net.Socket_Access;
+      Cur_Gen  : Natural := TLS_Generation (S);
 
       --  AWS.Net's Accept_Socket blocks, so watch the listener's descriptor
       --  through GNAT.Sockets' selector to observe Shutdown between
@@ -174,6 +176,41 @@ package body Soja.Server is
                when AWS.Net.Socket_Error =>
                   exit;   -- listener closed by Shutdown
             end;
+
+            --  A certificate reload (SIGHUP) since the last connection: take
+            --  the new keypair.  The old config is not released: open
+            --  connections still point at it (AWS does not count
+            --  references), so it stays until the process ends.
+            if Use_TLS and then TLS_Generation (S) /= Cur_Gen then
+               Cur_Gen := TLS_Generation (S);
+               declare
+                  Cert : constant String :=
+                    To_String (Soja.Server.Config (S).TLS_Cert);
+                  Key  : constant String :=
+                    To_String (Soja.Server.Config (S).TLS_Key);
+                  Fresh : AWS.Net.SSL.Config := AWS.Net.SSL.Null_Config;
+               begin
+                  if Cert /= "" then
+                     AWS.Net.SSL.Initialize
+                       (Fresh,
+                        Security_Mode      => AWS.Net.SSL.TLS_Server,
+                        Server_Certificate => Cert,
+                        Server_Key         => Key);
+                     Config := Fresh;
+                     if S.Logger /= null then
+                        S.Logger.Print ("reloaded the TLS certificate");
+                     end if;
+                  end if;
+               exception
+                  when E : others =>
+                     if S.Logger /= null then
+                        S.Logger.Print
+                          ("failed to reload the TLS certificate: "
+                           & Ada.Exceptions.Exception_Message (E)
+                           & " (keeping the old one)");
+                     end if;
+               end;
+            end if;
 
             declare
                IC    : Soja.Conn.IRC_Conn_Access;
@@ -218,6 +255,40 @@ package body Soja.Server is
          AWS.Net.SSL.Release (Config);
       end if;
    end Serve;
+
+   protected body Generation_Counter is
+      procedure Bump is
+      begin
+         Count := Count + 1;
+      end Bump;
+      function Value return Natural is (Count);
+   end Generation_Counter;
+
+   procedure Reload_TLS (S : in out Server) is
+   begin
+      S.TLS_Gen.Bump;
+   end Reload_TLS;
+
+   function TLS_Generation (S : Server) return Natural is
+   begin
+      return S.TLS_Gen.Value;
+   end TLS_Generation;
+
+   function Check_TLS (Cert, Key : String) return String is
+      Probe : AWS.Net.SSL.Config := AWS.Net.SSL.Null_Config;
+   begin
+      AWS.Net.SSL.Initialize
+        (Probe,
+         Security_Mode      => AWS.Net.SSL.TLS_Server,
+         Server_Certificate => Cert,
+         Server_Key         => Key);
+      --  The probe is ours alone (no socket uses it): free it.
+      AWS.Net.SSL.Release (Probe);
+      return "";
+   exception
+      when E : others =>
+         return Ada.Exceptions.Exception_Message (E);
+   end Check_TLS;
 
    procedure Shutdown (S : in out Server) is
    begin

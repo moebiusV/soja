@@ -9,9 +9,12 @@ class Fail(Exception):
 
 
 class Client:
-    def __init__(self, port, name, path=None):
+    def __init__(self, port, name, path=None, sock=None):
         self.name = name
-        if path:
+        if sock:
+            self.sock = sock
+            self.sock.settimeout(5)
+        elif path:
             self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             self.sock.settimeout(5)
             self.sock.connect(path)
