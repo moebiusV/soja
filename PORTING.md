@@ -202,6 +202,21 @@ VERIFY, AWAY, INFO, MONITOR).  Deviations from the Go layout:
 - BOUNCER, CHATHISTORY, READ, SEARCH and WEBPUSH are Milestone B and fall
   through to the default (forward upstream / 421).
 
+### Server glue (`Soja.Bouncer`)
+
+Step 8: server.go's user table, `Handle`, `getOrCreateUser`, `createUser`,
+`Start` and the second half of `Shutdown`.  `Soja.Server` sits below
+`Soja.Core`, so this is a separate package above it.  Deviations:
+
+- One bouncer per process: `Soja.Server.Handler` takes no context, so
+  `Handle` finds the bouncer `Initialize` registered.
+- Each user runs on its own task (`User_Runner`) that leaves the table when
+  `Core.Run` ends; Go's `stopWG` is `Wait_Group`.
+- `Shutdown` is called after `Soja.Server.Shutdown` (which closes the
+  listener); it stops users one by one with a timeout, then closes the DB.
+- The inactive-user loop, web push config and metrics from `Start` are not
+  ported (Milestone B); `HandleAdmin` likewise.
+
 ## Open decisions
 
 - **v1 scope**: webpush, PAM, and PostgreSQL are the heavy items; ship
