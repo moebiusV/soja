@@ -30,6 +30,7 @@ one Go test per bug).  Add an entry the moment a bug is found; do not batch.
 | SB-12 | `service.go:677` | `network delete -x` deletes the current network | low |
 | SB-17 | `msgstore/fs.go:557` | renaming a network that has no logs yet logs an error | low |
 | SB-18 | `user.go:539` | the file store keeps the user's nick from when it was created | low |
+| SB-19 | `fileupload/fs.go:77` | a failed upload leaves the partly written file; an upload with no name is stored as `<token>-.ext` | low |
 | SB-15 | `database/sqlite.go:1130` | `CHATHISTORY TARGETS` lists a target that has only events, with the zero time | low |
 | SB-16 | `database/sqlite.go:1242` | `SEARCH` fails when its text has no word in it | low |
 | SB-14 | `server.go:725` | the inactive-user loop re-disables disabled users, says "deleted", and stops at the first failure | low |
@@ -676,3 +677,30 @@ private messages are addressed to the old nick until the bouncer restarts.
 
 **Suggested patch.**  Give the store the live record (`&u.User`) or tell it on
 update, as `eventUserUpdate` is handled.
+
+## SB-19: file upload keeps a failed upload, and names an unnamed one "<token>-.ext"
+
+`fileupload/fs.go`, `store`:
+
+```go
+origBasename = filepath.Base(origBasename)       // "" becomes "."
+...
+f, err = os.OpenFile(..., os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+...
+if _, err := io.Copy(f, r); err != nil {         // f stays on disk
+    return "", fmt.Errorf("failed to write file: %v", err)
+}
+```
+
+**Effect.**  (1) The handler answers 500 when the body is too large or the
+connection breaks, but the file it had written so far stays in the user's
+directory, for ever: a way to fill the disk with 50 MiB pieces that no address
+points to.  (2) `filepath.Base("")` is `"."`, so an upload without a
+Content-Disposition filename is stored as `<token>-.<ext>`, which is then shown
+as `.<ext>`.
+
+**Suggested patch.**  Remove the file when the copy fails (`os.Remove(f.Name())`),
+and take the base only when the name is not empty.
+
+soja removes the partial file and keeps an empty name empty (`<token>.<ext>`).
+

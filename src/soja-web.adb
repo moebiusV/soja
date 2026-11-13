@@ -12,6 +12,7 @@ with GNAT.SHA1;
 with Soja.Config;
 with Soja.Conn;
 with Soja.Conn.Ws;
+with Soja.Fileupload;
 with Soja.Glob;
 with Soja.Http;
 with Soja.Logging;
@@ -267,11 +268,12 @@ package body Soja.Web is
                               and then Path (Path'First .. Path'First + 8)
                                        = "/uploads/"))
          then
-            --  fileupload.Handler: CORS first, then 404 without an uploader
-            --  (soja has none).
+            --  fileupload.Handler: the CORS check first, then the upload
+            --  (404 when there is no `file-upload`).
             declare
                Why : constant String :=
                  Origin_Error (Req, Soja.Server.Config (S));
+               Origin : constant String := Soja.Http.Get (Req, "origin");
                Common : constant String :=
                  "Content-Security-Policy: sandbox; default-src 'none'; "
                  & "script-src 'none';" & CRLF
@@ -279,14 +281,17 @@ package body Soja.Web is
                  & "Access-Control-Allow-Headers: Authorization, "
                  & "Content-Type, Content-Disposition" & CRLF
                  & "Access-Control-Expose-Headers: Location, "
-                 & "Content-Disposition" & CRLF;
+                 & "Content-Disposition" & CRLF
+                 & (if Origin /= "" and then Why = ""
+                    then "Access-Control-Allow-Origin: " & Origin & CRLF
+                         & "Vary: Origin" & CRLF
+                    else "");
             begin
                if Why /= "" then
                   Soja.Http.Write_Error
                     (Stream.all, 403, "unauthorized Origin", Common);
                else
-                  Soja.Http.Write_Error
-                    (Stream.all, 404, "404 page not found", Common);
+                  Soja.Fileupload.Serve (S, Stream, Req, Common);
                end if;
             end;
          elsif Mux then

@@ -459,9 +459,8 @@ files' modification time (second granularity), and their names are the
 WebSocket upgrade on any path, as `Server.ServeHTTP` does; `https://`,
 `http+insecure://` and `http+unix://` route like cmd/soju's mux: `/socket` is
 the WebSocket, `/uploads` and `/uploads/...` are the file-upload handler,
-anything else is a 404.  soja has no uploader, so `/uploads` answers as soju
-does without one: CSP and CORS headers, 403 for an unauthorized Origin, else
-404.  nhooyr.io/websocket's rules are kept: HTTP/1.1, a GET with `Connection:
+anything else is a 404 (see "File upload" for `/uploads`; without
+`file-upload` it answers 404 after the CORS check, as soju does).  nhooyr.io/websocket's rules are kept: HTTP/1.1, a GET with `Connection:
 Upgrade` and `Upgrade: websocket`, version 13, a key (426, 405 and 400
 otherwise); the Origin must be the request's host or match an `http-origin`
 pattern (`Soja.Glob`, Go's `path.Match`, compared without regard to case), else
@@ -493,6 +492,35 @@ memory; `Shutdown` closes the descriptor), so resets used up the process's
 descriptors.  A connection that fails setup is now dropped and the loop goes
 on; the end-to-end test sends more resetting connections than the default
 descriptor limit and checks the listeners still serve.
+
+### File upload (`Soja.Fileupload`, `file-upload fs <dir>`)
+
+`fileupload/`: the `/uploads` handler of the HTTP listeners (`https://`,
+`http+insecure://`, `http+unix://`), and the `soju.im/FILEHOST` ISUPPORT token
+(`<http-ingress>/uploads`, as before).  `POST /uploads` with a Basic
+`Authorization` (the user's password, checked as SASL PLAIN is) stores the body
+as `<dir>/<user>/<random>-<name>` (directories 0700, files 0600, created with
+`O_EXCL`) and answers 201 with the address in `Location`; `GET`/`HEAD`
+`/uploads/<user>/<file>` send it back (`Content-Disposition` inline for the
+types a browser may show safely, `attachment` for the rest; SVG and HTML are
+never inline); `OPTIONS` answers 204; CORS as in Go.  The limit is 50 MiB.  The
+type is read from the extension (Go's built-in table) and else from the content
+(`http.DetectContentType`: the common signatures).  `Content-Type` and
+`Content-Disposition` go through `grammars/media-type.hbnf`, a `Range` header
+through `grammars/http-range.hbnf`.
+
+Deviations: a chunked request body is refused (411); conditional requests
+(`If-Modified-Since`, ...) are not handled; several byte ranges at once are
+answered with the whole file (Go sends multipart/byteranges); a Bearer token
+is refused (there is no oauth2 driver); the system's `mime.types` is not read,
+so fewer extensions are known (the rest are sniffed); an RFC 2231 continuation
+(`filename*0=`) is not joined; the sniffing covers the usual signatures, not all
+of WHATWG's; `O_EXCL`/`O_CREAT` are the Linux values.  A request over 50 MiB
+is answered at once, without reading it.  Fixed soju bug: SB-19.
+
+Also fixed on the way (soja's own): the default `http-ingress` was made from
+the machine's name when the defaults were created, not from the `hostname`
+directive, so `FILEHOST` named the wrong host.
 
 ### Prometheus metrics (`Soja.Metrics`, `http+prometheus://`)
 
@@ -545,7 +573,7 @@ What it refuses or changes, loudly:
 - Auth drivers other than `internal` (pam, oauth2) are a startup error: a
   bouncer that cannot check passwords must not start as if it could.
 - All three message stores (`memory`, `db`, `fs`) work;
-  `file-upload` is ignored, with a warning; only the SQLite database driver.
+  only the SQLite database driver.
 - SIGHUP re-reads the TLS certificate and key (`Server.Reload_TLS`): new TLS
   connections use the new pair, open ones keep theirs.  A pair that does not
   load (missing, unparsable, mismatched) fails the reload, as in Go, and the

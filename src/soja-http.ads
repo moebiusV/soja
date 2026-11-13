@@ -9,6 +9,7 @@
 pragma Ada_2022;
 
 with Ada.Containers.Vectors;
+with Ada.Streams;
 with Ada.Strings.Unbounded;
 
 with Soja.Byte_Stream;
@@ -66,6 +67,34 @@ package Soja.Http is
       Status  : Positive;
       Fields  : String := "";
       Content : String := "");
+
+   --  The status line and the header fields, then the empty line: for a
+   --  response whose body is sent after, in pieces.  Fields has its own
+   --  Content-Length (and Connection: close).
+   procedure Write_Head
+     (S      : in out Soja.Byte_Stream.Stream'Class;
+      Status : Positive;
+      Fields : String := "");
+
+   --  The body of a request: its Content-Length (a request without one has no
+   --  body).  A chunked body is not read (Chunked is True: the caller refuses
+   --  it); a bad Content-Length is Valid = False.
+   type Body_Cursor is record
+      Pending   : Unbounded_String;     --  bytes read with the head, not used
+      Remaining : Long_Long_Integer := 0;
+      Length    : Long_Long_Integer := 0;
+      Valid     : Boolean := True;
+      Chunked   : Boolean := False;
+   end record;
+
+   function Open_Body (R : Request) return Body_Cursor;
+
+   --  The next bytes of the body (Last < Buf'First at its end).
+   procedure Read_Body
+     (S    : in out Soja.Byte_Stream.Stream'Class;
+      C    : in out Body_Cursor;
+      Buf  : out Ada.Streams.Stream_Element_Array;
+      Last : out Ada.Streams.Stream_Element_Offset);
 
    --  http.Error: a plain-text response, Message and a line feed.
    procedure Write_Error

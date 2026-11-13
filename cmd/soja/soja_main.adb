@@ -149,10 +149,6 @@ procedure Soja_Main is
             Cfg.TLS_Key := Raw.TLS.Key_Path;
          end if;
 
-         if Raw.File_Upload /= null then
-            Log.Print ("warning: file-upload is not supported by soja yet; "
-                       & "ignoring it");
-         end if;
 
          Cfg.Hostname := Raw.Hostname;
          Cfg.Title := Raw.Title;
@@ -178,7 +174,10 @@ procedure Soja_Main is
          Cfg.Upstream_User_IPs := Raw.Upstream_User_IPs;
          Cfg.Disable_Inactive_Users_Delay := Raw.Disable_Inactive_Users_Delay;
          Cfg.Enable_Users_On_Auth := Raw.Enable_Users_On_Auth;
-         Cfg.Has_File_Uploader := False;
+         Cfg.Has_File_Uploader := Raw.File_Upload /= null;
+         if Raw.File_Upload /= null then
+            Cfg.File_Upload_Dir := Raw.File_Upload.Source;
+         end if;
          Result.Cfg := Cfg;
       end;
       return Result;

@@ -513,6 +513,90 @@ def main():
     r.close()
 
     # --- 7: restart: reconnect and rejoin the saved channels once ---
+    log("file upload")
+    import base64
+    import http.client
+
+    c = bouncer()
+    c.drain(1.5)
+    filehost = [l for l in c.seen if "soju.im/FILEHOST=" in l]
+    c.close()
+    if not filehost or "soju.im/FILEHOST=https://soja.example.net/uploads" \
+            not in filehost[0]:
+        raise Fail(f"ISUPPORT FILEHOST missing or wrong: {filehost}")
+
+    def http_call(method, path, body=None, headers=None, user="alice",
+                  password="secret"):
+        conn = http.client.HTTPConnection("127.0.0.1", 8082, timeout=10)
+        h = dict(headers or {})
+        if user is not None:
+            h["Authorization"] = "Basic " + base64.b64encode(
+                f"{user}:{password}".encode()).decode()
+        conn.request(method, path, body=body, headers=h)
+        r = conn.getresponse()
+        data = r.read()
+        out = (r.status, dict((k.lower(), v) for k, v in r.getheaders()), data)
+        conn.close()
+        return out
+
+    payload = os.urandom(3_000_000) + b"end"
+    st, hd, _ = http_call("POST", "/uploads", payload, {
+        "Content-Type": "application/octet-stream",
+        "Content-Disposition": 'attachment; filename="my photo.png"'})
+    if st != 201 or not hd["location"].startswith("/uploads/alice/") \
+            or not hd["location"].endswith("-my%20photo.png"):
+        raise Fail(f"upload: {st} {hd}")
+    loc = hd["location"]
+    st, hd, data = http_call("GET", loc, user=None)
+    if st != 200 or data != payload:
+        raise Fail(f"download: {st} {len(data)} bytes, wanted {len(payload)}")
+    if hd["content-type"] != "image/png" \
+            or not hd["content-disposition"].startswith("inline") \
+            or 'filename="my photo.png"' not in hd["content-disposition"] \
+            or hd["content-length"] != str(len(payload)) \
+            or hd["accept-ranges"] != "bytes":
+        raise Fail(f"download headers: {hd}")
+    if "sandbox" not in hd["content-security-policy"]:
+        raise Fail(f"no CSP: {hd}")
+    st, hd, data = http_call("GET", loc, headers={"Range": "bytes=10-19"},
+                             user=None)
+    if st != 206 or data != payload[10:20] \
+            or hd["content-range"] != f"bytes 10-19/{len(payload)}":
+        raise Fail(f"range: {st} {hd} {data!r}")
+    st, hd, data = http_call("HEAD", loc, user=None)
+    if st != 200 or data != b"" or hd["content-length"] != str(len(payload)):
+        raise Fail(f"head: {st} {hd}")
+    st, _, _ = http_call("GET", loc, headers={"Range": "bytes=999999999-"},
+                         user=None)
+    if st != 416:
+        raise Fail(f"unsatisfiable range: {st}")
+    # who may upload
+    if http_call("POST", "/uploads", b"x", user=None)[0] != 401:
+        raise Fail("upload without credentials")
+    if http_call("POST", "/uploads", b"x", password="nope")[0] != 403:
+        raise Fail("upload with a wrong password")
+    if http_call("GET", "/uploads/alice/../../etc/passwd", user=None)[0] != 404:
+        raise Fail("path traversal")
+    # CORS: the origin of the request's host, a foreign one, a pattern
+    st, hd, _ = http_call("OPTIONS", "/uploads", user=None,
+                          headers={"Origin": "http://127.0.0.1:8082"})
+    if st != 204 or hd.get("access-control-allow-origin") \
+            != "http://127.0.0.1:8082" or hd.get("vary") != "Origin":
+        raise Fail(f"CORS: {st} {hd}")
+    if http_call("OPTIONS", "/uploads", user=None,
+                 headers={"Origin": "https://evil.example"})[0] != 403:
+        raise Fail("CORS for a foreign origin")
+    # on disk: the user's directory is private
+    base = os.path.join(DIR, "uploads", "alice")
+    files = os.listdir(base)
+    if len(files) != 1 or not files[0].endswith("-my photo.png"):
+        raise Fail(f"files on disk: {files}")
+    if os.stat(base).st_mode & 0o777 != 0o700 \
+            or os.stat(os.path.join(base, files[0])).st_mode & 0o777 != 0o600:
+        raise Fail("upload modes")
+    if os.path.getsize(os.path.join(base, files[0])) != len(payload):
+        raise Fail("size on disk")
+
     log("Prometheus metrics")
     import urllib.request
 

@@ -59,6 +59,7 @@ listen http+insecure://127.0.0.1:8082
 listen wss://127.0.0.1:8443
 listen ws+unix://$D/ws.sock
 listen http+prometheus://localhost:9100
+file-upload fs $D/uploads
 http-origin *.allowed.example
 tls $D/tls.crt $D/tls.key
 hostname soja.example.net

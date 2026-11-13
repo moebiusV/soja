@@ -73,6 +73,11 @@ begin
       if To_String (S.Hostname) /= "example.org" then
          raise Program_Error with "hostname wrong";
       end if;
+      --  The default http-ingress follows the configured hostname.
+      if To_String (S.HTTP_Ingress) /= "https://example.org" then
+         raise Program_Error with "http-ingress default wrong: "
+           & To_String (S.HTTP_Ingress);
+      end if;
       if S.TLS = null
         or else To_String (S.TLS.all.Cert_Path) /= "cert.pem"
         or else To_String (S.TLS.all.Key_Path) /= "key.pem"

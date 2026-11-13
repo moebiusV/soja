@@ -1,0 +1,25 @@
+; http-range.hbnf -- the value of a Range request header, for bytes (the part
+; of net/http's parseRange the upload handler uses):
+;
+;     bytes=0-499          bytes=500-          bytes=-200          bytes=0-0,-1
+;
+; A range is "first-last", "first-" (to the end) or "-suffix" (the last bytes);
+; blanks may surround each.  What the numbers mean for a file of a given size
+; is the caller's (soja-fileupload.adb).
+;
+; The `&DIGIT` in `from-to` consumes nothing; it makes the two kinds of range
+; records in the tree, where rules of text and numbers alone could not be told
+; apart.
+
+prefix none
+whitespace none
+include "common.hbnf"
+
+byte-ranges = "bytes=" range-spec *( "," range-spec )
+range-spec  = ows ( from-to | suffix ) ows
+from-to     = &DIGIT first "-" [ last ]
+suffix      = "-" amount
+first       = int
+last        = int
+amount      = int
+ows         = *WSP

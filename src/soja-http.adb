@@ -222,13 +222,24 @@ package body Soja.Http is
 
    function Reason (Status : Positive) return String is
      (case Status is
+         when 100 => "Continue",
          when 101 => "Switching Protocols",
          when 200 => "OK",
+         when 201 => "Created",
+         when 204 => "No Content",
+         when 206 => "Partial Content",
          when 400 => "Bad Request",
          when 403 => "Forbidden",
          when 404 => "Not Found",
+         when 401 => "Unauthorized",
          when 405 => "Method Not Allowed",
+         when 411 => "Length Required",
+         when 413 => "Request Entity Too Large",
+         when 415 => "Unsupported Media Type",
+         when 416 => "Requested Range Not Satisfiable",
          when 426 => "Upgrade Required",
+         when 500 => "Internal Server Error",
+         when 501 => "Not Implemented",
          when others => "Status");
 
    procedure Write_Response
@@ -253,6 +264,70 @@ package body Soja.Http is
             & CRLF & Content));
       end if;
    end Write_Response;
+
+   procedure Write_Head
+     (S      : in out Soja.Byte_Stream.Stream'Class;
+      Status : Positive;
+      Fields : String := "")
+   is
+      Code : constant String :=
+        Ada.Strings.Fixed.Trim (Positive'Image (Status), Ada.Strings.Left);
+   begin
+      S.Send (To_Bytes
+        ("HTTP/1.1 " & Code & " " & Reason (Status) & CRLF & Fields & CRLF));
+   end Write_Head;
+
+   function Open_Body (R : Request) return Body_Cursor is
+      Text    : constant String := Get (R, "content-length");
+      Chunked : constant Boolean :=
+        Has_Token (R, "transfer-encoding", "chunked");
+      Digits_Only : constant Boolean :=
+        Text'Length in 1 .. 18 and then (for all C of Text => C in '0' .. '9');
+   begin
+      return (Pending   => R.Leftover,
+              Remaining => (if Digits_Only then Long_Long_Integer'Value (Text)
+                            else 0),
+              Length    => (if Digits_Only then Long_Long_Integer'Value (Text)
+                            else 0),
+              Valid     => Text = "" or else Digits_Only,
+              Chunked   => Chunked);
+   end Open_Body;
+
+   procedure Read_Body
+     (S    : in out Soja.Byte_Stream.Stream'Class;
+      C    : in out Body_Cursor;
+      Buf  : out Stream_Element_Array;
+      Last : out Stream_Element_Offset)
+   is
+      Want : constant Stream_Element_Offset :=
+        Stream_Element_Offset'Min
+          (Buf'Length, Stream_Element_Offset (C.Remaining));
+   begin
+      Last := Buf'First - 1;
+      if Want = 0 then
+         return;
+      end if;
+      if Length (C.Pending) > 0 then
+         declare
+            N : constant Natural :=
+              Natural'Min (Length (C.Pending), Natural (Want));
+         begin
+            for I in 1 .. N loop
+               Buf (Buf'First + Stream_Element_Offset (I - 1)) :=
+                 Stream_Element (Character'Pos (Element (C.Pending, I)));
+            end loop;
+            Delete (C.Pending, 1, N);
+            Last := Buf'First + Stream_Element_Offset (N) - 1;
+         end;
+      else
+         S.Receive (Buf (Buf'First .. Buf'First + Want - 1), Last);
+      end if;
+      if Last >= Buf'First then
+         C.Remaining := C.Remaining - Long_Long_Integer (Last - Buf'First + 1);
+      else
+         raise Bad_Request with "unexpected EOF in the request body";
+      end if;
+   end Read_Body;
 
    procedure Write_Error
      (S : in out Soja.Byte_Stream.Stream'Class;

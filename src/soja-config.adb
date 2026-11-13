@@ -366,7 +366,7 @@ package body Soja.Config is
                            Source => Null_Unbounded_String),
          File_Upload   => null,
          HTTP_Origins  => String_Vectors.Empty_Vector,
-         HTTP_Ingress  => "https://" & Host,
+         HTTP_Ingress  => Null_Unbounded_String,   --  see Parse
          Accept_Proxy_IPs => IPNet_Vectors.Empty_Vector,
          Max_User_Networks => -1,
          Upstream_User_IPs => IPNet_Vectors.Empty_Vector,
@@ -595,6 +595,12 @@ package body Soja.Config is
             end if;
             Srv.Msg_Store := (Driver => Driver, Source => Source);
          end;
+      end if;
+
+      --  Without `http-ingress` it is the configured hostname's (the machine's
+      --  name when there is no `hostname` either).
+      if Length (Srv.HTTP_Ingress) = 0 then
+         Srv.HTTP_Ingress := "https://" & Srv.Hostname;
       end if;
 
       return Srv;

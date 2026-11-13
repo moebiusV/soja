@@ -23,7 +23,9 @@ LIST="ident-query Ident_Query
 proxy-v1 Proxy_V1
 service-words Service_Words
 http-head Http_Head
-znclog Znc_Line"
+znclog Znc_Line
+media-type Mime_Media
+http-range Http_Range"
 
 generate() {
     g=$1 pkg=$2

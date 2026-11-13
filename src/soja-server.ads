@@ -59,6 +59,8 @@ package Soja.Server is
       Auth_Driver       : Ada.Strings.Unbounded.Unbounded_String :=
         Ada.Strings.Unbounded.To_Unbounded_String ("internal");
       Has_File_Uploader : Boolean := False;
+      --  The `file-upload fs <dir>` directory, "" when there is none.
+      File_Upload_Dir   : Ada.Strings.Unbounded.Unbounded_String;
       --  The `tls` keypair (PEM paths), "" when there is none.  A new
       --  configuration with other paths takes effect at Reload_TLS.
       TLS_Cert          : Ada.Strings.Unbounded.Unbounded_String;

@@ -71,3 +71,5 @@ tests/dbstore_check
 tests/fsstore_check
 tests/web_check
 tests/metrics_check
+tests/mime_check
+tests/fileupload_check

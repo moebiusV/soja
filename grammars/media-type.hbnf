@@ -1,0 +1,37 @@
+; media-type.hbnf -- a header value of the form Go's mime.ParseMediaType reads
+; (Content-Type, Content-Disposition):
+;
+;     text/plain; charset=utf-8
+;     attachment; filename="my file.png"
+;     attachment; filename*=utf-8''my%20file.png
+;
+; A media type is a token, or two with a slash (Content-Disposition has just
+; "attachment"); the parameters follow after semicolons, each a token name, an
+; equals sign and a token or a quoted string (a backslash inside takes the next
+; character).  Blanks may surround the semicolons.  A trailing semicolon is
+; allowed, as in Go.
+;
+; The caller (soja-mime.adb) lower-cases the names, takes the backslashes off
+; the quoted strings, decodes an extended value (name*, RFC 2231) and refuses a
+; name used twice, as Go does.  (An RFC 2231 continuation, name*0, is not
+; joined.)
+;
+; The `&token-char` in `param` consumes nothing; it makes a parameter a record
+; in the tree, where a rule of text rules only would be one text.
+
+prefix none
+whitespace none
+include "common.hbnf"
+
+media     = mtype *( ows ";" ows param ) ows [ ";" ] ows
+mtype     = 1*token-char [ "/" 1*token-char ]
+param     = &token-char param-name "=" param-value
+param-name  = 1*token-char
+param-value = quoted | token
+quoted    = "\"" *( ~( "\"" | "\\" ) | "\\" rune ) "\""
+token     = 1*token-char
+ows       = *WSP
+
+token-char = ALPHA | DIGIT | "!" | "#" | "$" | "%" | "&" | "'" | "*" | "+"
+           | "-" | "." | "^" | "_" | "`" | "|" | "~"
+rune      = 0x00..0x10FFFF
