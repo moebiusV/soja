@@ -569,6 +569,7 @@ package body Soja.Core is
          end loop;
          Upc.Available_Channel_Modes := Soja.Irc.Modes.Std_Channel_Modes;
          Upc.Monitored := Flag_Maps.New_Map (Case_RFC1459);
+         Upc.Join_Retries := Join_Retry_Maps.New_Map (Case_RFC1459);
          Upc.Has_Desired_Nick := True;
       end return;
    end Connect_To_Upstream;
@@ -1056,6 +1057,7 @@ package body Soja.Core is
             UC.Channels.For_Each (Set_Members'Access);
             UC.Users.Set_Case_Mapping (CM);
             UC.Monitored.Set_Case_Mapping (CM);
+            UC.Join_Retries.Set_Case_Mapping (CM);
          end;
       end if;
 

@@ -109,6 +109,17 @@ package Soja.Core is
    package Kick_Maps is new Soja.Irc.Case_Mapping_Maps
      (Element => Kick_Info_Access, Null_Element => null);
 
+   --  A pending retry to join a channel that was full (ERR_CHANNELISFULL):
+   --  the backoff that spaces the attempts and the timer for the next one.
+   type Join_Retry is record
+      Backoff : Backoff_Access;
+      Timer   : Soja.Timers.Timer_Access;
+   end record;
+   type Join_Retry_Access is access all Join_Retry;
+
+   package Join_Retry_Maps is new Soja.Irc.Case_Mapping_Maps
+     (Element => Join_Retry_Access, Null_Element => null);
+
    ---------------------------
    --  downstreamRegistration --
    ---------------------------
@@ -239,6 +250,12 @@ package Soja.Core is
    end record;
 
    type Stop_Event is new Event with null record;
+
+   --  A join retry timer fired (soja-specific: channel-full retries).
+   type Retry_Join_Event is new Event with record
+      UC   : Upstream_Conn_Access;
+      Name : Unbounded_String;
+   end record;
 
    type Try_Regain_Nick_Event is new Event with record
       UC   : Upstream_Conn_Access;
@@ -390,6 +407,9 @@ package Soja.Core is
       Pending_Regain_Nick : Unbounded_String;
       Regain_Nick_Timer   : Soja.Timers.Timer_Access;
       Regain_Nick_Backoff : Backoff_Access;
+
+      --  Saved channels that were full when we tried to join them, by name.
+      Join_Retries : Join_Retry_Maps.Map;
    end record;
 
    type Upstream_Channel is tagged record

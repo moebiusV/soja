@@ -5,7 +5,8 @@ published by [ada-on-alpine]. The upstream Go source is pinned at
 `upstream/soju` (submodule). Keep the translation faithful: same structure
 and logic.  Wire-format quirks of irc.v4 stay (see below).  Clear bugs in soju
 itself are fixed, not copied (decided 2026-11-12), and each fix is recorded
-here under "Bugs in soju that soja fixes".
+here under "Bugs in soju that soja fixes" and, in PR-ready form, in
+`SOJU-BUGS.md` (each becomes its own upstream PR once soja is complete).
 
 ## Component map
 

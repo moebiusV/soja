@@ -22,6 +22,10 @@ package Soja.Irc.Numerics is
    ERR_NOPERMFORHOST     : constant String := "463";
    ERR_PASSWDMISMATCH    : constant String := "464";
    ERR_YOUREBANNEDCREEP  : constant String := "465";
+   ERR_CHANNELISFULL     : constant String := "471";
+   ERR_INVITEONLYCHAN    : constant String := "473";
+   ERR_BANNEDFROMCHAN    : constant String := "474";
+   ERR_BADCHANNELKEY     : constant String := "475";
    ERR_BADCHANMASK       : constant String := "476";
    ERR_USERSDONTMATCH    : constant String := "502";
    ERR_MONLISTFULL       : constant String := "734";
