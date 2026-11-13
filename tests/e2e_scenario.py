@@ -59,10 +59,11 @@ def bouncer(nick="alice", user="alice", password="secret"):
     return c
 
 
-def bouncer_history(nick="alice", user="alice/test", password="secret"):
-    """A client that asked for chat history (and what it needs)."""
+def bouncer_history(nick="alice", user="alice/test", password="secret",
+                    caps="draft/chathistory batch server-time"):
+    """A client that asked for some capabilities (chat history by default)."""
     c = Client(BOUNCER, f"history:{user}")
-    c.send("CAP REQ :draft/chathistory batch server-time")
+    c.send(f"CAP REQ :{caps}")
     c.expect(r"CAP \S+ ACK")
     c.send(f"PASS {password}")
     c.send(f"NICK {nick}")
@@ -343,6 +344,21 @@ def main():
     h.expect(r"BATCH \+\S+ soju.im/search")
     h.close()
 
+    # --- read markers: stored, replayed to a new client, kept across restarts
+    log("read markers")
+    marker = "timestamp=2026-01-02T03:04:05.000Z"
+    r = bouncer_history(caps="draft/read-marker")
+    r.send("MARKREAD #u")
+    r.expect(r"MARKREAD #u \*")
+    r.send(f"MARKREAD #u {marker}")
+    r.expect(rf"MARKREAD #u {marker}")
+    r.send("MARKREAD #u timestamp=2025-01-01T00:00:00.000Z")   # older: ignored
+    r.expect(rf"MARKREAD #u {marker}")
+    r.close()
+    r = bouncer_history(caps="draft/read-marker")
+    r.expect(rf"MARKREAD #u {marker}")      # replayed with the channel
+    r.close()
+
     # --- 7: restart: reconnect and rejoin the saved channels once ---
     log("restart soja")
     a.close()
@@ -359,6 +375,9 @@ def main():
     if "history one" not in got or "history two" not in got:
         raise Fail(f"history was lost across the restart: {got}")
     h.close()
+    r = bouncer_history(caps="draft/read-marker")
+    r.expect(rf"MARKREAD #u {marker}")      # the marker is in the database too
+    r.close()
     log("all good: " + joined)
 
 

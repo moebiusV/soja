@@ -2140,6 +2140,155 @@ package body Soja.Core.Downstream_Commands is
    end Cmd_Search;
 
    ----------------------------------------------------------------------
+   --  READ, MARKREAD
+   ----------------------------------------------------------------------
+
+   function Cmd_Read
+     (DC : not null Downstream_Conn_Access; M : Message)
+      return Irc_Error_Result
+   is
+      use type Ada.Calendar.Time;
+      use type Soja.Database.Read_Receipt_Access;
+      Cmd  : constant String := To_String (M.Command);
+      PR   : constant Params_Result := Parse_Message_Params (M, 1);
+   begin
+      if not PR.Ok then
+         return FAIL ([Cmd, "NEED_MORE_PARAMS", "Missing parameters"]);
+      end if;
+
+      declare
+         Target   : constant String := Param (M, 0);
+         Criteria : constant String :=
+           (if M.Params.Length > 1 then Param (M, 1) else "");
+      begin
+         --  We don't save read receipts for our service.
+         if Fold (DC, Target) = Service_Nick_CM then
+            declare
+               Reply : Message := Make (Cmd, [Target, "*"]);
+            begin
+               Reply.Prefix := new Prefix'(Prefix_Of (DC));
+               Send_Message (DC, Reply);
+            end;
+            return Success;
+         end if;
+
+         if DC.Network = null then
+            return FAIL ([Cmd, "INTERNAL_ERROR", Target,
+                          "Cannot set read markers on bouncer connection"]);
+         end if;
+
+         declare
+            Net       : constant Network_Access := DC.Network;
+            Target_CM : constant String :=
+              Soja.Irc.Case_Mapping.Fold (Net.Casemap, Target);
+            Receipt   : Soja.Database.Read_Receipt :=
+              (Target => To_Unbounded_String (Target_CM),
+               Timestamp => Soja.Database.Null_Time, others => <>);
+            Broadcast : Boolean := False;
+         begin
+            begin
+               declare
+                  Stored : constant Soja.Database.Read_Receipt_Access :=
+                    Soja.Database.Get_Read_Receipt
+                      (DB_Of (DC).all, Net.Network_Record.ID, Target_CM);
+               begin
+                  if Stored /= null then
+                     Receipt := Stored.all;
+                  end if;
+               end;
+            exception
+               when E : Soja.Database.Database_Error =>
+                  DC.Logger.Print
+                    ("failed to get the read receipt for "
+                     & Soja.Irc.Helpers.Quote (Target) & ": "
+                     & Ada.Exceptions.Exception_Message (E));
+                  return FAIL ([Cmd, "INTERNAL_ERROR", Target,
+                                "Internal error"]);
+            end;
+
+            if Criteria /= "" then
+               --  TODO (Go): support msgid criteria.
+               declare
+                  Eq : constant Natural :=
+                    Ada.Strings.Fixed.Index (Criteria, "=");
+               begin
+                  if Eq = 0
+                    or else Criteria (Criteria'First .. Eq - 1) /= "timestamp"
+                  then
+                     return FAIL ([Cmd, "INVALID_PARAMS", Criteria,
+                                   "Unknown criteria"]);
+                  end if;
+
+                  declare
+                     Valid : Boolean;
+                     Stamp : Ada.Calendar.Time :=
+                       Soja.Irc.Helpers.Parse_Server_Time
+                         (Criteria (Eq + 1 .. Criteria'Last), Valid);
+                     Now   : constant Ada.Calendar.Time := Ada.Calendar.Clock;
+                  begin
+                     if not Valid then
+                        return FAIL ([Cmd, "INVALID_PARAMS", Criteria,
+                                      "Invalid criteria"]);
+                     end if;
+                     if Stamp > Now then
+                        Stamp := Now;
+                     end if;
+                     if Receipt.Timestamp < Stamp then
+                        Receipt.Timestamp := Stamp;
+                        begin
+                           Soja.Database.Store_Read_Receipt
+                             (DB_Of (DC).all, Net.Network_Record.ID, Receipt);
+                        exception
+                           when E : Soja.Database.Database_Error =>
+                              DC.Logger.Print
+                                ("failed to store receipt for "
+                                 & Soja.Irc.Helpers.Quote (Target) & ": "
+                                 & Ada.Exceptions.Exception_Message (E));
+                              return FAIL ([Cmd, "INTERNAL_ERROR", Target,
+                                            "Internal error"]);
+                        end;
+                        Broadcast := True;
+                     end if;
+                  end;
+               end;
+            end if;
+
+            declare
+               Stamp_Str : constant String :=
+                 (if Receipt.Timestamp = Soja.Database.Null_Time then "*"
+                  else "timestamp="
+                       & Soja.Irc.Xirc.Format_Server_Time (Receipt.Timestamp));
+            begin
+               for D of Downstreams (Net) loop
+                  if Broadcast or else D.ID = DC.ID then
+                     declare
+                        Out_Msg : Message := Make
+                          ((if Soja.Irc.Cap_Registry.Is_Enabled
+                                 (D.Caps, "draft/read-marker")
+                            then "MARKREAD" else "READ"),
+                           [Target, Stamp_Str]);
+                     begin
+                        Out_Msg.Prefix := new Prefix'(Prefix_Of (D));
+                        Send_Message (D, Out_Msg);
+                     end;
+                  end if;
+               end loop;
+
+               --  A marker past the time of a pending push target clears it.
+               --  (The web push notification soju then sends is not ported.)
+               if Broadcast and then Net.Push_Targets.Has (Target)
+                 and then not (Receipt.Timestamp
+                               < Net.Push_Targets.Get (Target))
+               then
+                  Net.Push_Targets.Del (Target);
+               end if;
+            end;
+         end;
+      end;
+      return Success;
+   end Cmd_Read;
+
+   ----------------------------------------------------------------------
    --  The dispatch
    ----------------------------------------------------------------------
 
@@ -2200,6 +2349,8 @@ package body Soja.Core.Downstream_Commands is
          return Cmd_Chat_History (DC, M);
       elsif Cmd = "SEARCH" then
          return Cmd_Search (DC, M);
+      elsif Cmd = "READ" or else Cmd = "MARKREAD" then
+         return Cmd_Read (DC, M);
       end if;
 
       DC.Logger.Debug ("unhandled message: " & Image (M));

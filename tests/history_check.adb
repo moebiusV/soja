@@ -34,6 +34,7 @@ with Soja.User;
 procedure History_Check is
    package SD renames Soja.Database;
    use type Ada.Containers.Count_Type;
+   use type SD.Read_Receipt_Access;
 
    procedure Check (Cond : Boolean; What : String) is
    begin
@@ -493,6 +494,140 @@ begin
       Check (Has (Error_Of (DC, "SEARCH in=#chat;after=yesterday"),
                   "INVALID_PARAMS after :Invalid criteria"), "bad time");
       Check (Error_Of (DC, "SEARCH")(1 .. 3) = "461", "SEARCH needs attributes");
+   end;
+
+   -------------------------------------------------------------------
+   --  READ and MARKREAD
+   -------------------------------------------------------------------
+   declare
+      use type Ada.Calendar.Time;
+      Past  : constant Ada.Calendar.Time := Ada.Calendar.Clock - 7200.0;
+      function Stamp (Seconds : Duration) return String is
+        (Soja.Irc.Xirc.Format_Server_Time (Past + Seconds));
+
+      D2_Log : Recorder_Access;
+      D2     : constant Downstream_Conn_Access := New_DC (U, Net, 7, D2_Log);
+      Mark1, Mark2, MarkB : Natural;
+
+      procedure Begin_Query is
+      begin
+         delay 0.2;
+         Mark1 := DC_Log.Count;
+         Mark2 := D2_Log.Count;
+         MarkB := Bnc_Log.Count;
+      end Begin_Query;
+
+      function Last_Of (R : Recorder_Access; Mark : Natural) return String is
+      begin
+         delay 0.25;
+         return (if R.Count > Mark then R.Line (R.Count) else "");
+      end Last_Of;
+
+      function Stored return String is
+         R : constant SD.Read_Receipt_Access :=
+           SD.Get_Read_Receipt (DB.all, Net.Network_Record.ID, "#chat");
+      begin
+         return (if R = null then "" else Soja.Irc.Xirc.Format_Server_Time
+                                           (R.Timestamp));
+      end Stored;
+   begin
+      U.Downstream_Conns.Append (D2);
+      Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "draft/read-marker", True);
+      Soja.Irc.Cap_Registry.Set_Enabled (D2.Caps, "soju.im/read", True);
+
+      --  Nothing stored yet: "*".
+      Begin_Query;
+      Ok (DC, "MARKREAD #chat");
+      Check (Last_Of (DC_Log, Mark1) = ":alice_!~u@1.2.3.4 MARKREAD #chat *",
+             "no marker yet: " & Last_Of (DC_Log, Mark1));
+      Check (D2_Log.Count = Mark2, "a query is answered to the asker alone");
+
+      --  Setting one: stored, sent to every client of the network, each in
+      --  the dialect it speaks (MARKREAD, or READ for soju.im/read).
+      Begin_Query;
+      Ok (DC, "MARKREAD #chat timestamp=" & Stamp (10.0));
+      Check (Last_Of (DC_Log, Mark1)
+             = ":alice_!~u@1.2.3.4 MARKREAD #chat timestamp=" & Stamp (10.0),
+             "the asker gets the new marker: " & Last_Of (DC_Log, Mark1));
+      Check (Last_Of (D2_Log, Mark2)
+             = ":alice_!~u@1.2.3.4 READ #chat timestamp=" & Stamp (10.0),
+             "another client gets it as READ: " & Last_Of (D2_Log, Mark2));
+      Check (Bnc_Log.Count = MarkB, "not the bouncer connection");
+      Check (Stored = Stamp (10.0), "stored: " & Stored);
+
+      --  An older marker changes nothing and is not broadcast.
+      Begin_Query;
+      Ok (DC, "READ #chat timestamp=" & Stamp (5.0));
+      Check (Last_Of (DC_Log, Mark1)
+             = ":alice_!~u@1.2.3.4 MARKREAD #chat timestamp=" & Stamp (10.0),
+             "the asker is told the marker it has");
+      Check (D2_Log.Count = Mark2, "and nobody else");
+      Check (Stored = Stamp (10.0), "still the newer one");
+
+      --  A newer one, with the target in another case.
+      Begin_Query;
+      Ok (DC, "MARKREAD #CHAT timestamp=" & Stamp (20.0));
+      Check (Stored = Stamp (20.0), "stored under the case-mapped name");
+      Check (Has (Last_Of (D2_Log, Mark2), "READ #CHAT timestamp="),
+             "the target is reported as the client wrote it");
+
+      --  A time in the future is clamped to now.
+      Begin_Query;
+      Ok (DC, "MARKREAD #chat timestamp="
+              & Soja.Irc.Xirc.Format_Server_Time (Ada.Calendar.Clock + 86_400.0));
+      declare
+         Reply    : constant String := Last_Of (DC_Log, Mark1);
+         Tomorrow : constant String := Soja.Irc.Xirc.Format_Server_Time
+           (Ada.Calendar.Clock + 90_000.0);
+         Day      : constant String :=
+           Tomorrow (Tomorrow'First .. Tomorrow'First + 9);
+      begin
+         Check (Has (Reply, "MARKREAD #chat timestamp=")
+                and then not Has (Reply, "timestamp=" & Day),
+                "a future marker is clamped to now: " & Reply);
+      end;
+
+      --  A marker at or after a pending push target clears the target.
+      declare
+         Pending : constant Ada.Calendar.Time := Ada.Calendar.Clock - 60.0;
+      begin
+         Net.Push_Targets.Set ("#chat", Pending);
+         Ok (DC, "MARKREAD #chat timestamp="
+                 & Soja.Irc.Xirc.Format_Server_Time (Ada.Calendar.Clock));
+         Check (not Net.Push_Targets.Has ("#chat"), "the push target is cleared");
+      end;
+
+      --  The service keeps no markers.
+      Begin_Query;
+      Ok (DC, "MARKREAD BouncerServ timestamp=" & Stamp (1.0));
+      Check (Last_Of (DC_Log, Mark1) = ":alice_!~u@1.2.3.4 MARKREAD BouncerServ *",
+             "BouncerServ: always *");
+
+      --  Errors.
+      Check (Has (Error_Of (DC, "MARKREAD"),
+                  "FAIL MARKREAD NEED_MORE_PARAMS") , "needs a target");
+      Check (Has (Error_Of (DC, "READ"), "FAIL READ NEED_MORE_PARAMS"),
+             "READ too");
+      Check (Has (Error_Of (DC, "MARKREAD #chat msgid=abc"),
+                  "MARKREAD INVALID_PARAMS msgid=abc :Unknown criteria"),
+             "only timestamp criteria");
+      Check (Has (Error_Of (DC, "MARKREAD #chat *"), "Unknown criteria"),
+             "* is not a criteria");
+      Check (Has (Error_Of (DC, "MARKREAD #chat timestamp=garbage"),
+                  "INVALID_PARAMS timestamp=garbage :Invalid criteria"),
+             "bad time");
+      Soja.Irc.Cap_Registry.Set_Enabled (Bnc.Caps, "draft/read-marker", True);
+      Check (Has (Error_Of (Bnc, "MARKREAD #chat"),
+                  "MARKREAD INTERNAL_ERROR #chat :Cannot set read markers on "
+                  & "bouncer connection"), "needs a network");
+      --  Without either capability a client may still send the command (the
+      --  capability only decides what it is sent back): it just hears nothing.
+      Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "draft/read-marker", False);
+      Begin_Query;
+      Check (Error_Of (DC, "MARKREAD #chat") = "",
+             "a client without the capability can still ask");
+      Check (Last_Of (DC_Log, Mark1) = "" or else DC_Log.Count = Mark1,
+             "and is sent nothing");
    end;
 
    for I in 1 .. N_Conns loop

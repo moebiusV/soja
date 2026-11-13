@@ -350,8 +350,7 @@ BETWEEN; not AROUND, as in Go) and `SEARCH`, in
   letter, digit or private-use character (via `Ada.Wide_Wide_Characters`, not
   Go's `unicode.In`: marks and the odd number category differ).
 - The file store (`message-store fs`) is not ported: it falls back to the
-  memory store, with a warning.  `READ`/`MARKREAD` (the read-marker commands)
-  are still to do.
+  memory store, with a warning.
 - `gnatcoll-db` needed a fix first: `Close` finalized every statement SQLite
   listed on the connection, including those an FTS5 table owns, so closing any
   connection with an FTS5 table crashed.  The aport carries the patch
@@ -360,6 +359,21 @@ BETWEEN; not AROUND, as in Go) and `SEARCH`, in
   that package.
 - Fixed soju quirks: SB-15 (targets with only events listed with the zero
   time) and SB-16 (`SEARCH` fails when its text has no word).
+
+### Read markers (`READ` / `MARKREAD`)
+
+`Cmd_Read` in `Soja.Core.Downstream_Commands` (`downstream.go`'s `READ`,
+`MARKREAD`): the position up to which a client has read a target, kept per
+network and target in the `ReadReceipt` table (already there) and shared by
+all of the user's clients on the network.  `MARKREAD <target>` asks; with
+`timestamp=<time>` it moves the marker forward (never back, never into the
+future: the time is clamped to now) and tells every client of the network, each
+in its own dialect (`MARKREAD` for `draft/read-marker`, `READ` for
+`soju.im/read`; a client with neither is sent nothing, the check being on what
+goes out, as in Go).  The channel replay on join already sent the marker.
+BouncerServ keeps none (always `*`).  Not ported: the web push notification
+soju sends when a marker clears a pending push target (the target is cleared,
+as in Go, but nothing is pushed; web push is not ported).
 
 ### Executables (`cmd/soja`, `cmd/sojadb`) and the end-to-end check
 
