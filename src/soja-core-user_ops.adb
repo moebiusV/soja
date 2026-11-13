@@ -8,10 +8,13 @@ with Soja.Core.Downstream_Helpers;
 with Soja.Core.Upstream_Dispatch;
 with Soja.Irc.Genmsg;
 with Soja.Irc.Helpers;
+with Soja.Msgstore;
 with Soja.Server;
 with Soja.User;
 
 package body Soja.Core.User_Ops is
+
+   use type Soja.Msgstore.Store_Access;
 
    use Soja.Irc.Messages;
    use Soja.Irc.Genmsg;
@@ -421,8 +424,25 @@ package body Soja.Core.User_Ops is
 
             Remove_Network (U, Old);
 
-            --  (The filesystem message store would be told about a rename
-            --  here; that store is not ported.)
+            --  The filesystem message store must be told when the network
+            --  is renamed, to move the history with it.
+            if U.Msg_Store /= null
+              and then U.Msg_Store.Supports_Rename_Network
+              and then Soja.Database.Get_Name (Updated.Network_Record)
+                       /= Soja.Database.Get_Name (Old.Network_Record)
+            then
+               begin
+                  U.Msg_Store.Rename_Network
+                    (Old.Network_Record, Updated.Network_Record);
+               exception
+                  when E : Soja.Msgstore.Store_Error =>
+                     Old.Logger.Print
+                       ("failed to update message store network name to "
+                        & Soja.Irc.Helpers.Quote
+                            (Soja.Database.Get_Name (Updated.Network_Record))
+                        & ": " & Ada.Exceptions.Exception_Message (E));
+               end;
+            end if;
 
             --  This re-connects to the upstream server.
             Add_Network (U, Updated);
@@ -498,6 +518,9 @@ package body Soja.Core.User_Ops is
             end;
          end if;
          U.User_Record := Rec;
+         if U.Msg_Store /= null then
+            U.Msg_Store.User_Updated (Rec);
+         end if;
 
          if Nick_Updated then
             for Net of U.Networks loop

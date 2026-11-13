@@ -155,10 +155,10 @@ procedure Soja_Main is
 
          Cfg.Hostname := Raw.Hostname;
          Cfg.Title := Raw.Title;
-         --  The in-memory and the database stores are ported; the file one
-         --  is not.
+         --  The memory, database and file stores are all ported.
          if To_String (Raw.Msg_Store.Driver) /= "memory"
            and then To_String (Raw.Msg_Store.Driver) /= "db"
+           and then To_String (Raw.Msg_Store.Driver) /= "fs"
          then
             Log.Print ("warning: the "
                        & Quote (To_String (Raw.Msg_Store.Driver))

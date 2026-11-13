@@ -1,6 +1,7 @@
 pragma Ada_2022;
 
 with Ada.Containers;
+with Ada.Directories;
 with Ada.Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
@@ -12,7 +13,9 @@ with Soja.Core;              use Soja.Core;
 with Soja.Core.Service;      use Soja.Core.Service;
 with Soja.Database;
 with Soja.Database.Sqlite;
+with Soja.Irc.Messages;
 with Soja.Logging;
+with Soja.Msgstore.Fs;
 with Soja.Server;
 
 --  BouncerServ's commands.
@@ -418,6 +421,37 @@ begin
    Check (Has (Run ("server notice ""hello all"""), "sent to "), "broadcast");
    Check (Run ("server status", Admin => False)
           = "!you must be an admin to use this command", "admin only");
+
+   --  The file message store is told when a network is renamed: its
+   --  history moves with it.
+   declare
+      Root : constant String := "/tmp/soja-service-check-logs";
+      Net  : constant Network_Access := Get_Network (Alice, "foo");
+   begin
+      if Ada.Directories.Exists (Root) then
+         Ada.Directories.Delete_Tree (Root);
+      end if;
+      Alice.Msg_Store := Soja.Msgstore.Fs.New_Fs_Store (Root, Alice.User_Record);
+      declare
+         ID : constant String := Alice.Msg_Store.Append
+           (Net.Network_Record, "#x",
+            Soja.Irc.Messages.Parse_Message (":bob!u@h PRIVMSG #x :logged"));
+         pragma Unreferenced (ID);
+      begin
+         null;
+      end;
+      Check (Ada.Directories.Exists (Root & "/alice/foo/#x"), "logs of foo");
+      Check (Run ("network update foo -name renamed") = "updated network ""renamed""",
+             "rename a network");
+      Check (Ada.Directories.Exists (Root & "/alice/renamed/#x")
+             and then not Ada.Directories.Exists (Root & "/alice/foo"),
+             "the history moved with the network");
+      --  A network without logs renames without any complaint.
+      Check (Run ("network update renamed -name again") = "updated network ""again""",
+             "rename a network again");
+      Alice.Msg_Store.Close;
+      Ada.Directories.Delete_Tree (Root);
+   end;
 
    Soja.Bouncer.Shutdown (B, Timeout => 10.0);
    Ada.Text_IO.Put_Line ("ALL PASS");

@@ -349,8 +349,7 @@ BETWEEN; not AROUND, as in Go) and `SEARCH`, in
 - Search text is quoted word by word, as soju does; "word" is a Unicode
   letter, digit or private-use character (via `Ada.Wide_Wide_Characters`, not
   Go's `unicode.In`: marks and the odd number category differ).
-- The file store (`message-store fs`) is not ported: it falls back to the
-  memory store, with a warning.
+- The file store is the next section.
 - `gnatcoll-db` needed a fix first: `Close` finalized every statement SQLite
   listed on the connection, including those an FTS5 table owns, so closing any
   connection with an FTS5 table crashed.  The aport carries the patch
@@ -359,6 +358,33 @@ BETWEEN; not AROUND, as in Go) and `SEARCH`, in
   that package.
 - Fixed soju quirks: SB-15 (targets with only events listed with the zero
   time) and SB-16 (`SEARCH` fails when its text has no word).
+
+### The file message store (`message-store fs <path>`)
+
+`msgstore/fs.go` and `znclog`: `Soja.Msgstore.Fs` and `Soja.Msgstore.Znclog`.
+Messages are logged in ZNC's layout and format,
+`<root>/<user>/<network>/<target>/<year>-<month>-<day>.log`, one
+`[12:34:56] <nick> text` line each (days and times are local), so other tools
+can read and write the same logs.  A message's ID is its date and the byte
+offset of its line in that day's file.  It has chat history, search (a scan of
+the files, case-insensitive) and the network rename hook (`Update_Network`
+moves the directory).  As in soju: history walks day by day and gives up after
+100 days without a log; the targets are the directories and their time is the
+files' modification time (second granularity), and their names are the
+*escaped* names (`/` and `\` become `-`), which cannot be turned back.
+
+- Directories are created 0750 and files 0640 with `mkdir`/`creat` (less the
+  umask), not fixed afterwards.  All file access is through the C library: GNAT
+  refuses to open one file twice in different modes, and the store reads a
+  day's log while it has it open for appending.
+- `Znclog` splits lines at the first delimiter, like the Go code; it is not an
+  hbnf grammar (what follows a delimiter is free text that may contain it,
+  `<a> b> c`, which hbnf's lexer cannot express).  A line that does not start
+  with a time is an error that fails the whole read of that day, as in soju.
+- Search lower-cases Unicode text (`Ada.Wide_Wide_Characters`), not only ASCII.
+- Fixed soju quirks: SB-17 (rename of a network with no logs reported as an
+  error) and SB-18 (the store kept the user's nick from creation; it is told
+  of updates).
 
 ### Read markers (`READ` / `MARKREAD`)
 
@@ -391,8 +417,7 @@ What it refuses or changes, loudly:
   startup error.  `accept-proxy-ip` (PROXY protocol) works on the TCP listeners.
 - Auth drivers other than `internal` (pam, oauth2) are a startup error: a
   bouncer that cannot check passwords must not start as if it could.
-- The `fs` message store falls back to memory, with a warning (`memory` and
-  `db` work);
+- All three message stores (`memory`, `db`, `fs`) work;
   `file-upload` is ignored, with a warning; only the SQLite database driver.
 - SIGHUP re-reads the TLS certificate and key (`Server.Reload_TLS`): new TLS
   connections use the new pair, open ones keep theirs.  A pair that does not

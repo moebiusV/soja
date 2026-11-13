@@ -131,4 +131,12 @@ package body Soja.Msgstore is
       return Soja.Irc.Messages.Message_Vectors.Empty_Vector;
    end Search;
 
+   procedure Rename_Network
+     (S : in out Store; Old_Net, New_Net : Soja.Database.Network)
+   is
+      pragma Unreferenced (S, Old_Net, New_Net);
+   begin
+      raise Store_Error with "this store does not need network renames";
+   end Rename_Network;
+
 end Soja.Msgstore;

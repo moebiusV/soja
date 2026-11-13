@@ -340,9 +340,26 @@ def main():
            "timestamp=2100-01-01T00:00:00.000Z 10")
     h.expect(r"BATCH \+\S+ draft/chathistory-targets")
     h.expect(r"CHATHISTORY TARGETS #u ")
-    h.send("SEARCH in=#u;text=history")
+    h.send("SEARCH in=#u;text=HISTORY")        # any case
     h.expect(r"BATCH \+\S+ soju.im/search")
     h.close()
+
+    if os.environ.get("E2E_STORE") == "fs":
+        log("the log files (ZNC format) on disk")
+        net_dir = os.path.join(DIR, "logs", "alice", "test", "#u")
+        files = sorted(os.listdir(net_dir))
+        if not files or not all(re.fullmatch(r"\d{4}-\d\d-\d\d\.log", f)
+                                for f in files):
+            raise Fail(f"unexpected log files: {files}")
+        text = "".join(open(os.path.join(net_dir, f)).read() for f in files)
+        if not re.search(r"^\[\d\d:\d\d:\d\d\] <bob> history one$", text, re.M):
+            raise Fail(f"no ZNC-format line in the log: {text!r}")
+        if not re.search(r"^\[\d\d:\d\d:\d\d\] \*\*\* Joins: ", text, re.M):
+            raise Fail(f"no join event in the log: {text!r}")
+        d_mode = os.stat(net_dir).st_mode & 0o777
+        f_mode = os.stat(os.path.join(net_dir, files[0])).st_mode & 0o777
+        if d_mode != 0o750 or f_mode != 0o640:
+            raise Fail(f"modes: dir {d_mode:o} (want 750), file {f_mode:o} (want 640)")
 
     # --- read markers: stored, replayed to a new client, kept across restarts
     log("read markers")

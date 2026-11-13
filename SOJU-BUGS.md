@@ -28,6 +28,8 @@ one Go test per bug).  Add an entry the moment a bug is found; do not batch.
 | SB-10 | `service.go:1157` | `user delete <own name>` waits for the user's own goroutine and never returns | high |
 | SB-11 | `service.go:1408` | `channel update` with a bad value half-applies the change in memory | low |
 | SB-12 | `service.go:677` | `network delete -x` deletes the current network | low |
+| SB-17 | `msgstore/fs.go:557` | renaming a network that has no logs yet logs an error | low |
+| SB-18 | `user.go:539` | the file store keeps the user's nick from when it was created | low |
 | SB-15 | `database/sqlite.go:1130` | `CHATHISTORY TARGETS` lists a target that has only events, with the zero time | low |
 | SB-16 | `database/sqlite.go:1242` | `SEARCH` fails when its text has no word in it | low |
 | SB-14 | `server.go:725` | the inactive-user loop re-disables disabled users, says "deleted", and stops at the first failure | low |
@@ -629,3 +631,48 @@ could not be retrieved` (and logged as a failure) instead of an empty result.
 
 **Suggested patch.**  Text with no word cannot match anything: return an empty
 list when `quoteFTSQuery` gives `""`.
+
+## SB-17: renaming a network without logs is reported as a failure
+
+`msgstore/fs.go:557`, `RenameNetwork`, called from `updateNetwork`
+(`user.go:1099`) whenever the network's name changes:
+
+```go
+oldDir := filepath.Join(ms.root, EscapeFilename(oldNet.GetName()))
+newDir := ...
+if _, err := os.Stat(newDir); err == nil { return fmt.Errorf("destination %q already exists", newDir) }
+return os.Rename(oldDir, newDir)
+```
+
+**Effect.**  The network directory is created by the first message that is
+logged.  A network that has not logged anything yet (just created, never
+connected, or no traffic) has no directory, so `os.Rename` fails with "no such
+file or directory", and `updateNetwork` logs `failed to update message store
+network name to "...": rename ...: no such file or directory`.  Nothing is
+wrong, there was nothing to move; the log line is noise, and it hides real
+failures.
+
+**Suggested patch.**  `if _, err := os.Stat(oldDir); os.IsNotExist(err) { return nil }`
+before the rename.
+
+## SB-18: the file store keeps the nick the user had when it was created
+
+`user.go:539`:
+
+```go
+msgStore = msgstore.NewFSStore(srv.Config().MsgStorePath, record)
+...
+return &user{ User: *record, ... }
+```
+
+`newUser` copies the record into `u.User`; the store keeps the pointer to the
+original `record`.  `updateUser` (`user update -nick`, a changed realname,
+...) changes `u.User` only, so the store never sees it.
+
+**Effect.**  The store uses the user's nick to rewrite the entity of a private
+message *to us* when it reads it back (`znclog.UnmarshalLine`: the logs do not
+hold our own nick).  After the user changes their default nick, replayed
+private messages are addressed to the old nick until the bouncer restarts.
+
+**Suggested patch.**  Give the store the live record (`&u.User`) or tell it on
+update, as `eventUserUpdate` is handled.

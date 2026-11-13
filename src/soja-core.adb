@@ -23,6 +23,7 @@ with Soja.Irc.Genmsg;
 with Soja.Irc.Helpers;
 with Soja.Irc.Numerics;
 with Soja.Msgstore.Db;
+with Soja.Msgstore.Fs;
 with Soja.Msgstore.Memory;
 
 package body Soja.Core is
@@ -186,8 +187,10 @@ package body Soja.Core is
          elsif Driver = "db" then
             U.Msg_Store := Soja.Msgstore.Db.New_Db_Store
               (Soja.Server.DB (Srv.all));
+         elsif Driver = "fs" then
+            U.Msg_Store := Soja.Msgstore.Fs.New_Fs_Store
+              (To_String (Soja.Server.Config (Srv.all).Msg_Store_Path), Rec);
          end if;
-         --  "fs": not ported yet (no history for those users).
       end;
       return U;
    end New_User;

@@ -43,6 +43,11 @@ for n in a b; do
 done
 cp "$D/a.crt" "$D/tls.crt"; cp "$D/a.key" "$D/tls.key"
 
+# STORE=db (default) or fs: which message store to run the scenario with.
+STORE=${STORE:-db}
+if [ "$STORE" = fs ]; then STORE_LINE="message-store fs $D/logs"; else STORE_LINE="message-store db"; fi
+export E2E_STORE="$STORE"
+
 cat > "$D/soja.conf" <<EOT
 listen irc+insecure://127.0.0.1:6697
 listen ident://127.0.0.1:1130
@@ -51,7 +56,7 @@ listen unix://$D/irc.sock
 listen ircs://127.0.0.1:6698
 tls $D/tls.crt $D/tls.key
 hostname soja.example.net
-message-store db
+$STORE_LINE
 accept-proxy-ip localhost
 db sqlite3 $D/soja.db
 EOT

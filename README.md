@@ -22,13 +22,13 @@ The core bouncer works: `soja` accepts clients on `ircs://` and
 `irc+insecure://`, authenticates them against the SQLite database, connects to
 the upstream networks, and relays channels, messages, modes, topics, WHO /
 WHOIS / MONITOR, kicks and invites, with chat history (`CHATHISTORY`, `SEARCH`)
-kept in the database (`message-store db`); BouncerServ manages networks, channels,
+kept in the database or in ZNC-style log files (`message-store db` / `fs`); BouncerServ manages networks, channels,
 SASL and users; `sojadb` creates users and changes passwords.  An end-to-end
 check against a real ngircd (`tests/e2e.sh`) covers registering, adding a
 network, joining, messaging both ways, a kick that is not undone, replay on
 reconnect and a restart.
 
-Not there yet (see `PORTING.md`): the file message store, the WebSocket, HTTP and Prometheus listeners, file upload,
+Not there yet (see `PORTING.md`): the WebSocket, HTTP and Prometheus listeners, file upload,
 web push, PAM and OAuth 2 authentication, SASL EXTERNAL certificate
 generation.
 `soja` refuses to start with an authentication driver it cannot honour.

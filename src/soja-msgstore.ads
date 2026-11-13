@@ -13,8 +13,8 @@ with Soja.Irc.Messages;
 --  Go's optional interfaces (ChatHistoryStore, SearchStore), which Go finds by
 --  type assertion, are operations of Store here with Supports_* functions that
 --  say whether a store has them; a store that does not raises Store_Error if
---  they are called anyway.  (RenameNetworkStore comes with the filesystem
---  store.)  Go's `error` returns are Store_Error exceptions here.
+--  they are called anyway (likewise RenameNetworkStore).  Go's `error`
+--  returns are Store_Error exceptions here.
 package Soja.Msgstore is
 
    Store_Error : exception;
@@ -38,6 +38,17 @@ package Soja.Msgstore is
 
    --  Whether it implements SearchStore: Search below.
    function Supports_Search (S : Store) return Boolean is (False);
+
+   --  Whether it implements RenameNetworkStore: it must be told when a
+   --  network is renamed (the file store names a directory after it).
+   function Supports_Rename_Network (S : Store) return Boolean is (False);
+   procedure Rename_Network
+     (S : in out Store; Old_Net, New_Net : Soja.Database.Network);
+
+   --  The user's settings changed (soja-specific: the file store takes the
+   --  nick of messages sent to us from them).
+   procedure User_Updated (S : in out Store; User : Soja.Database.User)
+     is null;
 
    --  LastMsgID: the last message ID for the given network, entity and date.
    --  It may not refer to a valid message, but can be used in history
