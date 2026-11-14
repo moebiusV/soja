@@ -458,7 +458,7 @@ begin
                   "INVALID_PARAMS BETWEEN nope :Invalid second bound"),
              "bad second bound");
       Check (Has (Error_Of (Bnc, "CHATHISTORY LATEST #chat * 10"),
-                  "MESSAGE_ERROR LATEST #chat")
+                  "INVALID_TARGET LATEST #chat")
              and then Has (Error_Of (Bnc, "CHATHISTORY LATEST #chat * 10"),
                            "Cannot fetch chat history on bouncer connection"),
              "history needs a network");

@@ -371,8 +371,10 @@ begin
       Check (Wait (DC_Log, 1), "replies");
       Check (UC_Log.Has ("JOIN #keyed2 key2") and then UC_Log.Has ("JOIN #plain"),
              "keys are matched to channels");
-      Check (DC_Log.Has (" 403 notachannel :Not a channel name")
-             and then DC_Log.Has (" 476 "), "bad names are answered");
+      Check (DC_Log.Has (" 403 " & To_String (DC.Nick)
+                         & " notachannel :Not a channel name")
+             and then DC_Log.Has (" 476 " & To_String (DC.Nick) & " "),
+             "bad names are answered, with the client's nick");
       Check (Saved ("#one") /= null and then Saved ("#two") /= null
              and then To_String (Saved ("#keyed2").Key) = "key2",
              "channels are saved with their keys");
@@ -590,6 +592,15 @@ begin
              and then Line_Of (Bnc_Log, B + 2)
                       = ":localhost 315 * alice_ :End of /WHO list",
              "self WHO: " & Line_Of (Bnc_Log, B + 1));
+      --  An away client is marked G (the bouncer has no upstream to ask).
+      B := Bnc_Log.Count;
+      Bnc.Away := To_Unbounded_String ("lunch");
+      Ok (Bnc, "WHO alice_");
+      Check (Wait (Bnc_Log, B + 2)
+             and then Line_Of (Bnc_Log, B + 1)
+                      = ":localhost 352 * * alice 1.2.3.4 localhost alice_ G* :0 Alice Real",
+             "self WHO while away: " & Line_Of (Bnc_Log, B + 1));
+      Bnc.Away := Null_Unbounded_String;
       U.User_Record.Admin := False;
       B := Bnc_Log.Count;
       Ok (Bnc, "WHO alice_ %uhnar,7");
@@ -774,6 +785,18 @@ begin
       Check (Wait (UC_Log, N + 1)
              and then Last (UC_Log) = "PRIVMSG NickServ :IDENTIFY hunter2",
              "NickServ message is relayed");
+
+      --  A STATUSMSG sigil on the target does not hide NickServ (the message
+      --  itself goes upstream as it came).
+      UC.Available_Status_Msg := To_Unbounded_String ("@+");
+      N := UC_Log.Count;
+      Ok (DC, "PRIVMSG +NickServ :IDENTIFY hunter3");
+      Check (Wait (UC_Log, N + 1)
+             and then Last (UC_Log) = "PRIVMSG +NickServ :IDENTIFY hunter3",
+             "the message is relayed with its sigil");
+      Check (To_String (Net.Network_Record.SASL.Plain_Password) = "hunter3",
+             "NickServ is recognised behind a STATUSMSG sigil");
+      UC.Available_Status_Msg := Null_Unbounded_String;
    end;
 
    declare

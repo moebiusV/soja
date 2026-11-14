@@ -379,11 +379,11 @@ package body Soja.Core.Downstream_Commands is
             begin
                if Name = "" or else Has_Illegal_Chan_Char (Name) then
                   Send_Message
-                    (DC, Make (ERR_BADCHANMASK, [Name,
+                    (DC, Make (ERR_BADCHANMASK, [Nick_Of (DC), Name,
                       "Invalid channel name"]));
                elsif not Soja.Core.Upstream_Dispatch.Is_Channel (UC, Name) then
                   Send_Message
-                    (DC, Make (ERR_NOSUCHCHANNEL, [Name,
+                    (DC, Make (ERR_NOSUCHCHANNEL, [Nick_Of (DC), Name,
                       "Not a channel name"]));
                else
                   --  Most servers ignore duplicate JOIN messages.  We ignore
@@ -725,14 +725,14 @@ package body Soja.Core.Downstream_Commands is
          begin
             --  TODO (Go): support mixed bouncer/upstream WHO queries.
             if DC.Network = null and then Mask_CM = To_String (DC.Nick_CM) then
-               --  TODO (Go): support AWAY (H/G) in the self WHO reply.
                Info.Token := Token_U;
                Info.Username := DC.User.User_Record.Username;
                Info.Hostname := DC.Hostname;
                Info.Server := Cfg.Hostname;
                Info.Nickname := DC.Nick;
                Info.Flags := To_Unbounded_String
-                 (if DC.User.User_Record.Admin then "H*" else "H");
+                 ((if Length (DC.Away) > 0 then "G" else "H")
+                  & (if DC.User.User_Record.Admin then "*" else ""));
                Info.Account := DC.User.User_Record.Username;
                Info.Realname := DC.Realname;
                Send_Message
@@ -1042,6 +1042,17 @@ package body Soja.Core.Downstream_Commands is
 
          function Now_Tag return String is
            (Soja.Irc.Xirc.Format_Server_Time (Ada.Calendar.Clock));
+
+         --  strings.TrimLeft (name, cutset).
+         function Without_Sigils (S, Cutset : String) return String is
+         begin
+            for I in S'Range loop
+               if Ada.Strings.Fixed.Index (Cutset, [1 => S (I)]) = 0 then
+                  return S (I .. S'Last);
+               end if;
+            end loop;
+            return "";
+         end Without_Sigils;
       begin
          for Name of Split_Commas (Targets) loop
             if Name = "$" & To_String (Cfg.Hostname)
@@ -1100,6 +1111,14 @@ package body Soja.Core.Downstream_Commands is
                   UC : Upstream_Conn_Access;
                   R  : constant Irc_Error_Result :=
                     Upstream_For_Command (DC, Cmd, UC);
+                  --  The name without the STATUSMSG sigils ("+#chan" is
+                  --  logged with "#chan").  The message itself goes upstream
+                  --  as it came.
+                  Target : constant String :=
+                    (if UC /= null
+                     then Without_Sigils
+                            (Name, To_String (UC.Available_Status_Msg))
+                     else Name);
                begin
                   if R.Failed then
                      return R;
@@ -1107,7 +1126,7 @@ package body Soja.Core.Downstream_Commands is
 
                   if Cmd = "PRIVMSG"
                     and then Soja.Irc.Case_Mapping.Fold
-                               (UC.Network.Casemap, Name) = "nickserv"
+                               (UC.Network.Casemap, Target) = "nickserv"
                   then
                      declare
                         User, Pass : Unbounded_String;
@@ -1148,12 +1167,12 @@ package body Soja.Core.Downstream_Commands is
                           (Name => UC.Nick, User => UC.Username,
                            Host => UC.Hostname);
                         Soja.Core.Upstream_Dispatch.Produce
-                          (UC, Name, Echo, DC.ID);
+                          (UC, Target, Echo, DC.ID);
                      end;
                   end if;
 
                   Soja.Core.Upstream_Dispatch.Update_Channel_Auto_Detach
-                    (UC, Name);
+                    (UC, Target);
                end;
             end if;
          end loop;
@@ -1873,7 +1892,7 @@ package body Soja.Core.Downstream_Commands is
             end if;
 
             if DC.Network = null then
-               return FAIL (["CHATHISTORY", "MESSAGE_ERROR", Sub,
+               return FAIL (["CHATHISTORY", "INVALID_TARGET", Sub,
                              To_String (Target),
                              "Cannot fetch chat history on bouncer "
                              & "connection"]);

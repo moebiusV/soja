@@ -599,6 +599,11 @@ begin
       Soja.Irc.Cap_Registry.Set_Enabled
         (DC.Caps, "soju.im/bouncer-networks-notify", True);
       Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "batch", True);
+      Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "extended-join", True);
+      Soja.Irc.Cap_Registry.Set_Available (UC.Caps, "extended-join", "");
+      Soja.Irc.Cap_Registry.Set_Enabled (UC.Caps, "extended-join", True);
+      UC.Account := To_Unbounded_String ("acct");
+      UC.Realname := To_Unbounded_String ("Real Name");
       Res := HS.Welcome (DC, U);
       Check (not Res.Failed, "welcome on a network");
       Settle;
@@ -617,6 +622,9 @@ begin
       Check (DC_Log.Has ("BATCH +") and then DC_Log.Has ("soju.im/bouncer-networks")
              and then DC_Log.Has ("BOUNCER NETWORK")
              and then DC_Log.Has ("name=libera"), "the network list batch");
+      Check (DC_Log.Has (" JOIN #chan acct :Real Name"),
+             "the replayed JOIN carries the account and real name "
+             & "(extended-join)");
       Check (DC_Log.Has (" JOIN #chan") and then DC_Log.Has (" 332 alice_ #chan :the topic")
              and then DC_Log.Has (" 353 * = #chan alice_")
              and then DC_Log.Has (" 366 * #chan"), "the joined channel is replayed");

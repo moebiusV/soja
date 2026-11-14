@@ -1013,6 +1013,13 @@ package body Soja.Core.Downstream_Handshake is
             Saved : constant Channel_Access := UC.Network.Channels.Get (Name);
             M     : Message := Make ("JOIN", [To_String (Ch.Name)]);
          begin
+            --  extended-join: the account and the real name come with it.
+            if Is_Enabled (DC.Caps, "extended-join") then
+               M.Params.Append
+                 (if Length (UC.Account) > 0 then UC.Account
+                  else To_Unbounded_String ("*"));
+               M.Params.Append (UC.Realname);
+            end if;
             if not Ch.Complete then
                return;
             end if;
