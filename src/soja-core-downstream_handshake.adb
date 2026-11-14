@@ -393,10 +393,7 @@ package body Soja.Core.Downstream_Handshake is
                   Username : constant String := R (N1 + 1 .. N2 - 1);
                   Password : constant String := R (N2 + 1 .. R'Last);
                begin
-                  if Identity /= "" and then Identity /= Username then
-                     return Fail
-                       (Text_Fail ("SASL PLAIN identity not supported"));
-                  end if;
+                  DC.Sasl.Plain_Identity := To_Unbounded_String (Identity);
                   DC.Sasl.Plain_Set := True;
                   DC.Sasl.Plain_Username := To_Unbounded_String (Username);
                   DC.Sasl.Plain_Password := To_Unbounded_String (Password);
@@ -480,6 +477,34 @@ package body Soja.Core.Downstream_Handshake is
                Mech     : constant String := To_String (DC.Sasl.Mechanism);
                Username, Client, Network : Unbounded_String;
                Failure  : Unbounded_String;   --  the log text
+
+               --  The identity replaces the user name, when the one who
+               --  authenticated is an administrator and the user exists.
+               procedure Impersonate
+                 (Name, Client_Name, Network_Name : in out Unbounded_String;
+                  Failed : in out Unbounded_String)
+               is
+                  Rec : Soja.Database.User;
+               begin
+                  Rec := Soja.Database.Get_User
+                    (Soja.Server.DB (DC.Srv.all).all, To_String (Name));
+                  if not Rec.Admin then
+                     Failed := To_Unbounded_String
+                       ("SASL impersonation only allowed for admin users");
+                     return;
+                  end if;
+                  Soja.Downstream.Unmarshal_Username
+                    (To_String (DC.Sasl.Plain_Identity),
+                     Name, Client_Name, Network_Name);
+                  Rec := Soja.Database.Get_User
+                    (Soja.Server.DB (DC.Srv.all).all, To_String (Name));
+                  DC.Impersonating := True;
+               exception
+                  when Soja.Database.Not_Found =>
+                     Failed := To_Unbounded_String
+                       ("database: not found (username "
+                        & Quote (To_String (Name)) & ")");
+               end Impersonate;
                Reason   : Unbounded_String :=
                  To_Unbounded_String ("Authentication failed");
                Driver   : constant String := To_String
@@ -505,6 +530,13 @@ package body Soja.Core.Downstream_Handshake is
                              & To_Unbounded_String
                                  (Quote (To_String (Username))) & ")";
                            Reason := R.External;
+                        elsif Length (DC.Sasl.Plain_Identity) > 0
+                          and then DC.Sasl.Plain_Identity
+                                   /= DC.Sasl.Plain_Username
+                        then
+                           --  An administrator may log in as somebody else
+                           --  (the identity is "user[/network][@client]").
+                           Impersonate (Username, Client, Network, Failure);
                         end if;
                      end;
                   end if;

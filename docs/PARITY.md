@@ -44,15 +44,15 @@ change can be read.
 | [x] | Web Push: https endpoints only, no internal addresses, VAPID subscriber `https://soju.im` | `0b76d2d` `a5d11bd` `a29c036` `2d02be7` | done (the name is looked up before the push and again by the connection; soju checks the address it connects to) |
 | [ ] | Web Push: deferred pushes and the muted and blocked rules | `d9aebc8` `8c3ef5b` | open (with METADATA) |
 | [x] | NickServ `SET` only saves `SET PASSWORD` | `de8690c` | done |
-| [ ] | connect commands after registration, 3 s before joining | `cef94ff` `5e89246` `0fee055` | open |
+| [x] | connect commands after registration, 3 s before joining | `cef94ff` `5e89246` `0fee055` | done |
 | [x] | `draft/extended-isupport` and the `ISUPPORT` command; tokens sorted; changes sent as a difference; values decoded; `soju.im/SAFERATE` (also stops soja's own rate limit upstream), `draft/ACCOUNTREQUIRED`, `ACCOUNTEXTBAN`, `LINELEN` | `6d22e65` `1459547` `6e4fb18` `8bff925` | done |
 | [ ] | `draft/ICON` on the bouncer connection (the `icon` directive and the `/icon` route) | `89ce2f1` `5b9a73d` | open |
-| [ ] | SASL PLAIN impersonation by administrators | `7c24ded` `4764802` | open |
+| [x] | SASL PLAIN impersonation by administrators | `7c24ded` `4764802` | done |
 | [ ] | `labeled-response` for clients | `70c4ded` | open (large) |
 | [ ] | `draft/message-redaction` and `REDACT` | `34affa3` | open |
 | [ ] | `METADATA` / `draft/metadata-2`: pinned, muted, blocked targets | `6f9d7cb` `a30cda7` `527ad97` | open (large) |
 | [ ] | device certificates: client certificates over TLS and PROXY, SASL EXTERNAL for clients, `CLIENTCERT`, `soju.im/client-cert` | `838da54` `8fadc57` `190ac40` | open (large) |
-| [ ] | `echo-message` requested upstream whenever offered | `66e0f9a` | open |
+| [x] | `echo-message` requested upstream whenever offered | `66e0f9a` | done |
 
 ## 3. BouncerServ and stores
 

@@ -411,7 +411,75 @@ begin
                  "AUTHENTICATE " & Plain ("someone-else" & ASCII.NUL & "alice", "x")),
          11, Out_Log);
    begin
-      Check (not HS.Run_Until_Registered (DC), "an identity mismatch is fatal");
+      Check (not HS.Run_Until_Registered (DC),
+             "a response with too many parts is fatal");
+   end;
+
+   --  SASL PLAIN impersonation: the identity is "user[/network][@client]";
+   --  only an administrator may log in as somebody else.
+   declare
+      Bob : SD.User := SD.New_User ("bob");
+      Out_Log : Recorder_Access;
+      Mine : SD.User := SD.Get_User (DB.all, "alice");
+   begin
+      SD.Store_User (DB.all, Bob);
+
+      declare
+         DC : constant Downstream_Conn_Access := New_Client
+           (Script ("CAP REQ :sasl", "AUTHENTICATE PLAIN",
+                    "AUTHENTICATE "
+                    & B64 ("bob@laptop" & ASCII.NUL & "alice" & ASCII.NUL
+                           & "secret")),
+            21, Out_Log);
+         R  : Irc_Error_Result;
+      begin
+         for I in 1 .. 3 loop
+            R := HS.Handle_Message_Unregistered
+                   (DC, Soja.Conn.Read_Message (DC.Conn));
+         end loop;
+         Settle;
+         Check (Out_Log.Has (" 904 ") and then not DC.Impersonating
+                and then Length (DC.Registration.Auth_Username) = 0,
+                "a user who is not an administrator cannot impersonate");
+      end;
+
+      Mine.Admin := True;
+      SD.Store_User (DB.all, Mine);
+      declare
+         DC : constant Downstream_Conn_Access := New_Client
+           (Script ("CAP REQ :sasl", "AUTHENTICATE PLAIN",
+                    "AUTHENTICATE "
+                    & B64 ("bob/net@laptop" & ASCII.NUL & "alice" & ASCII.NUL
+                           & "secret"),
+                    "CAP END", "NICK b", "USER x 0 * :B"),
+            22, Out_Log);
+      begin
+         Check (HS.Run_Until_Registered (DC),
+                "an administrator logs in as another user");
+         Check (DC.Impersonating
+                and then To_String (DC.Registration.Auth_Username) = "bob"
+                and then To_String (DC.Client_Name) = "laptop",
+                "as that user, from that client");
+      end;
+      declare
+         DC : constant Downstream_Conn_Access := New_Client
+           (Script ("CAP REQ :sasl", "AUTHENTICATE PLAIN",
+                    "AUTHENTICATE "
+                    & B64 ("nobody" & ASCII.NUL & "alice" & ASCII.NUL
+                           & "secret")),
+            23, Out_Log);
+         R  : Irc_Error_Result;
+      begin
+         for I in 1 .. 3 loop
+            R := HS.Handle_Message_Unregistered
+                   (DC, Soja.Conn.Read_Message (DC.Conn));
+         end loop;
+         Settle;
+         Check (Out_Log.Has (" 904 ") and then not DC.Impersonating,
+                "and the user must exist");
+      end;
+      Mine.Admin := False;
+      SD.Store_User (DB.all, Mine);
    end;
 
    --  BOUNCER BIND needs authentication; other subcommands are unknown.

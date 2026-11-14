@@ -196,6 +196,7 @@ package Soja.Core is
       --  the server's first challenge is out
       Challenged     : Boolean := False;
       Plain_Set      : Boolean := False;   --  Go's plain != nil
+      Plain_Identity : Unbounded_String;   --  the authorization identity
       Plain_Username : Unbounded_String;
       Plain_Password : Unbounded_String;
       Bearer_Set     : Boolean := False;   --  Go's oauthBearer != nil
@@ -413,6 +414,10 @@ package Soja.Core is
       Hostname : Unbounded_String;
       Account  : Unbounded_String;
       Away     : Unbounded_String;   --  *string; null = not away
+
+      --  dc.impersonating: an administrator logged in as this user by SASL
+      --  PLAIN identity; such a client does not count as the user's activity.
+      Impersonating : Boolean := False;
 
       --  dc.isupport: the tokens the client was last sent.
       Isupport : Isupport_Maps.Map;

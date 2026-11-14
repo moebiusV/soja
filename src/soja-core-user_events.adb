@@ -234,7 +234,9 @@ package body Soja.Core.User_Events is
          Soja.Core.Upstream_Dispatch.Update_Away (UC);
       end loop;
 
-      Bump_Downstream_Interaction_Time (U);
+      if not DC.Impersonating then
+         Bump_Downstream_Interaction_Time (U);
+      end if;
    end Downstream_Connected;
 
    procedure Downstream_Disconnected
@@ -260,7 +262,9 @@ package body Soja.Core.User_Events is
          Soja.Core.Upstream_Dispatch.Update_Monitor (UC);
       end loop;
 
-      Bump_Downstream_Interaction_Time (U);
+      if not DC.Impersonating then
+         Bump_Downstream_Interaction_Time (U);
+      end if;
    end Downstream_Disconnected;
 
    procedure Downstream_Message

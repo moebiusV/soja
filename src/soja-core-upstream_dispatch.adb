@@ -51,7 +51,8 @@ package body Soja.Core.Upstream_Dispatch is
      constant array (Positive range <>) of String_Ptr :=
      [new String'("account-notify"), new String'("account-tag"),
       new String'("away-notify"), new String'("batch"),
-      new String'("chghost"), new String'("extended-join"),
+      new String'("chghost"), new String'("echo-message"),
+      new String'("extended-join"),
       new String'("extended-monitor"), new String'("invite-notify"),
       new String'("labeled-response"), new String'("message-tags"),
       new String'("multi-prefix"), new String'("sasl"),
