@@ -433,10 +433,11 @@ package body Soja.Core.Upstream_Dispatch is
                     [1 => Entity (Entity'First)]) > 0;
    end Is_Channel;
 
-   procedure Send_Message_Labeled
+   procedure Send_With_Label
      (UC : not null Upstream_Conn_Access;
       ID : Long_Long_Integer;
-      M  : Message)
+      M  : Message;
+      Label : String)
    is
       Msg : Message := Copy (M);
    begin
@@ -446,10 +447,33 @@ package body Soja.Core.Upstream_Dispatch is
                             (Long_Long_Integer'Image (ID), Ada.Strings.Left)
                   & "-" & Ada.Strings.Fixed.Trim
                             (Long_Long_Integer'Image (UC.Next_Label_ID),
-                             Ada.Strings.Left));
+                             Ada.Strings.Left)
+                  & "-" & Label);
          UC.Next_Label_ID := UC.Next_Label_ID + 1;
       end if;
       Send_Message (UC, Msg);
+   end Send_With_Label;
+
+   procedure Send_Message_Labeled
+     (UC : not null Upstream_Conn_Access;
+      ID : Long_Long_Integer;
+      M  : Message;
+      With_Label : Boolean := True)
+   is
+      DC    : constant Downstream_Conn_Access :=
+        (if With_Label then Downstream_By_ID (UC, ID) else null);
+      Label : Unbounded_String;
+   begin
+      if DC /= null and then DC.Label_Active then
+         if DC.Has_Pending or else Length (DC.Label_Batch) > 0 then
+            raise Program_Error with
+              "called both downstreamConn.SendMessage and "
+              & "upstreamConn.SendMessage with the same label";
+         end if;
+         Label := DC.Label;
+         DC.Label := Null_Unbounded_String;
+      end if;
+      Send_With_Label (UC, ID, M, To_String (Label));
    end Send_Message_Labeled;
 
    ----------------------------------------------------------------------
@@ -470,7 +494,8 @@ package body Soja.Core.Upstream_Dispatch is
          V : Pending_Command_Vectors.Vector := UC.Pending_Cmds (Cmd);
          P : Pending_Upstream_Command := V (1);
       begin
-         Send_Message_Labeled (UC, P.Downstream_ID, P.Msg);
+         Send_With_Label
+           (UC, P.Downstream_ID, P.Msg, To_String (P.Downstream_Label));
          P.Sent_At := Ada.Calendar.Clock;
          V.Replace_Element (1, P);
          UC.Pending_Cmds.Replace (Cmd, V);
@@ -483,7 +508,14 @@ package body Soja.Core.Upstream_Dispatch is
       M  : Message)
    is
       Cmd : constant String := To_String (M.Command);
+      Label : Unbounded_String;
    begin
+      if DC.Label_Active then
+         --  The answer comes with the upstream's, later: the label goes with
+         --  the command.
+         Label := DC.Label;
+         DC.Label := Null_Unbounded_String;
+      end if;
       if not (Cmd in "LIST" | "WHO" | "WHOIS" | "AUTHENTICATE" | "REGISTER"
                      | "VERIFY")
       then
@@ -498,8 +530,8 @@ package body Soja.Core.Upstream_Dispatch is
          V : Pending_Command_Vectors.Vector := UC.Pending_Cmds (Cmd);
       begin
          V.Append (Pending_Upstream_Command'
-                     (Downstream_ID => DC.ID, Msg => Copy (M),
-                      Sent_At => Zero_Time));
+                     (Downstream_ID => DC.ID, Downstream_Label => Label,
+                      Msg => Copy (M), Sent_At => Zero_Time));
 
          --  If we didn't get a reply after a while, just give up on the
          --  commands that were sent long ago (all of them, as soju does
@@ -1202,11 +1234,78 @@ package body Soja.Core.Upstream_Dispatch is
       null;
    end Log;
 
+   --  Parses "sd-<id>-<n>-<label>": ID 0 and no error for no label.
+   procedure Parse_Label
+     (Label : String; ID : out Long_Long_Integer;
+      Downstream_Label : out Unbounded_String; Error : out Unbounded_String)
+   is
+      Dash : array (1 .. 3) of Natural := [others => 0];
+      Found : Natural := 0;
+
+      procedure Fail_With (Text : String) is
+      begin
+         ID := 0;
+         Downstream_Label := Null_Unbounded_String;
+         Error := To_Unbounded_String
+           ("unexpected message label: invalid downstream reference for "
+            & "label " & Quote (Label) & ": " & Text);
+      end Fail_With;
+   begin
+      ID := 0;
+      Downstream_Label := Null_Unbounded_String;
+      Error := Null_Unbounded_String;
+      if Label = "" then
+         return;
+      end if;
+      for I in Label'Range loop
+         if Label (I) = '-' and then Found < 3 then
+            Found := Found + 1;
+            Dash (Found) := I;
+         end if;
+      end loop;
+      if Found < 3 then
+         Fail_With ("not enough arguments");
+         return;
+      end if;
+      if Label (Label'First .. Dash (1) - 1) /= "sd" then
+         Fail_With ("expected sd, got "
+                    & Label (Label'First .. Dash (1) - 1));
+         return;
+      end if;
+      declare
+         Text : constant String := Label (Dash (1) + 1 .. Dash (2) - 1);
+         Ok   : Boolean := Text'Length > 0;
+      begin
+         for C of Text loop
+            if C not in '0' .. '9' then
+               Ok := False;
+            end if;
+         end loop;
+         if not Ok then
+            Fail_With ("strconv.ParseUint: parsing " & Quote (Text)
+                       & ": invalid syntax");
+            return;
+         end if;
+         begin
+            ID := Long_Long_Integer'Value (Text);
+         exception
+            when Constraint_Error =>
+               Fail_With ("strconv.ParseUint: parsing " & Quote (Text)
+                          & ": value out of range");
+               return;
+         end;
+      end;
+      Downstream_Label :=
+        To_Unbounded_String (Label (Dash (3) + 1 .. Label'Last));
+   end Parse_Label;
+
    function Handle_Batch
      (UC : not null Upstream_Conn_Access;
       Msg : Message;
       Label : Unbounded_String;
-      Outer : Upstream_Batch_Access) return Handle_Result
+      Outer : Upstream_Batch_Access;
+      Downstream_ID    : Long_Long_Integer;
+      Downstream_Label : Unbounded_String) return Handle_Result
    is
       Bad : Boolean;
       R   : Handle_Result := Check_Params (Msg, 1, Bad);
@@ -1242,6 +1341,24 @@ package body Soja.Core.Upstream_Dispatch is
                   B.Label := Outer.Label;
                end if;
                UC.Batches.Insert (Name, B);
+               if Downstream_ID /= 0
+                 and then Length (Downstream_Label) > 0
+               then
+                  declare
+                     DC : constant Downstream_Conn_Access :=
+                       Downstream_By_ID (UC, Downstream_ID);
+                     Open : Message := Copy (Msg);
+                  begin
+                     if DC /= null then
+                        DC.Label := Null_Unbounded_String;
+                        Open.Prefix := Soja.Core.Server_Prefix (UC.Srv);
+                        Open.Tags := (others => <>);
+                        Set_Tag (Open.Tags, "label",
+                                 To_String (Downstream_Label));
+                        Send_Message (DC, Open);
+                     end if;
+                  end;
+               end if;
             end;
          elsif Tag'Length > 0 and then Tag (Tag'First) = '-' then
             declare
@@ -1250,7 +1367,32 @@ package body Soja.Core.Upstream_Dispatch is
                if not UC.Batches.Contains (Name) then
                   return Fail ("unknown BATCH reference tag: " & Quote (Name));
                end if;
-               UC.Batches.Delete (Name);
+               declare
+                  Old_Label : constant String :=
+                    To_String (UC.Batches (Name).Label);
+                  ID : Long_Long_Integer;
+                  D_Label, Error : Unbounded_String;
+               begin
+                  UC.Batches.Delete (Name);
+                  --  BATCH - has no @label/@batch: take the client back from
+                  --  the batch.
+                  Parse_Label (Old_Label, ID, D_Label, Error);
+                  if ID /= 0 and then Length (D_Label) > 0
+                    and then Length (Error) = 0
+                  then
+                     declare
+                        DC : constant Downstream_Conn_Access :=
+                          Downstream_By_ID (UC, ID);
+                        Close : Message := Copy (Msg);
+                     begin
+                        if DC /= null then
+                           Close.Prefix := Soja.Core.Server_Prefix (UC.Srv);
+                           Close.Tags := (others => <>);
+                           Send_Message (DC, Close);
+                        end if;
+                     end;
+                  end if;
+               end;
             end;
          else
             return Fail
@@ -3071,9 +3213,11 @@ package body Soja.Core.Upstream_Dispatch is
    -- Handle_Message --
    --------------------
 
-   function Handle_Message
+   function Handle_Message_Inner
      (UC : not null Upstream_Conn_Access;
-      M  : Soja.Irc.Messages.Message) return Handle_Result
+      M  : Soja.Irc.Messages.Message;
+      Ctx_ID : out Long_Long_Integer;
+      Flush  : out Boolean) return Handle_Result
    is
       use Soja.Core.Downstream_Helpers;
 
@@ -3081,11 +3225,16 @@ package body Soja.Core.Upstream_Dispatch is
       Cmd           : constant String := To_String (M.Command);
       Label         : Unbounded_String;
       Msg_Batch     : Upstream_Batch_Access;
+      Batch_Name    : Unbounded_String;
+      Batch_Label   : Boolean := False;
       Downstream_ID : Long_Long_Integer := 0;
+      Downstream_Label : Unbounded_String;
       Bad           : Boolean;
       R             : Handle_Result;
 
    begin
+      Ctx_ID := 0;
+      Flush := False;
       if Has_Tag (Msg.Tags, "label") then
          Label := To_Unbounded_String (Get_Tag (Msg.Tags, "label"));
          Msg.Tags.Data.Exclude ("label");
@@ -3101,54 +3250,42 @@ package body Soja.Core.Upstream_Dispatch is
                   & Quote (Name));
             end if;
             Msg_Batch := new Upstream_Batch'(UC.Batches (Name));
+            Batch_Name := To_Unbounded_String (Name);
             if Length (Label) = 0 then
+               Batch_Label := True;
                Label := Msg_Batch.Label;
             end if;
             Msg.Tags.Data.Exclude ("batch");
          end;
       end if;
 
-      if Length (Label) > 0 then
-         --  fmt.Sscanf(label, "sd-%d-%d", &downstreamID, &labelOffset)
+      declare
+         Parse_Error : Unbounded_String;
+      begin
+         Parse_Label (To_String (Label), Downstream_ID, Downstream_Label,
+                      Parse_Error);
+         if Length (Parse_Error) > 0 then
+            return Fail (To_String (Parse_Error));
+         end if;
+      end;
+      if Downstream_ID /= 0 then
          declare
-            L : constant String := To_String (Label);
-            P : Natural := L'First;
-
-            function Number (Ok : out Boolean) return Long_Long_Integer is
-               V : Long_Long_Integer := 0;
-               N : Natural := 0;
-            begin
-               while P <= L'Last and then L (P) in '0' .. '9' loop
-                  V := V * 10 + (Character'Pos (L (P)) - Character'Pos ('0'));
-                  P := P + 1;
-                  N := N + 1;
-               end loop;
-               Ok := N > 0;
-               return V;
-            exception
-               when Constraint_Error =>
-                  Ok := False;
-                  return 0;
-            end Number;
-
-            Ok1, Ok2 : Boolean := False;
-            Offset   : Long_Long_Integer;
-            pragma Unreferenced (Offset);
+            DC : constant Downstream_Conn_Access :=
+              Downstream_By_ID (UC, Downstream_ID);
          begin
-            if L'Length >= 3 and then L (L'First .. L'First + 2) = "sd-" then
-               P := L'First + 3;
-               Downstream_ID := Number (Ok1);
-               if Ok1 and then P <= L'Last and then L (P) = '-' then
-                  P := P + 1;
-                  Offset := Number (Ok2);
+            if DC /= null then
+               Ctx_ID := Downstream_ID;
+               if Batch_Label then
+                  --  The label comes from the batch: the message is part of
+                  --  that batch.
+                  Begin_Label (DC, To_String (Downstream_Label),
+                               To_String (Batch_Name));
+               else
+                  --  The label comes from this message: it is answered with
+                  --  that label.
+                  Begin_Label (DC, To_String (Downstream_Label));
+                  Flush := True;
                end if;
-            end if;
-            if not (Ok1 and then Ok2) then
-               return Fail
-                 ("unexpected message label: invalid downstream reference "
-                  & "for label " & Quote (L) & ": "
-                  & (if Ok1 and then P > L'Last then "unexpected EOF"
-                     else "input does not match format"));
             end if;
          end;
       end if;
@@ -3289,7 +3426,8 @@ package body Soja.Core.Upstream_Dispatch is
          return Handle_Chat (UC, Msg, Downstream_ID);
 
       elsif Cmd = "BATCH" then
-         return Handle_Batch (UC, Msg, Label, Msg_Batch);
+         return Handle_Batch (UC, Msg, Label, Msg_Batch, Downstream_ID,
+                              Downstream_Label);
 
       elsif Cmd = "NICK" then
          return Handle_Nick (UC, Msg);
@@ -3520,6 +3658,43 @@ package body Soja.Core.Upstream_Dispatch is
       end if;
 
       return Success;
+   end Handle_Message_Inner;
+
+   --  uc.handleMessage: the label context of the client that asked (when the
+   --  message answers a labeled command) lasts for the handling of the
+   --  message, and ends with the answer's flush.
+   function Handle_Message
+     (UC : not null Upstream_Conn_Access;
+      M  : Soja.Irc.Messages.Message) return Handle_Result
+   is
+      Ctx_ID : Long_Long_Integer;
+      Flush  : Boolean;
+
+      procedure Finish is
+         DC : Downstream_Conn_Access;
+      begin
+         if Ctx_ID /= 0 then
+            DC := Downstream_By_ID (UC, Ctx_ID);
+            if DC /= null then
+               if Flush then
+                  Flush_Batch (DC);
+               end if;
+               End_Label (DC);
+            end if;
+         end if;
+      end Finish;
+
+      R : Handle_Result;
+   begin
+      Ctx_ID := 0;
+      Flush := False;
+      R := Handle_Message_Inner (UC, M, Ctx_ID, Flush);
+      Finish;
+      return R;
+   exception
+      when others =>
+         Finish;
+         raise;
    end Handle_Message;
 
 end Soja.Core.Upstream_Dispatch;

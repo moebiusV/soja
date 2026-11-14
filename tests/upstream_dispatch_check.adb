@@ -221,7 +221,14 @@ begin
              and then Index (R.Reason, "unexpected message label") = 1,
              "bad label");
       R := H ("@label=sd-5 ZZZ");
-      Check (R.Failed, "label missing offset");
+      Check (R.Failed and then Index (R.Reason, "not enough arguments") > 0,
+             "label missing offset");
+      R := H ("@label=xx-5-0-a ZZZ");
+      Check (R.Failed and then Index (R.Reason, "expected sd, got xx") > 0,
+             "label of another kind");
+      R := H ("@label=sd-z-0-a ZZZ");
+      Check (R.Failed and then Index (R.Reason, "invalid syntax") > 0,
+             "label with a bad id");
       R := H ("@batch=nope ZZZ");
       Check (R.Failed and then Index (R.Reason, "unexpected batch reference") = 1,
              "unknown batch");
@@ -236,17 +243,25 @@ begin
           and then Ada.Strings.Fixed.Index (Line_Of (DC_Log, 1), "ZZZ hello") > 0,
           "default branch forwards with a time tag: " & Line_Of (DC_Log, 1));
    --  A label routes the reply to one downstream only.
-   Ok ("@label=sd-99-0 ZZZ routed");
+   Ok ("@label=sd-99-0- ZZZ routed");
    delay 0.15;
    Check (DC_Log.Count = 1, "label for another downstream is not delivered");
-   Ok ("@label=sd-5-0 ZZZ routed");
+   Ok ("@label=sd-5-0- ZZZ routed");
    Check (Wait (DC_Log, 2), "label for this downstream is delivered");
+   --  The client's own label comes back with the answer.
+   Ok ("@label=sd-5-1-mine ZZZ answer");
+   Check (Wait (DC_Log, 3) and then DC_Log.Has ("label=mine")
+          and then DC_Log.Has ("ZZZ answer"),
+          "the client's label is on the answer");
+   Ok ("@label=sd-5-2- ZZZ unlabeled");
+   Check (Wait (DC_Log, 4) and then Ada.Strings.Fixed.Index (Line_Of (DC_Log, 4), "label=") = 0,
+          "no label from the client: none on the answer");
    --  A valid server-time is kept.
    Ok ("@time=2024-02-29T13:45:09.123Z ZZZ timed");
-   Check (Wait (DC_Log, 3)
+   Check (Wait (DC_Log, 5)
           and then Ada.Strings.Fixed.Index
-                     (Line_Of (DC_Log, 3), "time=2024-02-29T13:45:09.123Z") > 0,
-          "server time kept: " & Line_Of (DC_Log, 3));
+                     (Line_Of (DC_Log, 5), "time=2024-02-29T13:45:09.123Z") > 0,
+          "server time kept: " & Line_Of (DC_Log, 5));
 
    -------------------------------------------------------------------
    --  CAP negotiation and SASL PLAIN.
@@ -916,10 +931,30 @@ begin
       Ok ("BATCH -b1");
       Check (UC.Batches.Is_Empty, "batches ended");
       --  A batch started by a labeled command routes its content by the label.
-      Ok ("@label=sd-99-0 BATCH +b3 labeled-response");
-      Check (To_String (UC.Batches ("b3").Label) = "sd-99-0", "batch label");
+      Ok ("@label=sd-99-0- BATCH +b3 labeled-response");
+      Check (To_String (UC.Batches ("b3").Label) = "sd-99-0-", "batch label");
       Quiet ("@batch=b3 ZZZ inside", "batch content labeled for another client");
       Ok ("BATCH -b3");
+      --  The batch of an answer to a client's labeled command is forwarded
+      --  to it, with the same name and its label.
+      declare
+         N : constant Natural := DC_Log.Count;
+      begin
+         Ok ("@label=sd-5-3-lab BATCH +b4 labeled-response");
+         Ok ("@batch=b4 ZZZ inside");
+         Ok ("BATCH -b4");
+         Check (Wait (DC_Log, N + 3)
+                and then Ada.Strings.Fixed.Index
+                           (Line_Of (DC_Log, N + 1),
+                            "label=lab") > 0
+                and then Ada.Strings.Fixed.Index
+                           (Line_Of (DC_Log, N + 1), "BATCH +b4") > 0
+                and then Ada.Strings.Fixed.Index
+                           (Line_Of (DC_Log, N + 2), "batch=b4") > 0
+                and then Ada.Strings.Fixed.Index
+                           (Line_Of (DC_Log, N + 3), "BATCH -b4") > 0,
+                "a labeled batch is forwarded to the client");
+      end;
 
       --  Our own nick change updates the downstream and the desired-nick flag.
       UC.Has_Desired_Nick := False;
@@ -1029,14 +1064,14 @@ begin
       declare
          N : constant Natural := DC_Log.Count;
       begin
-         Ok ("@label=sd-5-0 :alice!u@h PRIVMSG #t :mine");
+         Ok ("@label=sd-5-0- :alice!u@h PRIVMSG #t :mine");
          delay 0.2;
          Check (DC_Log.Count = N, "no echo without echo-message");
          Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "echo-message", True);
-         Down ("@label=sd-5-1 :alice!u@h PRIVMSG #t :mine again", 1, "echo");
+         Down ("@label=sd-5-1- :alice!u@h PRIVMSG #t :mine again", 1, "echo");
          Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "echo-message", False);
       end;
-      Down ("@label=sd-99-0 :alice!u@h PRIVMSG #t :from elsewhere", 1,
+      Down ("@label=sd-99-0- :alice!u@h PRIVMSG #t :from elsewhere", 1,
             "another client's message is shown here");
 
       ----------------------------------------------------------------

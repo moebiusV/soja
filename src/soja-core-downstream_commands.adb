@@ -104,10 +104,23 @@ package body Soja.Core.Downstream_Commands is
    procedure Relay
      (UC : not null Upstream_Conn_Access;
       DC : not null Downstream_Conn_Access;
-      M  : Message) is
+      M  : Message;
+      With_Label : Boolean := True) is
    begin
-      Soja.Core.Upstream_Dispatch.Send_Message_Labeled (UC, DC.ID, M);
+      Soja.Core.Upstream_Dispatch.Send_Message_Labeled
+        (UC, DC.ID, M, With_Label);
    end Relay;
+
+   --  "We need to potentially mix local and remote messages so we drop the
+   --  label": the bouncer's answers for several targets are not one answer.
+   procedure Drop_Label_For_Many
+     (DC : not null Downstream_Conn_Access; Targets : String)
+   is
+   begin
+      if Split_Commas (Targets).Length > 1 then
+         DC.Label := Null_Unbounded_String;
+      end if;
+   end Drop_Label_For_Many;
 
    procedure Store_Channel_Quietly
      (DC   : not null Downstream_Conn_Access;
@@ -372,6 +385,7 @@ package body Soja.Core.Downstream_Commands is
             else String_Vectors.Empty_Vector);
          Net   : constant Network_Access := UC.Network;
       begin
+         Drop_Label_For_Many (DC, Param (M, 0));
          for I in 1 .. Natural (Names.Length) loop
             declare
                Name : constant String := Names (I);
@@ -444,6 +458,7 @@ package body Soja.Core.Downstream_Commands is
            (if M.Params.Length > 1 then Param (M, 1) else "");
          Net    : constant Network_Access := UC.Network;
       begin
+         Drop_Label_For_Many (DC, Param (M, 0));
          for Name of Split_Commas (Param (M, 0)) loop
             if Lower (Reason) = "detach" then
                declare
@@ -676,6 +691,7 @@ package body Soja.Core.Downstream_Commands is
          return Success;
       end if;
 
+      Drop_Label_For_Many (DC, Param (M, 0));
       for Name of Split_Commas (Param (M, 0)) loop
          declare
             Ch : constant Upstream_Channel_Access := UC.Channels.Get (Name);
@@ -1057,6 +1073,7 @@ package body Soja.Core.Downstream_Commands is
             return "";
          end Without_Sigils;
       begin
+         Drop_Label_For_Many (DC, Targets);
          for Name of Split_Commas (Targets) loop
             if Name = "$" & To_String (Cfg.Hostname)
               or else (Name = "$*" and then DC.Network = null)
@@ -1148,7 +1165,11 @@ package body Soja.Core.Downstream_Commands is
                      Out_Msg : Message := Make (Cmd, Params_For (Name));
                   begin
                      Out_Msg.Tags := Copy (Tags);
-                     Relay (UC, DC, Out_Msg);
+                     --  Without echo-message, the echo below is the answer,
+                     --  not the upstream's.
+                     Relay (UC, DC, Out_Msg,
+                            With_Label => Soja.Irc.Cap_Registry.Is_Enabled
+                                            (UC.Caps, "echo-message"));
                   end;
 
                   --  If the upstream supports echo-message, we produce the

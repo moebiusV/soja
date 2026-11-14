@@ -118,10 +118,14 @@ package Soja.Core.Upstream_Dispatch is
 
    --  uc.SendMessageLabeled: tag the message so the reply can be routed back
    --  to the downstream (ID) that asked, when the server supports it.
+   --  The label of the client's message that is being handled goes with it
+   --  (and the answer is then the upstream's to give); With_Label False
+   --  leaves it (the bouncer answers).
    procedure Send_Message_Labeled
      (UC : not null Upstream_Conn_Access;
       ID : Long_Long_Integer;
-      M  : Soja.Irc.Messages.Message);
+      M  : Soja.Irc.Messages.Message;
+      With_Label : Boolean := True);
 
    ------------------------
    --  Pending commands --

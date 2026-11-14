@@ -959,8 +959,91 @@ package body Soja.Core is
          Msg.Prefix := Server_Prefix (DC.Srv);
       end if;
 
-      Soja.Conn.Send_Message (DC.Conn, Msg);
+      if DC.Label_Active and then Length (DC.Label) > 0 then
+         if DC.Has_Pending then
+            --  A second message: open the batch, and send the first one in
+            --  it.
+            DC.Last_Batch_Ref := DC.Last_Batch_Ref + 1;
+            DC.Label_Batch := To_Unbounded_String
+              (Ada.Strings.Fixed.Trim
+                 (Long_Long_Integer'Image (DC.Last_Batch_Ref),
+                  Ada.Strings.Left));
+            declare
+               Open : Message;
+            begin
+               Open.Command := To_Unbounded_String ("BATCH");
+               Set_Tag (Open.Tags, "label", To_String (DC.Label));
+               Open.Params.Append (To_Unbounded_String
+                                     ("+" & To_String (DC.Label_Batch)));
+               Open.Params.Append (To_Unbounded_String ("labeled-response"));
+               Soja.Conn.Send_Message (DC.Conn, Open);
+            end;
+            declare
+               First : Message := Copy (DC.Label_Pending);
+            begin
+               if Get_Tag (First.Tags, "batch") = "" then
+                  Set_Tag (First.Tags, "batch", To_String (DC.Label_Batch));
+               end if;
+               Soja.Conn.Send_Message (DC.Conn, First);
+            end;
+            DC.Has_Pending := False;
+            DC.Label_Pending := (others => <>);
+         end if;
+         if Length (DC.Label_Batch) > 0 then
+            --  In the batch.
+            if Get_Tag (Msg.Tags, "batch") = "" then
+               Set_Tag (Msg.Tags, "batch", To_String (DC.Label_Batch));
+            end if;
+            Soja.Conn.Send_Message (DC.Conn, Msg);
+         else
+            --  The first message: held back.
+            DC.Label_Pending := Msg;
+            DC.Has_Pending := True;
+         end if;
+      else
+         Soja.Conn.Send_Message (DC.Conn, Msg);
+      end if;
    end Send_Message;
+
+   procedure Begin_Label
+     (DC : not null Downstream_Conn_Access; Label : String;
+      Batch : String := "") is
+   begin
+      DC.Label_Active := True;
+      DC.Label := To_Unbounded_String (Label);
+      DC.Label_Batch := To_Unbounded_String (Batch);
+      DC.Has_Pending := False;
+      DC.Label_Pending := (others => <>);
+   end Begin_Label;
+
+   procedure End_Label (DC : not null Downstream_Conn_Access) is
+   begin
+      DC.Label_Active := False;
+      DC.Label := Null_Unbounded_String;
+      DC.Label_Batch := Null_Unbounded_String;
+      DC.Has_Pending := False;
+      DC.Label_Pending := (others => <>);
+   end End_Label;
+
+   procedure Flush_Batch (DC : not null Downstream_Conn_Access) is
+      M : Message;
+   begin
+      if not (DC.Label_Active and then Length (DC.Label) > 0) then
+         return;
+      end if;
+      if DC.Has_Pending then
+         M := Copy (DC.Label_Pending);
+         Set_Tag (M.Tags, "label", To_String (DC.Label));
+      elsif Length (DC.Label_Batch) > 0 then
+         M.Command := To_Unbounded_String ("BATCH");
+         M.Params.Append (To_Unbounded_String
+                            ("-" & To_String (DC.Label_Batch)));
+      else
+         M.Command := To_Unbounded_String ("ACK");
+         Set_Tag (M.Tags, "label", To_String (DC.Label));
+      end if;
+      Soja.Conn.Send_Message (DC.Conn, M);
+   end Flush_Batch;
 
    function Handle_Message_Unregistered
      (DC : not null Downstream_Conn_Access; M : Message)
@@ -1345,14 +1428,47 @@ package body Soja.Core is
      (DC : not null Downstream_Conn_Access; M : Message)
       return Irc_Error_Result
    is
+      Labeled : constant Boolean :=
+        Has_Tag (M.Tags, "label")
+        and then Soja.Irc.Cap_Registry.Is_Enabled
+                   (DC.Caps, "labeled-response");
+      R : Irc_Error_Result;
    begin
+      if Labeled then
+         Begin_Label (DC, Get_Tag (M.Tags, "label"));
+      end if;
       if To_String (M.Command) = "QUIT" then
          Soja.Conn.Shutdown (DC.Conn);
-         return (Failed => False);   --  TODO (Go): stop handling commands
+         --  TODO (Go): stop handling commands
+         R := (Failed => False);
       elsif DC.Registered then
-         return Handle_Message_Registered (DC, M);
+         R := Handle_Message_Registered (DC, M);
+      else
+         R := Handle_Message_Unregistered (DC, M);
       end if;
-      return Handle_Message_Unregistered (DC, M);
+      if Labeled then
+         if R.Failed and then R.Is_IRC then
+            --  The IRC error is the answer, and in the label's batch.
+            declare
+               E : Message := Copy (R.Err.Message);
+            begin
+               E.Prefix := Server_Prefix (DC.Srv);
+               Send_Message (DC, E);
+            end;
+            R := (Failed => False);
+         end if;
+         if not R.Failed then
+            Flush_Batch (DC);
+         end if;
+         End_Label (DC);
+      end if;
+      return R;
+   exception
+      when others =>
+         if Labeled then
+            End_Label (DC);
+         end if;
+         raise;
    end Handle_Downstream_Message;
 
    ----------------

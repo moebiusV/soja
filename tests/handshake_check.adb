@@ -869,6 +869,63 @@ begin
       HS.Sanity_Check := HS.Default_Sanity_Check'Access;
    end;
 
+   --  labeled-response: no message is an ACK, one is the message itself
+   --  with the label, two or more are a batch with the label.
+   declare
+      use Soja.Irc.Messages;
+      Log0, Log1, Log2, Log3 : Recorder_Access;
+      D0 : constant Downstream_Conn_Access := New_Client (Script ("x"), 51, Log0);
+      D1 : constant Downstream_Conn_Access := New_Client (Script ("x"), 52, Log1);
+      D2 : constant Downstream_Conn_Access := New_Client (Script ("x"), 53, Log2);
+      D3 : constant Downstream_Conn_Access := New_Client (Script ("x"), 54, Log3);
+      procedure Enable (D : Downstream_Conn_Access) is
+      begin
+         Soja.Irc.Cap_Registry.Set_Enabled (D.Caps, "message-tags", True);
+         Soja.Irc.Cap_Registry.Set_Enabled (D.Caps, "batch", True);
+         Soja.Irc.Cap_Registry.Set_Enabled (D.Caps, "labeled-response", True);
+      end Enable;
+   begin
+      Enable (D0);
+      Enable (D1);
+      Enable (D2);
+      Enable (D3);
+
+      Soja.Core.Begin_Label (D0, "a0");
+      Soja.Core.Flush_Batch (D0);
+      Soja.Core.End_Label (D0);
+
+      Soja.Core.Begin_Label (D1, "a1");
+      Soja.Core.Send_Message (D1, Parse_Message (":srv 421 x FOO :Unknown"));
+      Soja.Core.Flush_Batch (D1);
+      Soja.Core.End_Label (D1);
+
+      Soja.Core.Begin_Label (D2, "a2");
+      Soja.Core.Send_Message (D2, Parse_Message (":srv 421 x FOO :Unknown"));
+      Soja.Core.Send_Message (D2, Parse_Message (":srv 421 x BAR :Unknown"));
+      Soja.Core.Flush_Batch (D2);
+      Soja.Core.End_Label (D2);
+
+      --  Without a label (or with the label dropped) nothing is added.
+      Soja.Core.Begin_Label (D3, "a3");
+      D3.Label := Null_Unbounded_String;
+      Soja.Core.Send_Message (D3, Parse_Message (":srv 421 x FOO :Unknown"));
+      Soja.Core.Flush_Batch (D3);
+      Soja.Core.End_Label (D3);
+      Settle;
+      Check (Log0.Count = 1 and then Log0.Has ("label=a0")
+             and then Log0.Has ("ACK"), "no answer: an ACK with the label");
+      Check (Log1.Count = 1 and then Log1.Has ("label=a1")
+             and then Log1.Has (" 421 x FOO"),
+             "one answer: it carries the label");
+      Check (Log2.Count = 4 and then Log2.Has ("label=a2")
+             and then Log2.Has ("BATCH +1 labeled-response")
+             and then Log2.Has ("batch=1")
+             and then Log2.Has ("BATCH -1"),
+             "two answers: a batch with the label");
+      Check (Log3.Count = 1 and then not Log3.Has ("label"),
+             "a dropped label gives a plain answer");
+   end;
+
    for I in 1 .. N_Conns loop
       Soja.Conn.Close (Conns (I));
    end loop;

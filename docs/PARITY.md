@@ -48,7 +48,7 @@ change can be read.
 | [x] | `draft/extended-isupport` and the `ISUPPORT` command; tokens sorted; changes sent as a difference; values decoded; `soju.im/SAFERATE` (also stops soja's own rate limit upstream), `draft/ACCOUNTREQUIRED`, `ACCOUNTEXTBAN`, `LINELEN` | `6d22e65` `1459547` `6e4fb18` `8bff925` | done |
 | [x] | `draft/ICON` on the bouncer connection (the `icon` directive and the `/icon` route; no ranges) | `89ce2f1` `5b9a73d` | done |
 | [x] | SASL PLAIN impersonation by administrators | `7c24ded` `4764802` | done |
-| [ ] | `labeled-response` for clients | `70c4ded` | open (large) |
+| [x] | `labeled-response` for clients (a context in the client connection: ACK, the single answer, or a batch; the label goes with relayed commands and pending commands) | `70c4ded` | done |
 | [ ] | `draft/message-redaction` and `REDACT` | `34affa3` | open |
 | [ ] | `METADATA` / `draft/metadata-2`: pinned, muted, blocked targets | `6f9d7cb` `a30cda7` `527ad97` | open (large) |
 | [ ] | device certificates: client certificates over TLS and PROXY, SASL EXTERNAL for clients, `CLIENTCERT`, `soju.im/client-cert` | `838da54` `8fadc57` `190ac40` | open (large) |

@@ -988,3 +988,15 @@ superseded by this section.
 
 [soju]: https://soju.im
 [ada-on-alpine]: https://github.com/moebiusV/ada-on-alpine
+
+## labeled-response (70c4ded)
+
+Go carries the label of the client's message in the `context.Context`, keyed by
+the client's id, so that only the calls that were given that context are
+labeled. soja keeps it in the client connection (`Label_Active`, `Label`,
+`Label_Batch`, `Label_Pending`), set for the handling of one message
+(`Handle_Downstream_Message`, or `Handle_Message` of the upstream for an answer
+that carries the client's label) and cleared after the flush. Anything sent to
+that client during the handling is therefore labeled, including what Go sends
+with `context.TODO()`; there is no such case that matters in a handler that is
+also reached by a labeled message today.

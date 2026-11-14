@@ -162,7 +162,8 @@ package Soja.Core is
    --  pendingUpstreamCommand: a downstream command forwarded upstream and
    --  awaiting its reply.
    type Pending_Upstream_Command is record
-      Downstream_ID : Long_Long_Integer := 0;
+      Downstream_ID    : Long_Long_Integer := 0;
+      Downstream_Label : Unbounded_String;   --  the client's label, if any
       Msg           : Soja.Irc.Messages.Message;
       Sent_At       : Ada.Calendar.Time := Zero_Time;
    end record;
@@ -430,6 +431,18 @@ package Soja.Core is
 
       Sasl      : Downstream_SASL_Access;   --  null unless SASL is underway
       Monitored : Flag_Maps.Map;
+
+      --  downstreamLabelContext: the label of the message being handled (or
+      --  answered), while it is; Go keeps it in the context.  Label_Active is
+      --  "the context exists"; the label is dropped ("") when the answer is
+      --  not for the bouncer to send.  Batch is the labeled-response batch
+      --  that is open, Pending the first message, held back to be sent
+      --  alone (with the label) when there is no second one.
+      Label_Active  : Boolean := False;
+      Label         : Unbounded_String;
+      Label_Batch   : Unbounded_String;
+      Label_Pending : Soja.Irc.Messages.Message;
+      Has_Pending   : Boolean := False;
    end record;
 
    --  What an upstream connection registered with identd (host and ports as
@@ -750,6 +763,17 @@ package Soja.Core is
    --  numerics, then send.
    procedure Send_Message (DC : not null Downstream_Conn_Access;
       M : Soja.Irc.Messages.Message);
+
+   --  dc.FlushBatch: the end of a labeled answer: the held message with its
+   --  label, the closing of the batch, or ACK when nothing was sent.
+   procedure Flush_Batch (DC : not null Downstream_Conn_Access);
+
+   --  Starts and ends the label context of DC (Label "" is a context that
+   --  does nothing).
+   procedure Begin_Label
+     (DC : not null Downstream_Conn_Access; Label : String;
+      Batch : String := "");
+   procedure End_Label (DC : not null Downstream_Conn_Access);
 
    --  dc.handleMessageUnregistered: NICK/USER/PASS/AWAY.  CAP, AUTHENTICATE
    --  and BOUNCER are deferred (treated as unknown commands).
