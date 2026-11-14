@@ -77,3 +77,5 @@ tests/irc_fuzz_check
 tests/certgen_check
 tests/oauth_check
 tests/webpush_check
+tests/history_check
+tests/tmp_close_check
