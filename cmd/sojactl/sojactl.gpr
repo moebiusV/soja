@@ -1,13 +1,13 @@
---  sojuctl: a port of soju's cmd/sojuctl (create users, change passwords).
+--  sojactl: a port of soju's cmd/sojuctl (create users, change passwords).
 with "../../soja.gpr";
 
-project Sojuctl is
+project Sojactl is
    for Languages use ("Ada");
    for Source_Dirs use (".");
    for Object_Dir use "obj";
    for Create_Missing_Dirs use "True";
    for Exec_Dir use ".";
-   for Main use ("sojuctl.adb");
+   for Main use ("sojactl.adb");
 
    package Compiler is
       for Default_Switches ("Ada") use
@@ -18,4 +18,4 @@ project Sojuctl is
    package Binder is
       for Switches ("Ada") use ("-Es");
    end Binder;
-end Sojuctl;
+end Sojactl;

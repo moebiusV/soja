@@ -1,4 +1,4 @@
---  sojuctl: run BouncerServ commands on the running daemon through its admin
+--  sojactl: run BouncerServ commands on the running daemon through its admin
 --  socket (soju's cmd/sojuctl/main.go).
 pragma Ada_2022;
 
@@ -20,7 +20,7 @@ with Soja.Irc.Helpers;
 with Soja.Irc.Messages;     use Soja.Irc.Messages;
 with Soja.Logging;
 
-procedure Sojuctl is
+procedure Sojactl is
 
    Default_Config_Path : constant String := "/etc/soju/config";
    Default_Admin_Path  : constant String := "/run/soju/admin";
@@ -89,7 +89,7 @@ begin
            (Ada.Text_IO.Standard_Error, Ada.Exceptions.Exception_Message (E));
          Ada.Text_IO.Put_Line
            (Ada.Text_IO.Standard_Error,
-            "usage: sojuctl [-config path] <command>");
+            "usage: sojactl [-config path] <command>");
          GNAT.OS_Lib.OS_Exit (2);
    end;
 
@@ -159,4 +159,4 @@ begin
          end loop;
       end;
    end;
-end Sojuctl;
+end Sojactl;

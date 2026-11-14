@@ -12,7 +12,7 @@ set -eu
 apk add --no-cache openssl-libs-static zlib-static ngircd python3 openssl linux-pam py3-cryptography >/dev/null 2>&1
 (cd cmd/soja && gprbuild -q -P soja.gpr) >&2
 (cd cmd/sojadb && gprbuild -q -P sojadb.gpr) >&2
-(cd cmd/sojuctl && gprbuild -q -P sojuctl.gpr) >&2
+(cd cmd/sojactl && gprbuild -q -P sojactl.gpr) >&2
 
 D=$(mktemp -d)
 trap 'kill $(cat "$D"/*.pid 2>/dev/null) 2>/dev/null || true' EXIT
@@ -67,7 +67,7 @@ $STORE_LINE
 accept-proxy-ip localhost
 db sqlite3 $D/soja.db
 EOT
-export SOJUCTL_BIN="$PWD/cmd/sojuctl/sojuctl" SOJA_BIN="$PWD/cmd/soja/soja" SOJA_CONF="$D/soja.conf" E2E_DIR="$D"
+export SOJACTL_BIN="$PWD/cmd/sojactl/sojactl" SOJA_BIN="$PWD/cmd/soja/soja" SOJA_CONF="$D/soja.conf" E2E_DIR="$D"
 
 printf 'secret\n' | cmd/sojadb/sojadb -config "$D/soja.conf" create-user alice 2>/dev/null
 

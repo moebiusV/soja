@@ -2,7 +2,7 @@
 --
 --  Core library project, following the convention of the other
 --  ada-on-alpine packages (imsg-ada, libsodium-ada): a static library built
---  by the ada-on-alpine aport.  The executable entry points (soju, sojuctl,
+--  by the ada-on-alpine aport.  The executable entry points (soja, sojactl,
 --  sojudb) are separate main projects that import this library, mirroring
 --  soju's cmd/ split.
 

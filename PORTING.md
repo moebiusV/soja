@@ -96,7 +96,7 @@ the note: it takes minutes, and the last three such notes were wrong.
 | `fileupload/`              | `Soja.Fileupload` | `aws`                            |
 | `identd/`                  | `Soja.Identd`     | `GNAT.Sockets`                   |
 | `cmd/soju`                 | `soju` (main)     | —                                |
-| `cmd/sojuctl`              | `sojuctl` (main)  | — (IRC over unix socket)         |
+| `cmd/sojuctl`              | `sojactl` (main)  | — (IRC over unix socket)         |
 | `cmd/sojudb`               | `sojudb` (main)   | `gnatcoll-db`                    |
 
 ## Process & concurrency model
@@ -104,7 +104,7 @@ the note: it takes minutes, and the last three such notes were wrong.
 The pinned soju revision is **single-process**: one goroutine per connection,
 plus `sync.WaitGroup` / channels / timers for coordination. There is no imsg,
 no fork, no `os/exec`, and the `unix+admin` listener is plain IRC over a Unix
-socket (sojuctl speaks IRC to it). So `imsg-ada` and `spawn` are **not** used.
+socket (sojactl speaks IRC to it). So `imsg-ada` and `spawn` are **not** used.
 
 Map concurrency to Ada tasking:
 - one goroutine per connection → one Ada task per connection;
@@ -369,7 +369,7 @@ it).  The disable goes through the user's own task (`User_Update_Event`).
 Deviations: already-disabled users are skipped, the log says "disabled", and a
 failure on one user does not stop the others (SB-14).
 
-### `sojuctl` and the admin socket (`Soja.Unix_Server`, `Soja.Conn.Unix`)
+### `sojactl` and the admin socket (`Soja.Unix_Server`, `Soja.Conn.Unix`)
 
 `cmd/sojuctl` sends `BOUNCERSERV :<quoted words>` to the `unix+admin://[path]`
 listener (default `/run/soju/admin`) and prints the PRIVMSGs that come back;
@@ -389,7 +389,7 @@ Deviations:
 - A unix descriptor is closed once, after both `Close` and the reader's
   end-of-stream (closing it at the end of the stream alone let the later
   `Close` hit a descriptor number reused by a new connection).
-- `sojuctl` quotes words with the same Go-style `%q` as Go; a word holding a
+- `sojactl` quotes words with the same Go-style `%q` as Go; a word holding a
   control character (a newline, a tab) comes out as the letter after the
   backslash, because BouncerServ's word splitting has no `\n`.
 

@@ -62,8 +62,8 @@ cmd/sojadb/obj/
 tests/__pycache__/
 tests/identd_check
 tests/admin_check
-cmd/sojuctl/sojuctl
-cmd/sojuctl/obj/
+cmd/sojactl/sojactl
+cmd/sojactl/obj/
 tests/proxy_check
 tests/sqlite_features_check
 tests/dbmsg_check

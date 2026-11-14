@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from e2e_client import Client, Fail, WsClient, ws_request  # noqa: E402
 
 SOJA = os.environ["SOJA_BIN"]
-SOJUCTL = os.environ["SOJUCTL_BIN"]
+SOJACTL = os.environ["SOJACTL_BIN"]
 CONF = os.environ["SOJA_CONF"]
 DIR = os.environ["E2E_DIR"]
 BOUNCER, SERVER = 6697, 6667
@@ -151,14 +151,14 @@ def main():
     if "NO-USER" not in ask_identd(ports[0] + 1, SERVER):
         raise Fail("identd answered for an unknown connection")
 
-    log("sojuctl and the admin socket")
+    log("sojactl and the admin socket")
     sock = os.path.join(DIR, "admin.sock")
     mode = os.stat(sock).st_mode & 0o777
     if mode != 0o600:
         raise Fail(f"admin socket has mode {mode:o}, wanted 600")
 
     def ctl(*words):
-        return subprocess.run([SOJUCTL, "-config", CONF, *words],
+        return subprocess.run([SOJACTL, "-config", CONF, *words],
                               capture_output=True, text=True, timeout=20)
 
     r = ctl("user", "status")
