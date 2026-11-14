@@ -364,6 +364,51 @@ begin
    end;
 
    -------------------------------------------------------------------
+   --  The session start: connect commands, a pause, then the autojoin.
+   -------------------------------------------------------------------
+   declare
+      use type Ada.Calendar.Time;
+      K  : constant Natural := UC_Log.Count;
+      T0 : Ada.Calendar.Time;
+   begin
+      Net.Network_Record.Connect_Commands.Append
+        (To_Unbounded_String ("PRIVMSG NickServ :IDENTIFY secret"));
+      Soja.Core.Join_Delay := 0.6;
+      T0 := Ada.Calendar.Clock;
+      Soja.Core.Start_Session (UC);
+      Check (Ada.Calendar.Clock - T0 >= 0.5,
+             "joining waits after the connect commands");
+      Check (Wait (UC_Log, K + 2)
+             and then Line_Of (UC_Log, K + 1)
+                      = "PRIVMSG NickServ :IDENTIFY secret"
+             and then Line_Of (UC_Log, K + 2) = "JOIN #a,#b k",
+             "the connect command comes first, then the JOIN: "
+             & Last_Line (UC_Log));
+
+      --  Nothing to wait for: the JOINs go at once.
+      Net.Network_Record.Connect_Commands.Clear;
+      T0 := Ada.Calendar.Clock;
+      Soja.Core.Start_Session (UC);
+      Check (Ada.Calendar.Clock - T0 < 0.3, "no pause without a reason");
+
+      --  A certificate the server does not offer SASL EXTERNAL for: pause.
+      Net.Network_Record.SASL.Mechanism := To_Unbounded_String ("EXTERNAL");
+      Soja.Irc.Cap_Registry.Set_Available (UC.Caps, "sasl", "PLAIN");
+      T0 := Ada.Calendar.Clock;
+      Soja.Core.Start_Session (UC);
+      Check (Ada.Calendar.Clock - T0 >= 0.5,
+             "joining waits when SASL EXTERNAL is configured but not offered");
+      Soja.Irc.Cap_Registry.Set_Available (UC.Caps, "sasl", "EXTERNAL,PLAIN");
+      T0 := Ada.Calendar.Clock;
+      Soja.Core.Start_Session (UC);
+      Check (Ada.Calendar.Clock - T0 < 0.3,
+             "and joins at once when the server offers it");
+      Soja.Irc.Cap_Registry.Delete (UC.Caps, "sasl");
+      Net.Network_Record.SASL.Mechanism := Null_Unbounded_String;
+      Soja.Core.Join_Delay := 3.0;
+   end;
+
+   -------------------------------------------------------------------
    --  001: registered, and the saved channels are joined once.
    -------------------------------------------------------------------
    declare
@@ -371,6 +416,8 @@ begin
    begin
       Ok (":irc 001 alice_ :Welcome");
       Check (UC.Registered and then To_String (UC.Nick) = "alice_", "001");
+      --  (The channels are joined once the session starts, not on the 001.)
+      Soja.Core.Upstream_Dispatch.Join_Saved_Channels (UC);
       Check (UC.Server_Prefix /= null
              and then To_String (UC.Server_Prefix.Name) = "irc",
              "server prefix from 001");
@@ -818,6 +865,7 @@ begin
          K : constant Natural := UC_Log.Count;
       begin
          Ok (":irc 001 alice_ :Welcome back");
+         Soja.Core.Upstream_Dispatch.Join_Saved_Channels (UC);
          Check (Wait (UC_Log, K + 1) and then Last_Line (UC_Log) = "JOIN #b",
                 "reconnect skips the kicked channel: " & Last_Line (UC_Log));
          --  Joining it by hand (here: our own JOIN arriving) clears the
@@ -825,6 +873,7 @@ begin
          Down (":alice_!u@h JOIN #a", 1, "rejoined by hand");
          Check (not Net.Kicked.Has ("#a"), "an own JOIN clears the kick");
          Ok (":irc 001 alice_ :Welcome again");
+         Soja.Core.Upstream_Dispatch.Join_Saved_Channels (UC);
          Check (Wait (UC_Log, K + 3)
                 and then Last_Line (UC_Log) = "JOIN #a,#b k",
                 "autojoin includes it again: " & Last_Line (UC_Log));

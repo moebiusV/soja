@@ -635,6 +635,16 @@ package Soja.Core is
    procedure For_Each_Downstream
      (Net : not null Network_Access; Process : not null Downstream_Process);
 
+   --  How long to leave the network's authentication to settle before the
+   --  saved channels are joined (a variable, so that tests need not wait).
+   Join_Delay : Duration := 3.0;
+
+   --  What connectToUpstream does once the connection has registered: the
+   --  connect commands, the pause for the authentication they may start (a
+   --  connect command, or a client certificate that the server does not take
+   --  by SASL EXTERNAL), and the JOINs of the saved channels.
+   procedure Start_Session (UC : not null Upstream_Conn_Access);
+
    function Is_Stopped (Net : not null Network_Access) return Boolean;
 
    --  network.stop(): flag the network as stopped (its run loop ends) and

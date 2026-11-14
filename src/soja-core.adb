@@ -772,7 +772,19 @@ package body Soja.Core is
          end if;
       end loop;
 
-      for Command of UC.Network.Network_Record.Connect_Commands loop
+      return (Success => True, Reason => Null_Unbounded_String,
+              Temporary => True);
+   end Run_Until_Registered;
+
+   --  What connectToUpstream does once the connection has registered: send
+   --  the connect commands, leave 3 seconds for the authentication they (or
+   --  a client certificate the server does not take by SASL) start, then
+   --  join the saved channels.
+   procedure Start_Session (UC : not null Upstream_Conn_Access) is
+      Net   : constant Network_Access := UC.Network;
+      Delay_Joining : Boolean := False;
+   begin
+      for Command of Net.Network_Record.Connect_Commands loop
          begin
             Send_Message (UC, Parse_Message (To_String (Command)));
          exception
@@ -784,9 +796,36 @@ package body Soja.Core is
          end;
       end loop;
 
-      return (Success => True, Reason => Null_Unbounded_String,
-              Temporary => True);
-   end Run_Until_Registered;
+      --  Some channels require the user to be logged in to be joined, which
+      --  may need to happen asynchronously: via connect commands (a message
+      --  to NickServ or similar), or via a client certificate on a network
+      --  that does not offer SASL EXTERNAL.  Leave time for it.
+      if not Net.Network_Record.Connect_Commands.Is_Empty then
+         UC.Logger.Debug
+           ("sent" & Natural'Image
+              (Natural (Net.Network_Record.Connect_Commands.Length))
+            & " connect command(s)");
+         Delay_Joining := True;
+      end if;
+      if To_String (Net.Network_Record.SASL.Mechanism) = "EXTERNAL"
+        and then not Soja.Core.Upstream_Dispatch.Supports_SASL
+                        (UC, "EXTERNAL")
+      then
+         UC.Logger.Debug
+           ("client certificate configured but the upstream doesn't "
+            & "advertise SASL EXTERNAL, delaying joining channels");
+         Delay_Joining := True;
+      end if;
+      if Delay_Joining then
+         select
+            Net.Stopped.Wait;
+         or
+            delay Join_Delay;
+         end select;
+      end if;
+
+      Soja.Core.Upstream_Dispatch.Join_Saved_Channels (UC);
+   end Start_Session;
 
    --  uc.readMessages: forward each upstream message to the user's event
    --  queue.
@@ -831,6 +870,8 @@ package body Soja.Core is
                    ("failed to register: " & To_String (RR.Reason)),
                  Temporary => RR.Temporary);
       end if;
+
+      Start_Session (UC);
 
       --  (The user's loop sets Net.Conn when it handles this event.)
       Net.User.Events.Enqueue (new Upstream_Connected_Event'(UC => UC));

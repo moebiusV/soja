@@ -48,6 +48,10 @@ package Soja.Core.Upstream_Dispatch is
      (UC : not null Upstream_Conn_Access)
       return Soja.Irc.Genmsg.String_Vectors.Vector;
 
+   --  Sends the JOINs for the network's saved channels (but not the ones we
+   --  were kicked from): called once the connection has registered.
+   procedure Join_Saved_Channels (UC : not null Upstream_Conn_Access);
+
    --  dc.buildIsupport: the tokens this client is to be sent now.
    function Build_Isupport
      (DC : not null Downstream_Conn_Access) return Isupport_Maps.Map;

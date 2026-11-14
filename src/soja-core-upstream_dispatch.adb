@@ -2813,25 +2813,12 @@ package body Soja.Core.Upstream_Dispatch is
       return Success;
    end Handle_Authenticate;
 
-   function Handle_Welcome
-     (UC : not null Upstream_Conn_Access; Msg : Message) return Handle_Result
-   is
-      Bad : Boolean;
-      R   : constant Handle_Result := Check_Params (Msg, 1, Bad);
+   --  Joins the network's saved channels.  This is the only place soja joins
+   --  on its own: once per (re)connection, never in response to a kick or a
+   --  refused join (see PORTING.md).  It is called once the connection is
+   --  registered, after the connect commands and the pause they may need.
+   procedure Join_Saved_Channels (UC : not null Upstream_Conn_Access) is
    begin
-      if Bad then
-         return R;
-      end if;
-
-      UC.Nick := Msg.Params (1);
-      UC.Registered := True;
-      UC.Server_Prefix := Msg.Prefix;
-      UC.Logger.Print
-        ("connection registered with nick " & Quote (To_String (UC.Nick)));
-
-      --  Join the network's saved channels.  This is the only place soja
-      --  joins on its own: once per (re)connection, never in response to a
-      --  kick or a refused join (see PORTING.md).
       if UC.Network.Channels.Length > 0 then
          declare
             Channels, Keys : String_Vectors.Vector;
@@ -2858,6 +2845,24 @@ package body Soja.Core.Upstream_Dispatch is
             end loop;
          end;
       end if;
+   end Join_Saved_Channels;
+
+   function Handle_Welcome
+     (UC : not null Upstream_Conn_Access; Msg : Message) return Handle_Result
+   is
+      Bad : Boolean;
+      R   : constant Handle_Result := Check_Params (Msg, 1, Bad);
+   begin
+      if Bad then
+         return R;
+      end if;
+
+      UC.Nick := Msg.Params (1);
+      UC.Registered := True;
+      UC.Server_Prefix := Msg.Prefix;
+      UC.Logger.Print
+        ("connection registered with nick " & Quote (To_String (UC.Nick)));
+
       return Success;
    end Handle_Welcome;
 
