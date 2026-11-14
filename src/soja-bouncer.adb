@@ -616,7 +616,17 @@ package body Soja.Bouncer is
                         exit;
                   end;
 
-                  if To_String (M.Command) = "BOUNCERSERV" then
+                  if To_String (M.Command) in "CAP" | "NICK" | "USER"
+                                              | "PASS"
+                  then
+                     --  Ensure regular IRC clients cannot connect.  This is
+                     --  important to e.g. prevent unprivileged users from
+                     --  connecting to the admin socket.
+                     Soja.Conn.Send_Message
+                       (C, Make ("ERROR",
+                                 ["This is not a regular IRC server"]));
+                     exit;
+                  elsif To_String (M.Command) = "BOUNCERSERV" then
                      if M.Params.Is_Empty then
                         Reply (Make (ERR_NEEDMOREPARAMS,
                                      ["*", "BOUNCERSERV",

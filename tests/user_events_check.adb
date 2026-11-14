@@ -351,11 +351,15 @@ begin
                                Key => To_Unbounded_String ("k"), others => <>));
       Other_DC := New_DC (U, Net, 2, Other_Log);
       U.Downstream_Conns.Append (Other_DC);
+      Net.Has_Last_Error := True;
+      Net.Last_Error := To_Unbounded_String ("connection refused");
+      Net.Push_Targets.Set ("#a", Ada.Calendar.Clock);
       declare
          NRec : SD.Network := Net.Network_Record;
       begin
          NRec.Nick := To_Unbounded_String ("alice-on-libera");
          NRec.Username := To_Unbounded_String ("lib");
+         NRec.Enabled := True;
          Count := DC_Log.Count;
          Updated := Soja.Core.User_Ops.Update_Network (U, NRec);
       end;
@@ -365,6 +369,11 @@ begin
              "the network was replaced, in the same place");
       Check (To_String (Updated.Network_Record.Nick) = "alice-on-libera"
              and then Updated.Channels.Has ("#a"), "new settings, same channels");
+      Check (Updated.Has_Last_Error
+             and then To_String (Updated.Last_Error) = "connection refused",
+             "the last error is carried over");
+      Check (Updated.Push_Targets.Has ("#a"),
+             "the push targets are carried over");
       Check (Other_DC.Network = Updated, "clients are patched to the new one");
       Check (not Soja.Conn.Is_Closed (Other_DC.Conn),
              "and are not disconnected");
@@ -383,6 +392,20 @@ begin
          Check (Length (Updated.Network_Record.Nick) = 0, "default nick wiped");
       end;
       delay 0.2;   --  let its notification reach the client
+
+      --  Disabling a network drops its error; it stays enabled afterwards.
+      Updated.Has_Last_Error := True;
+      declare
+         NRec : SD.Network := Updated.Network_Record;
+      begin
+         NRec.Enabled := False;
+         Updated := Soja.Core.User_Ops.Update_Network (U, NRec);
+         Check (not Updated.Has_Last_Error,
+                "the error of a network that was disabled is dropped");
+         NRec.Enabled := True;
+         Updated := Soja.Core.User_Ops.Update_Network (U, NRec);
+      end;
+      delay 0.2;
 
       --  Delete: stored rows go, the clients on it are closed, others are told.
       Count := DC_Log.Count;

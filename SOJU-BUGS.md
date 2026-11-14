@@ -4,6 +4,15 @@ This is the working list for the upstream pull requests: once soja is complete,
 **each entry below becomes its own PR against soju** (one branch, one commit,
 one Go test per bug).  Add an entry the moment a bug is found; do not batch.
 
+- Status against current soju (re-checked 2026-11-14 against
+  <https://codeberg.org/emersion/soju> `master` at `de8690c`, 221 commits
+  after the translation's revision): **15 of the 19 are still present**, 3
+  are fixed upstream (SB-01, SB-02, SB-08), and SB-19 is fixed apart from one
+  small edge.  Ten (SB-03, 04, 05, 06, 09, 11, 13, 15, 16, 17) were
+  reproduced with a failing Go test on `master` that passes with the fix; the
+  other five (SB-07, 10, 12, 14, 18) were checked by reading the code.  The "Status now" column says which.
+  The entries below describe the code of the old revision; where the code has
+  moved, the new place is in the table.
 - Reference revision: soju `6541047` (`v0.8.0-9-g6541047`, 2024-07-04,
   "readme: move to Codeberg"), from <https://git.sr.ht/~emersion/soju>
   (its last commit before the project moved to
@@ -17,27 +26,27 @@ one Go test per bug).  Add an entry the moment a bug is found; do not batch.
 - `PORTING.md` ("Bugs in soju that soja fixes") has the same bugs in short
   form; this file is the PR-ready version.
 
-| ID | Where | Summary | Severity |
-| --- | --- | --- | --- |
-| SB-01 | `upstream.go:949` | ISUPPORT `-TOKEN` negation never takes effect, and is passed to clients as a set | medium |
-| SB-02 | `upstream.go:1954` | `supportsSASL` compares the mechanism with itself | medium |
-| SB-03 | `upstream.go:526` | `enqueueCommand` give-up duplicates an entry and never sends the next command | low |
-| SB-04 | `upstream.go:1990` | "unsupported SASL mechanism" error prints the capability name | trivial |
-| SB-05 | `upstream.go:713` | `CAP LS` continuation test indexes the wrong slice | low |
-| SB-06 | `msgstore/memory.go:79` | memory store `LastMsgID` loses the next message from the backlog | medium |
-| SB-07 | `downstream.go:3365` | `forwardChannel` panics on a channel whose NAMES are incomplete (reachable via `attach`) | medium |
-| SB-08 | `downstream.go:1710` | a failed authentication is never reported to the client | medium |
-| SB-09 | `service.go:74` | `splitWords` loses or glues a word that ends in an escaped space | low |
-| SB-10 | `service.go:1157` | `user delete <own name>` waits for the user's own goroutine and never returns | high |
-| SB-11 | `service.go:1408` | `channel update` with a bad value half-applies the change in memory | low |
-| SB-12 | `service.go:677` | `network delete -x` deletes the current network | low |
-| SB-17 | `msgstore/fs.go:557` | renaming a network that has no logs yet logs an error | low |
-| SB-18 | `user.go:539` | the file store keeps the user's nick from when it was created | low |
-| SB-19 | `fileupload/fs.go:77` | a failed upload leaves the partly written file; an upload with no name is stored as `<token>-.ext` | low |
-| SB-15 | `database/sqlite.go:1130` | `CHATHISTORY TARGETS` lists a target that has only events, with the zero time | low |
-| SB-16 | `database/sqlite.go:1242` | `SEARCH` fails when its text has no word in it | low |
-| SB-14 | `server.go:725` | the inactive-user loop re-disables disabled users, says "deleted", and stops at the first failure | low |
-| SB-13 | `downstream.go:140` | `BOUNCER ADDNETWORK`/`CHANGENETWORK` build an unusable address from an IPv6 host | low |
+| ID | Summary | In the revision soja was translated from | In soju now (`de8690c`) | Status now | Severity |
+| --- | --- | --- | --- | --- | --- |
+| SB-01 | ISUPPORT `-TOKEN` negation never takes effect, and is passed to clients as a set | `upstream.go:949` | `upstream.go:1046` | FIXED (1459547) | medium |
+| SB-02 | `supportsSASL` compares the mechanism with itself | `upstream.go:1954` | `upstream.go:2090` | FIXED (bcd85ab) | medium |
+| SB-03 | `enqueueCommand` give-up duplicates an entry and never sends the next command | `upstream.go:526` | `upstream.go:546-560` | present (restructured; `copy` still never shortens the slice) | low |
+| SB-04 | "unsupported SASL mechanism" error prints the capability name | `upstream.go:1990` | `upstream.go:2127` | present | trivial |
+| SB-05 | `CAP LS` continuation test indexes the wrong slice | `upstream.go:713` | `upstream.go:823` | present | low |
+| SB-06 | memory store `LastMsgID` loses the next message from the backlog | `msgstore/memory.go:79` | `msgstore/memory.go:79` | present | medium |
+| SB-07 | `forwardChannel` panics on a channel whose NAMES are incomplete (reachable via `attach`) | `downstream.go:3365` | `user.go:428, downstream.go:4124` | present | medium |
+| SB-08 | a failed authentication is never reported to the client | `downstream.go:1710` | `downstream.go:1972` | FIXED (bd9873e; the error is sent and the connection closed, no retry) | medium |
+| SB-09 | `splitWords` loses or glues a word that ends in an escaped space | `service.go:74` | `service.go:77-118` | present | low |
+| SB-10 | `user delete <own name>` waits for the user's own goroutine and never returns | `service.go:1157` | `service.go:1238` | present | high |
+| SB-11 | `channel update` with a bad value half-applies the change in memory | `service.go:1408` | `service.go:1415-1445` | present | low |
+| SB-12 | `network delete -x` deletes the current network | `service.go:677` | `service.go:744, 520, 1076` | present (`-x` is taken as "no name") | low |
+| SB-17 | renaming a network that has no logs yet logs an error | `msgstore/fs.go:557` | `msgstore/fs.go:551` | present | low |
+| SB-18 | the file store keeps the user's nick from when it was created | `user.go:539` | `user.go:599` | present | low |
+| SB-19 | a failed upload leaves the partly written file; an upload with no name is stored as `<token>-.ext` | `fileupload/fs.go:77` | `fileupload/fs.go` | FIXED (3dec1ed); one edge left: `path.Base("")` is "." when Content-Disposition has no filename | low |
+| SB-15 | `CHATHISTORY TARGETS` lists a target that has only events, with the zero time | `database/sqlite.go:1130` | `database/sqlite.go:1192` | present (SQLite only; Postgres drops these targets) | low |
+| SB-16 | `SEARCH` fails when its text has no word in it | `database/sqlite.go:1242` | `database/sqlite.go:1270, 1333` | present (SQLite only) | low |
+| SB-14 | the inactive-user loop re-disables disabled users, says "deleted", and stops at the first failure | `server.go:725` | `server.go:759, 810; database/sqlite.go:240` | present (all three parts) | low |
+| SB-13 | `BOUNCER ADDNETWORK`/`CHANGENETWORK` build an unusable address from an IPv6 host | `downstream.go:140` | `downstream.go:151` | present | low |
 
 ---
 

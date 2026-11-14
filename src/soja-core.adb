@@ -158,6 +158,7 @@ package body Soja.Core is
      String_Access :=
      [new String'("batch"), new String'("cap-notify"),
       new String'("echo-message"), new String'("invite-notify"),
+      new String'("no-implicit-names"),
       new String'("server-time"), new String'("setname"),
       new String'("draft/pre-away"), new String'("draft/read-marker"),
       new String'("draft/no-implicit-names"),

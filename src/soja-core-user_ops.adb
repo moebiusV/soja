@@ -424,6 +424,18 @@ package body Soja.Core.User_Ops is
 
             Remove_Network (U, Old);
 
+            --  Transfer the network attributes that are not in the record:
+            --  what was delivered, what is waiting to be pushed, the last
+            --  error (unless the network was just disabled) and the
+            --  case-mapping.
+            Updated.Delivered := Old.Delivered;
+            Updated.Push_Targets := Old.Push_Targets;
+            if Updated.Network_Record.Enabled then
+               Updated.Has_Last_Error := Old.Has_Last_Error;
+               Updated.Last_Error := Old.Last_Error;
+            end if;
+            Update_Casemapping (Updated, Old.Casemap);
+
             --  The filesystem message store must be told when the network
             --  is renamed, to move the history with it.
             if U.Msg_Store /= null

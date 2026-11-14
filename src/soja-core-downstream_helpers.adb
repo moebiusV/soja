@@ -527,6 +527,7 @@ package body Soja.Core.Downstream_Helpers is
       end if;
 
       if not Is_Enabled (DC.Caps, "soju.im/no-implicit-names")
+        and then not Is_Enabled (DC.Caps, "no-implicit-names")
         and then not Is_Enabled (DC.Caps, "draft/no-implicit-names")
       then
          Send_Names (DC, Ch);

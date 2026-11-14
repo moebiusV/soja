@@ -331,24 +331,30 @@ package body Soja.Core.Upstream_Dispatch is
                      (Downstream_ID => DC.ID, Msg => Copy (M),
                       Sent_At => Zero_Time));
 
-         --  If we didn't get a reply after a while, just give up on it, and
-         --  send the next command, which nothing else would.  (Go writes
-         --  this as copy(l, l[1:]), which keeps the length and so
-         --  duplicates the last entry, and its `len == 1` test then
-         --  never sends the new command; fixed, see PORTING.md.)
-         if V (1).Sent_At /= Zero_Time
-           and then Ada.Calendar.Clock - V (1).Sent_At > 30.0
-         then
-            V.Delete_First;
-            UC.Pending_Cmds.Replace (Cmd, V);
-            Send_Next_Pending_Command (UC, Cmd);
-            return;
-         end if;
+         --  If we didn't get a reply after a while, just give up on the
+         --  commands that were sent long ago (all of them, as soju does
+         --  since 29c0824), and send the first one that is left, which
+         --  nothing else would.  (Go wrote this as copy(l, l[1:]), which
+         --  keeps the length and so duplicates the last entry; fixed, see
+         --  PORTING.md.)
+         declare
+            Timed_Out : Natural := 0;
+         begin
+            while not V.Is_Empty
+              and then V (1).Sent_At /= Zero_Time
+              and then Ada.Calendar.Clock - V (1).Sent_At > 30.0
+            loop
+               UC.Logger.Print
+                 ("timed out waiting for reply to pending command: " & Cmd);
+               V.Delete_First;
+               Timed_Out := Timed_Out + 1;
+            end loop;
 
-         UC.Pending_Cmds.Replace (Cmd, V);
-         if V.Length = 1 then
-            Send_Next_Pending_Command (UC, Cmd);
-         end if;
+            UC.Pending_Cmds.Replace (Cmd, V);
+            if Timed_Out > 0 or else V.Length = 1 then
+               Send_Next_Pending_Command (UC, Cmd);
+            end if;
+         end;
       end;
    end Enqueue_Command;
 

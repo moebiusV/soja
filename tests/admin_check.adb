@@ -95,6 +95,22 @@ begin
           or else not GNAT.OS_Lib.Is_Directory (Path), "the socket exists");
    Serving.Go;
 
+   --  A regular IRC client is told this is not a regular server, and is
+   --  disconnected.
+   declare
+      procedure Refused (Line : String) is
+         C : Soja.Conn.Unix.Unix_IRC_Conn := Soja.Conn.Unix.Connect (Path);
+      begin
+         Check (Has (Ask (C, Line), "ERROR This is not a regular IRC server"),
+                Line & " is refused");
+      end Refused;
+   begin
+      Refused ("CAP LS");
+      Refused ("NICK mallory");
+      Refused ("USER u 0 * :u");
+      Refused ("PASS secret");
+   end;
+
    declare
       C : Soja.Conn.Unix.Unix_IRC_Conn := Soja.Conn.Unix.Connect (Path);
    begin
@@ -115,7 +131,7 @@ begin
       Check (Has (Ask (C, "BOUNCERSERV"), " 461 ")
              or else Has (Ask (C, "BOUNCERSERV"), "Not enough parameters"),
              "BOUNCERSERV needs a command line");
-      Check (Has (Ask (C, "NICK x"), "Unknown command"), "other commands");
+      Check (Has (Ask (C, "FROB x"), "Unknown command"), "other commands");
       Soja.Conn.Unix.Close (C);
    end;
 
