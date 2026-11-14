@@ -2,6 +2,8 @@ pragma Ada_2022;
 
 with Ada.Strings.Unbounded;
 
+with AWS.Headers;
+
 with Soja.Database;
 
 --  soju's auth/ package: password authentication of a user.  Only the
@@ -20,8 +22,15 @@ package Soja.Auth is
       External : Unbounded_String;
    end record;
 
+   --  setHTTPForwardedHeader: the headers that tell an authentication server
+   --  who the request is for (the client's address, "host:port").  Remote ""
+   --  gives none.
+   procedure Add_Forwarded_Headers
+     (Headers : in out AWS.Headers.List; Remote : String);
+
    --  Whether the driver can authenticate with a password
-   --  (PlainAuthenticator).
+   --  (PlainAuthenticator): internal, pam, http, and oauth-plain, which is a
+   --  bearer token given as the password.
    function Supports_Plain (Driver : String) return Boolean;
 
    --  Whether the driver can authenticate with an OAuth 2.0 bearer token
@@ -32,13 +41,15 @@ package Soja.Auth is
    function Auth_Bearer
      (Driver   : String;
       Token    : String;
-      Username : out Unbounded_String) return Result;
+      Username : out Unbounded_String;
+      Remote   : String := "") return Result;
 
    --  AuthPlain.  DB may be null only for drivers that don't use it.
    function Auth_Plain
      (Driver   : String;
       DB       : Soja.Database.Database_Access;
       Username : String;
-      Password : String) return Result;
+      Password : String;
+      Remote   : String := "") return Result;
 
 end Soja.Auth;

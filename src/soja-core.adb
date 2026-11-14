@@ -1024,13 +1024,15 @@ package body Soja.Core is
    function Server_SASL_Mechanisms (Srv : Soja.Server.Server_Access)
       return String
    is
-      Driver : constant String :=
-        To_String (Soja.Server.Config (Srv.all).Auth_Driver);
+      Cfg : constant Soja.Server.Server_Config_Access :=
+        Soja.Server.Config (Srv.all);
    begin
-      if Driver = "oauth2" then
+      if Length (Cfg.Plain_Auth) > 0 and then Length (Cfg.Bearer_Auth) > 0 then
          return "PLAIN,OAUTHBEARER";
-      elsif Driver = "internal" or else Driver = "pam" then
+      elsif Length (Cfg.Plain_Auth) > 0 then
          return "PLAIN";
+      elsif Length (Cfg.Bearer_Auth) > 0 then
+         return "OAUTHBEARER";
       end if;
       return "";
    end Server_SASL_Mechanisms;

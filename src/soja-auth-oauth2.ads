@@ -23,9 +23,11 @@ package Soja.Auth.OAuth2 is
    --  when Ok.
    function Bearer
      (Token    : String;
-      Username : out Ada.Strings.Unbounded.Unbounded_String) return Result;
+      Username : out Ada.Strings.Unbounded.Unbounded_String;
+      Remote   : String := "") return Result;
 
    --  AuthPlain: the password is the token, and its user must be Username.
-   function Plain (Username, Password : String) return Result;
+   function Plain
+     (Username, Password : String; Remote : String := "") return Result;
 
 end Soja.Auth.OAuth2;

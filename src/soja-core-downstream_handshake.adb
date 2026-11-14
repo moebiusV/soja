@@ -508,7 +508,10 @@ package body Soja.Core.Downstream_Handshake is
                Reason   : Unbounded_String :=
                  To_Unbounded_String ("Authentication failed");
                Driver   : constant String := To_String
-                 (Soja.Server.Config (DC.Srv.all).Auth_Driver);
+                 (Soja.Server.Config (DC.Srv.all).Plain_Auth);
+               Bearer_Driver : constant String := To_String
+                 (Soja.Server.Config (DC.Srv.all).Bearer_Auth);
+               Remote   : constant String := Soja.Conn.Remote_Addr (DC.Conn);
             begin
                if Mech = "PLAIN" then
                   Soja.Downstream.Unmarshal_Username
@@ -523,7 +526,7 @@ package body Soja.Core.Downstream_Handshake is
                           Soja.Auth.Auth_Plain
                             (Driver, Soja.Server.DB (DC.Srv.all),
                              To_String (Username),
-                             To_String (DC.Sasl.Plain_Password));
+                             To_String (DC.Sasl.Plain_Password), Remote);
                      begin
                         if not R.Ok then
                            Failure := R.Internal & " (username "
@@ -541,15 +544,15 @@ package body Soja.Core.Downstream_Handshake is
                      end;
                   end if;
                elsif Mech = "OAUTHBEARER" then
-                  if not Soja.Auth.Supports_Bearer (Driver) then
+                  if not Soja.Auth.Supports_Bearer (Bearer_Driver) then
                      Failure := To_Unbounded_String
                        ("SASL OAUTHBEARER not supported");
                   else
                      declare
                         R : constant Soja.Auth.Result :=
                           Soja.Auth.Auth_Bearer
-                            (Driver, To_String (DC.Sasl.Bearer_Token),
-                             Username);
+                            (Bearer_Driver, To_String (DC.Sasl.Bearer_Token),
+                             Username, Remote);
                      begin
                         if not R.Ok then
                            Failure := R.Internal;
@@ -659,7 +662,7 @@ package body Soja.Core.Downstream_Handshake is
    is
       Nick   : constant String := Nick_Of (DC);
       Driver : constant String :=
-        To_String (Soja.Server.Config (DC.Srv.all).Auth_Driver);
+        To_String (Soja.Server.Config (DC.Srv.all).Plain_Auth);
    begin
       if DC.Registered then
          raise Program_Error with "tried to register twice";
@@ -700,7 +703,8 @@ package body Soja.Core.Downstream_Handshake is
                   Username, Client, Network);
                R := Soja.Auth.Auth_Plain
                  (Driver, Soja.Server.DB (DC.Srv.all),
-                  To_String (Username), Password);
+                  To_String (Username), Password,
+                  Soja.Conn.Remote_Addr (DC.Conn));
                if not R.Ok then
                   DC.Logger.Print
                     ("PASS authentication error for user "

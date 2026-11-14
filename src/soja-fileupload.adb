@@ -496,7 +496,8 @@ package body Soja.Fileupload is
    is
       Cfg   : constant Soja.Server.Server_Config_Access :=
         Soja.Server.Config (S);
-      Driver : constant String := To_String (Cfg.Auth_Driver);
+      Driver : constant String := To_String (Cfg.Plain_Auth);
+      Bearer_Driver : constant String := To_String (Cfg.Bearer_Auth);
       Authz  : constant String := Soja.Http.Get (Req, "authorization");
       Scheme, Username, Password : Unbounded_String;
       Valid  : Boolean;
@@ -536,7 +537,7 @@ package body Soja.Fileupload is
          declare
             Result : constant Soja.Auth.Result := Soja.Auth.Auth_Plain
               (Driver, Soja.Server.DB (S), To_String (Username),
-               To_String (Password));
+               To_String (Password), Stream.Peer);
          begin
             if not Result.Ok then
                Fail (Stream, Common, 403, To_String (Result.External));
@@ -544,7 +545,7 @@ package body Soja.Fileupload is
             end if;
          end;
       elsif To_String (Scheme) = "bearer" then
-         if not Soja.Auth.Supports_Bearer (Driver) then
+         if not Soja.Auth.Supports_Bearer (Bearer_Driver) then
             Fail (Stream, Common, 400,
                   "Bearer scheme in Authorization header not supported");
             return;
@@ -552,7 +553,8 @@ package body Soja.Fileupload is
          declare
             Space  : constant Natural := Ada.Strings.Fixed.Index (Authz, " ");
             Result : constant Soja.Auth.Result := Soja.Auth.Auth_Bearer
-              (Driver, Authz (Space + 1 .. Authz'Last), Username);
+              (Bearer_Driver, Authz (Space + 1 .. Authz'Last), Username,
+               Stream.Peer);
          begin
             if not Result.Ok then
                Fail (Stream, Common, 403, To_String (Result.External));

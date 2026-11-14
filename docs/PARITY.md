@@ -20,7 +20,7 @@ change can be read.
 | [x] | `DeleteUser` removes the user's device certificates | | done |
 | [x] | default `message-store` is `db` | `4040927` | done |
 | [x] | drivers that take no source refuse one (`message-store db x`, `auth internal x`) | `6d79a8f` | done |
-| [ ] | several `auth` lines; `auth http <url>` | `f13b47e` `04fdb35` | open |
+| [x] | several `auth` lines (one password and one OAuth 2.0 authenticator); `auth http <url>` | `f13b47e` `04fdb35` | done |
 | [x] | `message-expiry` directive | `2155529` | done |
 | [x] | `icon`, `accept-proxy-unix`, `client-cert-auth` directives (read; `client-cert-auth` acts with the device certificates) | `89ce2f1` `ff99b6a` `19e86d2` | done |
 | [ ] | `file-upload http <url>` | `c4dcf1d` | open |
@@ -65,7 +65,7 @@ change can be read.
 | [x] | `message-expiry` for the db and fs stores | `2155529` | done |
 | [x] | search text without formatting codes (`stripANSI`) | `2489318` | done |
 | [x] | file upload: PDF inline, `media-src 'self'`, 413 with `Upload-Limit`, username cut at `/` or `@` | `aadecee` `3ef9cb8` `c1116b5` | done |
-| [ ] | Forwarded headers on `auth` requests | `d343f4b` `a1631a2` | open |
+| [x] | Forwarded headers on `auth` requests (http and oauth2) | `d343f4b` `a1631a2` | done |
 
 ## 4. soju bugs still present
 

@@ -39,6 +39,8 @@ package Soja.Config is
       Source : Unbounded_String;
    end record;
 
+   package Auth_Vectors is new Ada.Containers.Vectors (Positive, Auth);
+
    type File_Upload is record
       Driver : Unbounded_String;
       Source : Unbounded_String;
@@ -73,7 +75,7 @@ package Soja.Config is
 
       DB            : Soja.Config.DB;
       Msg_Store     : Soja.Config.Msg_Store;
-      Auth          : Soja.Config.Auth;
+      Auth          : Auth_Vectors.Vector;   --  the `auth` directives
       File_Upload   : access Soja.Config.File_Upload;
 
       HTTP_Origins  : String_Vectors.Vector;

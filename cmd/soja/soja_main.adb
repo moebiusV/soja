@@ -14,6 +14,7 @@ with AWS.Net;
 with AWS.Net.Std;
 with GNAT.OS_Lib;
 
+with Soja.Auth.Http;
 with Soja.Auth.OAuth2;
 with Soja.Auth.Pam;
 with Soja.Bouncer;
@@ -127,33 +128,56 @@ procedure Soja_Main is
             end;
          end if;
 
-         --  auth.New: the internal authenticator, or OAuth 2.0 (the server is
-         --  discovered now, and again at a reload).  PAM is not ported: a
-         --  bouncer that cannot check passwords must not start as if it could.
+         --  The authenticators, one per `auth` directive: one for passwords
+         --  (internal, pam, http) and one for OAuth 2.0 tokens (oauth2; the
+         --  server is discovered now, and again at a reload).  Without a
+         --  password authenticator, the OAuth one takes tokens as passwords.
          declare
-            Driver : constant String := To_String (Raw.Auth.Driver);
+            Plain, Bearer : Unbounded_String;
          begin
-            if Driver = "oauth2" then
+            for A of Raw.Auth loop
+               declare
+                  Driver : constant String := To_String (A.Driver);
                begin
-                  Soja.Auth.OAuth2.Setup (To_String (Raw.Auth.Source));
-               exception
-                  when E : Soja.Auth.OAuth2.Setup_Error =>
-                     raise Program_Error with
-                       "failed to create authenticator: "
-                       & Ada.Exceptions.Exception_Message (E);
+                  if Driver = "oauth2" then
+                     begin
+                        Soja.Auth.OAuth2.Setup (To_String (A.Source));
+                     exception
+                        when E : Soja.Auth.OAuth2.Setup_Error =>
+                           raise Program_Error with
+                             "failed to create authenticator oauth2: "
+                             & Ada.Exceptions.Exception_Message (E);
+                     end;
+                     if Length (Bearer) > 0 then
+                        raise Program_Error with
+                          "failed to load authenticators: multiple OAuth "
+                          & "authentication methods specified";
+                     end if;
+                     Bearer := A.Driver;
+                  else
+                     if Driver = "pam"
+                       and then not Soja.Auth.Pam.Available
+                     then
+                        raise Program_Error with
+                          "failed to create authenticator pam: PAM is not "
+                          & "available (libpam could not be loaded)";
+                     elsif Driver = "http" then
+                        Soja.Auth.Http.Setup (To_String (A.Source));
+                     end if;
+                     if Length (Plain) > 0 then
+                        raise Program_Error with
+                          "failed to load authenticators: multiple plain "
+                          & "authentication methods specified";
+                     end if;
+                     Plain := A.Driver;
+                  end if;
                end;
-            elsif Driver = "pam" then
-               if not Soja.Auth.Pam.Available then
-                  raise Program_Error with
-                    "failed to create authenticator: PAM is not available "
-                    & "(libpam could not be loaded)";
-               end if;
-            elsif Driver /= "internal" then
-               raise Program_Error with
-                 "failed to create authenticator: the " & Quote (Driver)
-                 & " authentication driver is not supported by soja";
+            end loop;
+            if Length (Bearer) > 0 and then Length (Plain) = 0 then
+               Plain := To_Unbounded_String ("oauth-plain");
             end if;
-            Cfg.Auth_Driver := Raw.Auth.Driver;
+            Cfg.Plain_Auth := Plain;
+            Cfg.Bearer_Auth := Bearer;
          end;
 
          if Raw.TLS /= null then

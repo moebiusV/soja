@@ -124,8 +124,10 @@ begin
    -------------------------------------------------------------------
    Check (To_String (Soja.Server.Config (S).Hostname) = "localhost"
           and then Soja.Server.Config (S).Max_User_Networks = -1
-          and then To_String (Soja.Server.Config (S).Auth_Driver)
-                   = "internal", "NewServer config defaults");
+          and then To_String (Soja.Server.Config (S).Plain_Auth)
+                   = "internal"
+          and then Length (Soja.Server.Config (S).Bearer_Auth) = 0,
+          "NewServer config defaults");
    Check (Server_SASL_Mechanisms (S'Unchecked_Access) = "PLAIN",
           "internal auth offers PLAIN");
 
@@ -160,7 +162,8 @@ begin
       use Soja.Irc.Cap_Registry;
    begin
       Cfg.Msg_Store_Driver := To_Unbounded_String ("fs");
-      Cfg.Auth_Driver := To_Unbounded_String ("oauth2");
+      Cfg.Plain_Auth := To_Unbounded_String ("oauth-plain");
+      Cfg.Bearer_Auth := To_Unbounded_String ("oauth2");
       S.Set_Config (Cfg);
       Check (Server_SASL_Mechanisms (S'Unchecked_Access)
              = "PLAIN,OAUTHBEARER", "oauth2 offers both");
@@ -172,16 +175,21 @@ begin
              "sasl cap value (oauth2)");
 
       Cfg.Msg_Store_Driver := To_Unbounded_String ("memory");
-      Cfg.Auth_Driver := To_Unbounded_String ("pam");
+      Cfg.Plain_Auth := To_Unbounded_String ("pam");
+      Cfg.Bearer_Auth := Null_Unbounded_String;
       Check (Server_SASL_Mechanisms (S'Unchecked_Access) = "PLAIN",
              "pam offers PLAIN");
       DC := Make_DC (5);
       Check (not Is_Available (DC.Caps, "draft/chathistory"),
              "memory store: no chathistory");
-      Cfg.Auth_Driver := To_Unbounded_String ("bogus");
+      Cfg.Plain_Auth := Null_Unbounded_String;
       Check (Server_SASL_Mechanisms (S'Unchecked_Access) = "",
-             "unknown driver offers nothing");
-      Cfg.Auth_Driver := To_Unbounded_String ("internal");
+             "no authenticator offers nothing");
+      Cfg.Bearer_Auth := To_Unbounded_String ("oauth2");
+      Check (Server_SASL_Mechanisms (S'Unchecked_Access) = "OAUTHBEARER",
+             "a bearer-only server offers OAUTHBEARER");
+      Cfg.Plain_Auth := To_Unbounded_String ("internal");
+      Cfg.Bearer_Auth := Null_Unbounded_String;
    end;
 
    -------------------------------------------------------------------

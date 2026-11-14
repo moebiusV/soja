@@ -2,6 +2,9 @@ pragma Ada_2022;
 
 with Ada.Exceptions;
 
+with Ada.Strings.Fixed;
+
+with Soja.Auth.Http;
 with Soja.Auth.OAuth2;
 with Soja.Auth.Pam;
 
@@ -16,10 +19,29 @@ package body Soja.Auth is
       Internal => To_Unbounded_String (Internal),
       External => To_Unbounded_String (External));
 
+   procedure Add_Forwarded_Headers
+     (Headers : in out AWS.Headers.List; Remote : String)
+   is
+      --  net.SplitHostPort: the host of "host:port" (or "[v6]:port").
+      Colon : constant Natural :=
+        Ada.Strings.Fixed.Index (Remote, ":", Ada.Strings.Backward);
+      Host  : constant String :=
+        (if Remote'Length > 0 and then Remote (Remote'First) = '['
+         then Remote (Remote'First + 1
+                      .. Ada.Strings.Fixed.Index (Remote, "]") - 1)
+         elsif Colon > 0 then Remote (Remote'First .. Colon - 1)
+         else Remote);
+   begin
+      if Remote = "" then
+         return;
+      end if;
+      AWS.Headers.Add (Headers, "Forwarded", "for=" & '"' & Remote & '"');
+      AWS.Headers.Add (Headers, "X-Forwarded-For", Host);
+   end Add_Forwarded_Headers;
+
    function Supports_Plain (Driver : String) return Boolean is
    begin
-      return Driver = "internal" or else Driver = "pam"
-        or else Driver = "oauth2";
+      return Driver in "internal" | "pam" | "http" | "oauth-plain";
    end Supports_Plain;
 
    function Supports_Bearer (Driver : String) return Boolean is
@@ -28,7 +50,8 @@ package body Soja.Auth is
    function Auth_Bearer
      (Driver   : String;
       Token    : String;
-      Username : out Unbounded_String) return Result
+      Username : out Unbounded_String;
+      Remote   : String := "") return Result
    is
    begin
       Username := Null_Unbounded_String;
@@ -36,19 +59,23 @@ package body Soja.Auth is
          return Failure ("the " & Driver & " authenticator has no bearer "
                          & "tokens", "Authentication failed");
       end if;
-      return Soja.Auth.OAuth2.Bearer (Token, Username);
+      return Soja.Auth.OAuth2.Bearer (Token, Username, Remote);
    end Auth_Bearer;
 
    function Auth_Plain
      (Driver   : String;
       DB       : Soja.Database.Database_Access;
       Username : String;
-      Password : String) return Result
+      Password : String;
+      Remote   : String := "") return Result
    is
       U : Soja.Database.User;
    begin
-      if Driver = "oauth2" then
-         return Soja.Auth.OAuth2.Plain (Username, Password);
+      if Driver = "oauth-plain" then
+         --  The token is the password, and its user must be Username.
+         return Soja.Auth.OAuth2.Plain (Username, Password, Remote);
+      elsif Driver = "http" then
+         return Soja.Auth.Http.Plain (Username, Password, Remote);
       elsif Driver = "pam" then
          return Soja.Auth.Pam.Plain (Username, Password);
       elsif Driver /= "internal" then

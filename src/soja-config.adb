@@ -367,8 +367,8 @@ package body Soja.Config is
                            Source => To_Unbounded_String ("soju.db")),
          Msg_Store     => (Driver => To_Unbounded_String ("db"),
                            Source => Null_Unbounded_String),
-         Auth          => (Driver => To_Unbounded_String ("internal"),
-                           Source => Null_Unbounded_String),
+         Auth          => [(Driver => To_Unbounded_String ("internal"),
+                            Source => Null_Unbounded_String)],
          File_Upload   => null,
          HTTP_Origins  => String_Vectors.Empty_Vector,
          HTTP_Ingress  => Null_Unbounded_String,   --  see Parse
@@ -397,6 +397,7 @@ package body Soja.Config is
 
       Has_Msg_Store : Boolean := False;
       Has_Log       : Boolean := False;
+      Has_Auth      : Boolean := False;
    begin
       for E of Tree loop
          if E.Directive_line = null then
@@ -477,19 +478,31 @@ package body Soja.Config is
                   Driver, Source : Unbounded_String;
                begin
                   Parse_Driver_Source (Name, P, Driver, Source);
-                  if Driver /= "internal" and then Driver /= "pam"
-                    and then Driver /= "oauth2"
-                  then
-                     Error ("directive auth: unknown driver """ &
-                            To_String (Driver) & '"');
-                  elsif Driver = "oauth2" and then Length (Source) = 0 then
-                     Error ("directive auth: driver """ & To_String (Driver)
-                            & """ requires a source");
-                  elsif Driver /= "oauth2" and then Length (Source) > 0 then
-                     Error ("directive auth: driver """ & To_String (Driver)
-                            & """ requires zero parameters");
+                  declare
+                     Kind : constant String := To_String (Driver);
+                  begin
+                     if Kind not in "internal" | "pam" | "http" | "oauth2" then
+                        Error ("directive auth: unknown driver """ & Kind
+                               & '"');
+                     elsif Kind in "http" | "oauth2"
+                       and then Length (Source) = 0
+                     then
+                        Error ("directive auth: driver """ & Kind
+                               & """ requires a source");
+                     elsif Kind not in "http" | "oauth2"
+                       and then Length (Source) > 0
+                     then
+                        Error ("directive auth: driver """ & Kind
+                               & """ requires zero parameters");
+                     end if;
+                  end;
+                  --  An explicit `auth` drops the default (internal).
+                  if not Has_Auth then
+                     Srv.Auth.Clear;
+                     Has_Auth := True;
                   end if;
-                  Srv.Auth := (Driver => Driver, Source => Source);
+                  Srv.Auth.Append
+                    (Auth'(Driver => Driver, Source => Source));
                end;
 
             elsif Name = "file-upload" then

@@ -86,8 +86,10 @@ begin
       if To_String (S.Msg_Store.Driver) /= "db" then
          raise Program_Error with "message-store wrong";
       end if;
-      if To_String (S.Auth.Driver) /= "oauth2"
-        or else To_String (S.Auth.Source) /= "https://auth.example.com"
+      if Natural (S.Auth.Length) /= 1
+        or else To_String (S.Auth.First_Element.Driver) /= "oauth2"
+        or else To_String (S.Auth.First_Element.Source)
+                /= "https://auth.example.com"
       then
          raise Program_Error with "auth wrong (unescape?)";
       end if;
@@ -181,6 +183,21 @@ begin
       Check (Fails ("auth internal x"), "internal takes no source");
       Check (Fails ("auth pam x"), "pam takes no source");
       Check (Fails ("auth oauth2"), "oauth2 needs a source");
+
+      --  Several auth lines (internal is dropped once one is given), http.
+      declare
+         C : constant Soja.Config.Server := Soja.Config.Parse
+           ("auth http https://a.example/check" & ASCII.LF
+            & "auth oauth2 https://o.example" & ASCII.LF);
+      begin
+         Check (Natural (C.Auth.Length) = 2
+                and then To_String (C.Auth.First_Element.Driver) = "http"
+                and then To_String (C.Auth.Last_Element.Driver) = "oauth2",
+                "two auth directives");
+         Check (Natural (Soja.Config.Parse ("title x").Auth.Length) = 1,
+                "internal auth by default");
+      end;
+      Check (Fails ("auth http"), "auth http needs a source");
 
       --  icon, accept-proxy-unix, client-cert-auth.
       Check (To_String (Soja.Config.Parse ("icon https://x.example/i.png")

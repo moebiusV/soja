@@ -62,8 +62,12 @@ package Soja.Server is
       Accept_Proxy_Unix : Boolean := False;
       Client_Cert_Auth  : Boolean := False;
       Enable_Users_On_Auth : Boolean := False;
-      Auth_Driver       : Ada.Strings.Unbounded.Unbounded_String :=
+      --  The authenticators: for a password (internal, pam, http, or
+      --  oauth-plain: an OAuth 2.0 token given as the password) and for an
+      --  OAuth 2.0 bearer token (oauth2); empty when there is none.
+      Plain_Auth        : Ada.Strings.Unbounded.Unbounded_String :=
         Ada.Strings.Unbounded.To_Unbounded_String ("internal");
+      Bearer_Auth       : Ada.Strings.Unbounded.Unbounded_String;
       Has_File_Uploader : Boolean := False;
       --  The `file-upload fs <dir>` directory, "" when there is none.
       File_Upload_Dir   : Ada.Strings.Unbounded.Unbounded_String;

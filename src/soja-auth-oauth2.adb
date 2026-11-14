@@ -184,7 +184,8 @@ package body Soja.Auth.OAuth2 is
 
    function Bearer
      (Token    : String;
-      Username : out Unbounded_String) return Result
+      Username : out Unbounded_String;
+      Remote   : String := "") return Result
    is
       S        : constant Settings := Current.Get;
       Headers  : AWS.Headers.List;
@@ -196,6 +197,7 @@ package body Soja.Auth.OAuth2 is
       end if;
       Soja.Tls_Default.Ensure;
       AWS.Headers.Add (Headers, "Accept", "application/json");
+      Add_Forwarded_Headers (Headers, Remote);
       if Length (S.Client_ID) > 0 then
          AWS.Headers.Add
            (Headers, "Authorization",
@@ -250,9 +252,11 @@ package body Soja.Auth.OAuth2 is
       end;
    end Bearer;
 
-   function Plain (Username, Password : String) return Result is
+   function Plain
+     (Username, Password : String; Remote : String := "") return Result
+   is
       Effective : Unbounded_String;
-      R         : constant Result := Bearer (Password, Effective);
+      R         : constant Result := Bearer (Password, Effective, Remote);
    begin
       if not R.Ok then
          return R;

@@ -1134,9 +1134,73 @@ def oauth_section():
     log("auth oauth2: OAUTHBEARER and PLAIN through a fake server")
 
 
+def http_auth_section():
+    """auth http, with the Forwarded headers, beside an oauth2 line."""
+    import base64
+    import http.server
+    import threading
+
+    seen = []
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            seen.append(dict(self.headers))
+            user, _, pw = base64.b64decode(
+                self.headers.get("Authorization", "Basic ")[6:]
+            ).decode().partition(":")
+            code = 200 if (user, pw) == ("erin", "pw") else 403
+            if user == "broken":
+                code = 500
+            self.send_response(code)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 9203), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    port = 6702
+    conf = os.path.join(DIR, "httpauth.conf")
+    with open(conf, "w") as f:
+        f.write(f"listen irc+insecure://127.0.0.1:{port}\n"
+                f"hostname soja.example.net\n"
+                f"db sqlite3 {DIR}/httpauth.db\n"
+                f"enable-user-on-auth true\n"
+                f"auth http http://127.0.0.1:9203/check\n")
+    out = open(os.path.join(DIR, "httpauth.log"), "ab")
+    p = subprocess.Popen([SOJA, "-config", conf], stdout=out, stderr=out)
+    try:
+        wait_port(port)
+        c = Client(port, "httpauth:ok")
+        c.register("erin", "erin", "pw")
+        c.close()
+        h = seen[-1]
+        fwd = h.get("Forwarded", "")
+        if not fwd.startswith('for="127.0.0.1:') or \
+                h.get("X-Forwarded-For") != "127.0.0.1":
+            raise Fail(f"no Forwarded headers: {h}")
+        for user, pw in (("erin", "bad"), ("broken", "pw")):
+            c = Client(port, "httpauth:no")
+            c.send(f"PASS {pw}")
+            c.send(f"NICK {user}")
+            c.send(f"USER {user} 0 * :x")
+            c.expect(r" 464 |ERROR|FAIL")
+            c.close()
+    except Exception:
+        out.flush()
+        print(open(os.path.join(DIR, "httpauth.log"), errors="replace").read()[-1500:])
+        raise
+    finally:
+        p.kill()
+        srv.shutdown()
+    log("auth http: Basic credentials and Forwarded headers")
+
+
 try:
     main()
     listen_schemes_section()
+    http_auth_section()
     oauth_section()
     pam_section()
     print("E2E PASS")
