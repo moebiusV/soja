@@ -365,7 +365,7 @@ package body Soja.Config is
          MOTD_Path     => Null_Unbounded_String,
          DB            => (Driver => To_Unbounded_String ("sqlite3"),
                            Source => To_Unbounded_String ("soju.db")),
-         Msg_Store     => (Driver => To_Unbounded_String ("memory"),
+         Msg_Store     => (Driver => To_Unbounded_String ("db"),
                            Source => Null_Unbounded_String),
          Auth          => (Driver => To_Unbounded_String ("internal"),
                            Source => Null_Unbounded_String),
@@ -469,6 +469,9 @@ package body Soja.Config is
                   elsif Driver = "oauth2" and then Length (Source) = 0 then
                      Error ("directive auth: driver """ & To_String (Driver)
                             & """ requires a source");
+                  elsif Driver /= "oauth2" and then Length (Source) > 0 then
+                     Error ("directive auth: driver """ & To_String (Driver)
+                            & """ requires zero parameters");
                   end if;
                   Srv.Auth := (Driver => Driver, Source => Source);
                end;
@@ -599,6 +602,9 @@ package body Soja.Config is
             elsif Driver = "fs" and then Length (Source) = 0 then
                Error ("directive message-store: driver """ & To_String (Driver)
                       & """ requires a source");
+            elsif Driver /= "fs" and then Length (Source) > 0 then
+               Error ("directive message-store: driver """ & To_String (Driver)
+                      & """ requires zero parameters");
             end if;
             Srv.Msg_Store := (Driver => Driver, Source => Source);
          end;

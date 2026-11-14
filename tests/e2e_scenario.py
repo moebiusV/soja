@@ -783,7 +783,7 @@ def main():
 
 
 def pam_section():
-    """auth pam: PAM's `login` service, with a password the module reads."""
+    """auth pam: PAM's `soju` service, with a password the module reads."""
     check = os.path.join(DIR, "pamcheck.sh")
     with open(check, "w") as f:
         f.write('#!/bin/sh\nread p\n[ "$PAM_USER" = pamuser ] && '
@@ -791,7 +791,7 @@ def pam_section():
     os.chmod(check, 0o755)
     try:
         os.makedirs("/etc/pam.d", exist_ok=True)
-        with open("/etc/pam.d/login", "w") as f:
+        with open("/etc/pam.d/soju", "w") as f:
             f.write("auth requisite pam_exec.so expose_authtok quiet "
                     f"{check}\naccount required pam_permit.so\n")
     except OSError:
@@ -819,7 +819,7 @@ def pam_section():
             c.close()
     finally:
         p.kill()
-    log("auth pam: PAM login service")
+    log("auth pam: PAM soju service")
 
 
 def webpush_section(bob):

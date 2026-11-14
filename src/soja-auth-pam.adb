@@ -200,7 +200,7 @@ package body Soja.Auth.Pam is
    ----------------------------------------------------------------------
 
    function Plain (Username, Password : String) return Result is
-      Service  : CS.chars_ptr := CS.New_String ("login");
+      Service  : CS.chars_ptr := CS.New_String ("soju");
       User     : CS.chars_ptr := CS.New_String (Username);
       Secret   : CS.chars_ptr := CS.New_String (Password);
       Conv     : aliased Conversation :=

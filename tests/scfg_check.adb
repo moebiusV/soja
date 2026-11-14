@@ -166,6 +166,21 @@ begin
       Check (Fails ("title ""a" & LF & "b"""), "a string over a line");
       Check (Fails ("nonsense x"), "an unknown directive");
       Check (Fails ("title"), "a missing parameter");
+
+      --  Drivers: the message store is the database when none is named; a
+      --  driver that needs no source refuses one, as soju does.
+      Check (To_String (Soja.Config.Parse ("title x").Msg_Store.Driver) = "db",
+             "the default message store is the database");
+      Check (To_String (Soja.Config.Parse ("message-store memory").Msg_Store
+                          .Driver) = "memory", "message-store memory");
+      Check (To_String (Soja.Config.Parse ("message-store fs /tmp/x")
+                          .Msg_Store.Source) = "/tmp/x", "message-store fs");
+      Check (Fails ("message-store db /tmp/x"), "db takes no source");
+      Check (Fails ("message-store memory x"), "memory takes no source");
+      Check (Fails ("message-store fs"), "fs needs a source");
+      Check (Fails ("auth internal x"), "internal takes no source");
+      Check (Fails ("auth pam x"), "pam takes no source");
+      Check (Fails ("auth oauth2"), "oauth2 needs a source");
    end;
    Ada.Text_IO.Put_Line ("ALL PASS");
 exception

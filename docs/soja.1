@@ -129,7 +129,7 @@ The supported driver is \fIsqlite3\fP: \fIsource\fP is a path to the SQLite file
 .It Sy message-store Ar driver Op Ar source
 .Pp
 Set the database location for IRC messages.
-By default, an in-memory message database is used.
+By default, \fIdb\fP is used.
 .Pp
 Supported drivers:
 .Bl -bullet
@@ -229,7 +229,7 @@ The client ID and client secret can be provided as username and password in the 
 The authorization server must support OAuth 2.0 Authorization Server Metadata (RFC 8414) and OAuth 2.0 Token Introspection (RFC 7662).
 .It Sy "auth pam"
 .Pp
-Use PAM authentication, through the PAM service "login". libpam is loaded when soja starts; if it is not installed, soja refuses to start with this driver.
+Use PAM authentication, through the PAM service "soju" (install a file of that name in /etc/pam.d, for instance one that includes the "login" service). libpam is loaded when soja starts; if it is not installed, soja refuses to start with this driver.
 .El
 .El
 .Sh IRC SERVICE

@@ -88,6 +88,7 @@ begin
           and then Type_By_Extension (".html") = "text/html; charset=utf-8"
           and then Type_By_Extension (".xyz") = ""
           and then Type_By_Extension ("") = "", "by extension");
+   Check (Is_Inline ("application/pdf"), "PDFs are shown in the browser");
    Check (Is_Inline ("image/png") and then not Is_Inline ("image/svg+xml")
           and then not Is_Inline ("text/html"), "inline types");
    Check (Extension_Of ("image/jpeg") = ".jpeg"

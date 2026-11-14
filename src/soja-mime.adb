@@ -254,8 +254,9 @@ package body Soja.Mime is
           else ""));
 
    function Is_Inline (Media : String) return Boolean is
-     (Media in "audio/aac" | "audio/mp4" | "audio/mpeg" | "audio/ogg"
-             | "audio/webm" | "image/apng" | "image/gif" | "image/jpeg"
+     (Media in "application/pdf" | "audio/aac" | "audio/mp4" | "audio/mpeg"
+             | "audio/ogg" | "audio/webm" | "image/apng" | "image/gif"
+             | "image/jpeg"
              | "image/png" | "image/webp" | "text/plain" | "video/mp4"
              | "video/ogg" | "video/webm");
 

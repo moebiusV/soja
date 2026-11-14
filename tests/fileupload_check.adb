@@ -420,10 +420,29 @@ begin
    end;
 
    --  Too large.
-   Check (Starts (Run ("POST /uploads HTTP/1.1" & CRLF & "Host: h" & CRLF
-                       & "Authorization: " & Basic & CRLF
-                       & "Content-Length: 60000000" & CRLF & CRLF),
-                  "HTTP/1.1 500"), "over the size limit");
+   declare
+      R : constant String :=
+        Run ("POST /uploads HTTP/1.1" & CRLF & "Host: h" & CRLF
+             & "Authorization: " & Basic & CRLF
+             & "Content-Length: 60000000" & CRLF & CRLF);
+   begin
+      Check (Starts (R, "HTTP/1.1 413")
+             and then Contains (R, "Upload-Limit: maxsize=52428800")
+             and then Contains (R, "Connection: close"),
+             "over the size limit: 413 with the limit: " & Status (R));
+   end;
+   --  "user/network@client" uploads as the user.
+   declare
+      R : constant String :=
+        Run ("POST /uploads HTTP/1.1" & CRLF & "Host: h" & CRLF
+             & "Authorization: Basic "
+             & Soja.Base64.Encode ("alice/net@laptop:secret") & CRLF
+             & "Content-Type: text/plain" & CRLF
+             & "Content-Length: 2" & CRLF & CRLF & "hi");
+   begin
+      Check (Starts (R, "HTTP/1.1 201") and then Contains (Location (R), "alice/"),
+             "the network and client are cut off the user name: " & Status (R));
+   end;
    --  The body ends early: nothing is kept.
    declare
       Before : Natural := 0;

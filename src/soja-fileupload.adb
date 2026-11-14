@@ -5,6 +5,7 @@ with Ada.Directories;
 with Ada.Exceptions;
 with Ada.Streams;
 with Ada.Strings.Fixed;
+with Ada.Strings.Maps;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with Interfaces.C;
 with System;
@@ -326,6 +327,10 @@ package body Soja.Fileupload is
       Soja.Http.Write_Error (Stream, Status, Message, Common);
    end Fail;
 
+   function Max_Size_Image return String is
+     (Ada.Strings.Fixed.Trim (Long_Long_Integer'Image (Max_Size),
+                              Ada.Strings.Left));
+
    function Bytes (S : String) return Stream_Element_Array is
       R : Stream_Element_Array (1 .. Stream_Element_Offset (S'Length));
    begin
@@ -517,6 +522,17 @@ package body Soja.Fileupload is
             Fail (Stream, Common, 400, "invalid Authorization header");
             return;
          end if;
+         --  "user/network@client" is the user (c1116b5).
+         declare
+            Name : constant String := To_String (Username);
+            Cut  : constant Natural :=
+              Ada.Strings.Fixed.Index
+                (Name, Ada.Strings.Maps.To_Set ("/@"));
+         begin
+            if Cut > 1 then
+               Username := To_Unbounded_String (Name (Name'First .. Cut - 1));
+            end if;
+         end;
          declare
             Result : constant Soja.Auth.Result := Soja.Auth.Auth_Plain
               (Driver, Soja.Server.DB (S), To_String (Username),
@@ -613,7 +629,12 @@ package body Soja.Fileupload is
                Fail (Stream, Common, 400, "invalid Content-Length");
                return;
             elsif Cursor.Length > Max_Size then
-               Fail (Stream, Common, 500, "failed to write file");
+               --  Signal it at once, before the file is sent: soju does,
+               --  since 3ef9cb8.
+               Fail (Stream,
+                     Common & "Connection: close" & CRLF
+                     & "Upload-Limit: maxsize=" & Max_Size_Image & CRLF,
+                     413, "failed to write file");
                return;
             end if;
             if Lower (Soja.Http.Get (Req, "expect")) = "100-continue" then

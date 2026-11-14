@@ -276,7 +276,7 @@ package body Soja.Web is
                Origin : constant String := Soja.Http.Get (Req, "origin");
                Common : constant String :=
                  "Content-Security-Policy: sandbox; default-src 'none'; "
-                 & "script-src 'none';" & CRLF
+                 & "script-src 'none'; media-src 'self';" & CRLF
                  & "Access-Control-Allow-Credentials: true" & CRLF
                  & "Access-Control-Allow-Headers: Authorization, "
                  & "Content-Type, Content-Disposition" & CRLF

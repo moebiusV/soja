@@ -726,7 +726,8 @@ begin
                 and then F.Released, "http: /");
          F := Run (Upgrade_Request (Path => "/uploads/x"), Http => True);
          Check (Starts (Status (F), "HTTP/1.1 404")
-                and then Contains (To_String (F.Sent), "Content-Security-Policy: sandbox"),
+                and then Contains (To_String (F.Sent), "Content-Security-Policy: sandbox")
+                and then Contains (To_String (F.Sent), "media-src 'self'"),
                 "http: uploads without an uploader");
          F := Run (Upgrade_Request (Path => "/uploads",
                                     Extra => "Origin: https://evil.org" & CRLF),

@@ -1,5 +1,5 @@
 --  Soja.Auth.Pam -- soju's auth/pam.go: the password is checked by PAM
---  (service "login").  libpam is loaded when first used (dlopen), so soja runs
+--  (service "soju", as soju does).  libpam is loaded when first used (dlopen), so soja runs
 --  where PAM is not installed and refuses `auth pam` there at startup.
 pragma Ada_2022;
 
