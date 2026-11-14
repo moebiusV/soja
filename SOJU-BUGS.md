@@ -6,7 +6,9 @@ one Go test per bug).  Add an entry the moment a bug is found; do not batch.
 
 - Reference revision: soju `6541047` (`v0.8.0-9-g6541047`, 2024-07-04,
   "readme: move to Codeberg"), from <https://git.sr.ht/~emersion/soju>
-  (clone it to check an entry).  Re-check every entry against
+  (its last commit before the project moved to
+  <https://codeberg.org/emersion/soju>, where the current `master` is; clone
+  either to check an entry).  Re-check every entry against
   soju's current `master` before opening its PR: some may already be fixed.
 - Line numbers are in that revision.
 - "Soja fix" says where the Ada port deviates from the Go code, and "Soja

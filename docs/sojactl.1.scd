@@ -29,7 +29,7 @@ file. sojactl needs to be run with write permissions on the soja admin socket.
 
 soja is a translation of soju, which is maintained by Simon Ser
 <contact@emersion.fr> and other open-source contributors. For more information
-about soju development, see <https://sr.ht/~emersion/soju>.
+about soju development, see <https://codeberg.org/emersion/soju>.
 
 # SEE ALSO
 

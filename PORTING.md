@@ -4,7 +4,8 @@ soja is a translation of [soju] from Go to Ada 2022, reusing the packages
 published by [ada-on-alpine]. The translation is complete (2026-11-14), and soju's
 source is no longer carried in this repository: the reference revision was
 `6541047` (`v0.8.0-9-g6541047`, 2024-07-04) of
-<https://git.sr.ht/~emersion/soju>; clone it to compare. Keep the translation
+<https://git.sr.ht/~emersion/soju>, the last commit before the project moved
+to <https://codeberg.org/emersion/soju>; clone it to compare. Keep the translation
 faithful: same structure and logic.  Wire-format quirks of irc.v4 stay (see below).  Clear bugs in soju
 itself are fixed, not copied (decided 2026-11-12), and each fix is recorded
 here under "Bugs in soju that soja fixes" and, in PR-ready form, in
