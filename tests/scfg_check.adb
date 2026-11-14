@@ -198,6 +198,11 @@ begin
                 "internal auth by default");
       end;
       Check (Fails ("auth http"), "auth http needs a source");
+      Check (To_String (Soja.Config.Parse ("file-upload http https://u.example/")
+                          .File_Upload.Driver) = "http"
+             and then Fails ("file-upload http")
+             and then Fails ("file-upload s3 x"),
+             "file-upload http");
 
       --  icon, accept-proxy-unix, client-cert-auth.
       Check (To_String (Soja.Config.Parse ("icon https://x.example/i.png")

@@ -246,7 +246,11 @@ procedure Soja_Main is
          Cfg.Enable_Users_On_Auth := Raw.Enable_Users_On_Auth;
          Cfg.Has_File_Uploader := Raw.File_Upload /= null;
          if Raw.File_Upload /= null then
-            Cfg.File_Upload_Dir := Raw.File_Upload.Source;
+            if To_String (Raw.File_Upload.Driver) = "http" then
+               Cfg.File_Upload_URL := Raw.File_Upload.Source;
+            else
+               Cfg.File_Upload_Dir := Raw.File_Upload.Source;
+            end if;
          end if;
          Result.Cfg := Cfg;
       end;

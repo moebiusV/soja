@@ -510,7 +510,7 @@ package body Soja.Config is
                   Driver, Source : Unbounded_String;
                begin
                   Parse_Driver_Source (Name, P, Driver, Source);
-                  if Driver /= "fs" then
+                  if To_String (Driver) not in "fs" | "http" then
                      Error ("directive file-upload: unknown driver """ &
                             To_String (Driver) & '"');
                   elsif Length (Source) = 0 then

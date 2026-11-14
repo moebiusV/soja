@@ -1197,9 +1197,92 @@ def http_auth_section():
     log("auth http: Basic credentials and Forwarded headers")
 
 
+def upload_http_section():
+    """file-upload http: the file is posted to the backend."""
+    import base64
+    import http.server
+    import threading
+
+    seen = []
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length", 0))
+            data = self.rfile.read(n)
+            seen.append((dict(self.headers), data))
+            if data == b"deny":
+                body = b"nope"
+                self.send_response(418)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            self.send_response(201)
+            self.send_header("Location", "stored/file.bin")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 9204), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    port = 6703
+    conf = os.path.join(DIR, "upload-http.conf")
+    with open(conf, "w") as f:
+        f.write(f"listen irc+insecure://127.0.0.1:{port}\n"
+                f"listen http+insecure://127.0.0.1:8085\n"
+                f"hostname soja.example.net\n"
+                f"db sqlite3 {DIR}/upload-http.db\n"
+                f"file-upload http http://127.0.0.1:9204/store\n")
+    out = open(os.path.join(DIR, "upload-http.log"), "ab")
+    p = subprocess.Popen([SOJA, "-config", conf], stdout=out, stderr=out)
+    try:
+        wait_port(port)
+        subprocess.run([os.path.join(os.path.dirname(SOJA), "..", "sojadb",
+                                     "sojadb"),
+                        "-config", conf, "create-user", "alice"],
+                       input="secret\n", text=True, check=True,
+                       capture_output=True, timeout=30)
+        import http.client
+        auth = "Basic " + base64.b64encode(b"alice/net@dev:secret").decode()
+
+        def post(body, extra=None):
+            c = http.client.HTTPConnection("127.0.0.1", 8085, timeout=10)
+            h = {"Authorization": auth, "Content-Type": "image/png",
+                 "Content-Disposition": 'attachment; filename="a b.png"'}
+            h.update(extra or {})
+            c.request("POST", "/uploads", body, h)
+            r = c.getresponse()
+            return r.status, dict(r.getheaders()), r.read()
+
+        st, hd, _ = post(b"hello")
+        if st != 201 or hd.get("Location") != "/uploads/stored/file.bin":
+            raise Fail(f"upload: {st} {hd}")
+        h, data = seen[-1]
+        if data != b"hello" or h.get("Soju-Username") != "alice" or \
+                h.get("Content-Type") != "image/png" or \
+                "a b.png" not in h.get("Content-Disposition", ""):
+            raise Fail(f"backend request: {h} {data}")
+        st, hd, body = post(b"deny")
+        if st != 418 or body != b"nope" or \
+                not hd.get("Content-Type", "").startswith("text/plain"):
+            raise Fail(f"backend error not passed on: {st} {hd} {body}")
+        c = http.client.HTTPConnection("127.0.0.1", 8085, timeout=10)
+        c.request("GET", "/uploads/stored/file.bin")
+        if c.getresponse().status != 404:
+            raise Fail("GET with the http backend should be 404")
+    finally:
+        p.kill()
+        srv.shutdown()
+    log("file-upload http: posted to the backend, errors passed on")
+
+
 try:
     main()
     listen_schemes_section()
+    upload_http_section()
     http_auth_section()
     oauth_section()
     pam_section()

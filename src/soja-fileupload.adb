@@ -10,7 +10,10 @@ with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with Interfaces.C;
 with System;
 
+with AWS.Client;
+with AWS.Headers;
 with AWS.Messages;
+with AWS.Response;
 
 with Http_Range;
 with Http_Range.Parser;
@@ -487,9 +490,83 @@ package body Soja.Fileupload is
    --  POST
    ----------------------------------------------------------------------
 
+   --  The `file-upload http` backend: the file is posted to the URL, whose
+   --  answer is 201 and a Location, or an error that is passed on as it is.
+   procedure Post_To_Backend
+     (URL, Username, Media, Orig : String;
+      Data   : Stream_Element_Array;
+      Stream : in out Soja.Byte_Stream.Stream'Class;
+      Common : String;
+      Out_Name : out Unbounded_String;
+      Done   : out Boolean)
+   is
+      use type AWS.Messages.Status_Code;
+      Headers  : AWS.Headers.List;
+      Response : AWS.Response.Data;
+      Disp     : Soja.Mime.Param_Maps.Map;
+   begin
+      Out_Name := Null_Unbounded_String;
+      Done := False;
+      if Orig /= "" then
+         Disp.Insert ("filename", Orig);
+         AWS.Headers.Add
+           (Headers, "Content-Disposition",
+            Soja.Mime.Format_Media_Type ("attachment", Disp));
+      end if;
+      AWS.Headers.Add (Headers, "Soju-Username", Username);
+      begin
+         Response := AWS.Client.Post
+           (URL, Data,
+            Content_Type => (if Media = "" then AWS.Client.No_Data else Media),
+            Headers => Headers, User_Agent => "soju",
+            Timeouts => AWS.Client.Timeouts (Each => 60.0));
+      exception
+         when others =>
+            Fail (Stream, Common, 500, "failed to write file");
+            return;
+      end;
+      declare
+         Code : constant AWS.Messages.Status_Code :=
+           AWS.Response.Status_Code (Response);
+         Number : constant Natural :=
+           Natural'Value (AWS.Messages.Image (Code));
+      begin
+         if Number in 400 .. 599 then
+            --  httpError.Write: the status, the type and the body.
+            declare
+               Body_Text : constant String :=
+                 AWS.Response.Message_Body (Response);
+               Kind : constant String :=
+                 AWS.Response.Content_Type (Response);
+            begin
+               Soja.Http.Write_Head
+                 (Stream, Number,
+                  (if Kind /= "" then "Content-Type: " & Kind & CRLF else "")
+                  & "Content-Length: " & Ada.Strings.Fixed.Trim
+                      (Natural'Image (Body_Text'Length), Ada.Strings.Left)
+                  & CRLF & "Connection: close" & CRLF & Common);
+               Stream.Send (Bytes (Body_Text));
+            end;
+            Done := True;
+            return;
+         elsif Code /= AWS.Messages.S201 then
+            Fail (Stream, Common, 500, "failed to write file");
+            Done := True;
+            return;
+         end if;
+         Out_Name := To_Unbounded_String
+           (AWS.Response.Header (Response, "Location"));
+         if Length (Out_Name) = 0 then
+            Fail (Stream, Common, 500, "failed to write file");
+            Done := True;
+         end if;
+      end;
+   end Post_To_Backend;
+
    procedure Store
      (S      : in out Soja.Server.Server;
       Dir    : String;
+      URL    : String;
       Stream : in out Soja.Byte_Stream.Stream'Class;
       Req    : Soja.Http.Request;
       Common : String)
@@ -644,6 +721,50 @@ package body Soja.Fileupload is
             end if;
 
             begin
+               if URL /= "" then
+                  declare
+                     Collected : Unbounded_String;
+                     Posted    : Boolean;
+                  begin
+                     begin
+                        loop
+                           Soja.Http.Read_Body (Stream, Cursor, Chunk, Last);
+                           exit when Last < Chunk'First;
+                           for I in Chunk'First .. Last loop
+                              Append (Collected,
+                                      Character'Val (Chunk (I)));
+                           end loop;
+                        end loop;
+                     exception
+                        when others =>
+                           Fail (Stream, Common, 500,
+                                 "failed to write file");
+                           return;
+                     end;
+                     Post_To_Backend
+                       (URL, To_String (Username), To_String (Media), Orig,
+                        Bytes (To_String (Collected)), Stream, Common,
+                        Out_Name, Posted);
+                     if not Posted then
+                        --  The Location, relative to /uploads/.
+                        declare
+                           Loc : constant String := To_String (Out_Name);
+                        begin
+                           Soja.Http.Write_Head
+                             (Stream, 201,
+                              "Location: "
+                              & (if (Loc'Length > 0
+                                     and then Loc (Loc'First) = '/')
+                                   or else Ada.Strings.Fixed.Index
+                                             (Loc, "://") > 0
+                                 then Loc else "/uploads/" & Loc) & CRLF
+                              & "Content-Length: 0" & CRLF
+                              & "Connection: close" & CRLF & Common);
+                        end;
+                     end if;
+                     return;
+                  end;
+               end if;
                Create_File (Dir, To_String (Username), To_String (Media),
                             Orig, FD, File_Path, Out_Name);
             exception
@@ -711,17 +832,25 @@ package body Soja.Fileupload is
    is
       Dir    : constant String :=
         To_String (Soja.Server.Config (S).File_Upload_Dir);
+      URL    : constant String :=
+        To_String (Soja.Server.Config (S).File_Upload_URL);
       Method : constant String := To_String (Req.Method);
    begin
-      if Dir = "" then
+      if Dir = "" and then URL = "" then
          Fail (Stream.all, Common, 404, "404 page not found");
       elsif Method = "OPTIONS" then
          Soja.Http.Write_Head
            (Stream.all, 204, Common & "Connection: close" & CRLF);
       elsif Method in "HEAD" | "GET" then
-         Fetch (Dir, Stream.all, Req, Common);
+         if URL /= "" then
+            --  "fetching files is not supported for the file-upload http
+            --  backend": the files are the backend's to serve.
+            Fail (Stream.all, Common, 404, "failed to open file");
+         else
+            Fetch (Dir, Stream.all, Req, Common);
+         end if;
       elsif Method = "POST" then
-         Store (S, Dir, Stream.all, Req, Common);
+         Store (S, Dir, URL, Stream.all, Req, Common);
       else
          Fail (Stream.all, Common, 405,
                "only OPTIONS, HEAD, GET and POST are allowed");

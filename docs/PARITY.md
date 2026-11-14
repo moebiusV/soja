@@ -23,7 +23,7 @@ change can be read.
 | [x] | several `auth` lines (one password and one OAuth 2.0 authenticator); `auth http <url>` | `f13b47e` `04fdb35` | done |
 | [x] | `message-expiry` directive | `2155529` | done |
 | [x] | `icon`, `accept-proxy-unix`, `client-cert-auth` directives (read; `client-cert-auth` acts with the device certificates) | `89ce2f1` `ff99b6a` `19e86d2` | done |
-| [ ] | `file-upload http <url>` | `c4dcf1d` | open |
+| [x] | `file-upload http <url>` | `c4dcf1d` | done |
 | [ ] | `listen` schemes `irc://`, `ws://`, `http://` (localhost), `http+insecure+prometheus://`, `irc+unix://host/path` | `ec9be26` `645c696` `a7e2be3` | open |
 | [x] | PAM service name is `soju` (the `pam.d` file is the administrator's) | `fa03c22` | done |
 
