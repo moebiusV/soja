@@ -9,6 +9,7 @@ with Ada.Strings.Unbounded;
 with Soja.Core.Downstream_Handshake;
 with Soja.Core.Downstream_Helpers;
 with Soja.Core.Network_Ops;
+with Soja.Core.Push;
 with Soja.Core.Upstream_Dispatch;
 with Soja.Core.User_Ops;
 with Soja.Database;
@@ -2274,19 +2275,190 @@ package body Soja.Core.Downstream_Commands is
                   end if;
                end loop;
 
-               --  A marker past the time of a pending push target clears it.
-               --  (The web push notification soju then sends is not ported.)
-               if Broadcast and then Net.Push_Targets.Has (Target)
-                 and then not (Receipt.Timestamp
-                               < Net.Push_Targets.Get (Target))
-               then
-                  Net.Push_Targets.Del (Target);
+               --  A marker past the time of a pending push target clears it,
+               --  and the other devices hear of it.
+               if Broadcast and then Net.Push_Targets.Has (Target) then
+                  if not (Receipt.Timestamp
+                          < Net.Push_Targets.Get (Target))
+                  then
+                     Net.Push_Targets.Del (Target);
+                  end if;
+                  Soja.Core.Push.Broadcast
+                    (Net, Make ("MARKREAD", [Target, Stamp_Str]));
                end if;
             end;
          end;
       end;
       return Success;
    end Cmd_Read;
+
+   ----------------------------------------------------------------------
+   --  WEBPUSH
+   ----------------------------------------------------------------------
+
+   function Cmd_Webpush
+     (DC : not null Downstream_Conn_Access; M : Message)
+      return Irc_Error_Result
+   is
+      use type Ada.Calendar.Time;
+      PR : Params_Result := Parse_Message_Params (M, 1);
+   begin
+      if not Soja.Irc.Cap_Registry.Is_Enabled (DC.Caps, "soju.im/webpush") then
+         return From_Error
+           (Soja.Downstream.New_Unknown_Command_Error (To_String (M.Command)));
+      end if;
+      if not PR.Ok then
+         return Need_More (PR);
+      end if;
+
+      declare
+         Sub_Cmd : constant String := Param (M, 0);
+         DB      : constant Soja.Database.Database_Access := DC.Srv.DB;
+         User_ID : constant Long_Long_Integer := DC.User.User_Record.ID;
+         Net_ID  : constant Long_Long_Integer :=
+           (if DC.Network /= null then DC.Network.Network_Record.ID else 0);
+
+         function Internal return Irc_Error_Result is
+           (FAIL (["WEBPUSH", "INTERNAL_ERROR", Sub_Cmd, "Internal error"]));
+
+         function Find
+           (Subs : Soja.Database.WebPush_Subscription_Lists.Vector;
+            Endpoint : String) return Natural is
+         begin
+            for I in 1 .. Natural (Subs.Length) loop
+               if To_String (Subs (I).Endpoint) = Endpoint then
+                  return I;
+               end if;
+            end loop;
+            return 0;
+         end Find;
+      begin
+         if Sub_Cmd = "REGISTER" then
+            PR := Parse_Message_Params (M, 3);
+            if not PR.Ok then
+               return Need_More (PR);
+            end if;
+            declare
+               Endpoint : constant String := Param (M, 1);
+               Raw_Keys : constant Tag_Map := Parse_Tags (Param (M, 2));
+               Subs     : Soja.Database.WebPush_Subscription_Lists.Vector;
+               New_Sub  : Soja.Database.WebPush_Subscription;
+               Update   : Boolean := True;
+               Old      : Natural;
+            begin
+               if not Raw_Keys.Data.Contains ("auth")
+                 or else not Raw_Keys.Data.Contains ("p256dh")
+               then
+                  return FAIL (["WEBPUSH", "INVALID_PARAMS", Sub_Cmd,
+                                "Missing auth or p256dh key"]);
+               end if;
+               New_Sub.Endpoint := To_Unbounded_String (Endpoint);
+               New_Sub.Key_VAPID :=
+                 Soja.Server.Web_Push (DC.Srv.all).VAPID_Public;
+               New_Sub.Key_Auth :=
+                 To_Unbounded_String (Raw_Keys.Data.Element ("auth"));
+               New_Sub.Key_P256DH :=
+                 To_Unbounded_String (Raw_Keys.Data.Element ("p256dh"));
+
+               begin
+                  Subs := DB.List_WebPush_Subscriptions (User_ID, Net_ID);
+               exception
+                  when E : others =>
+                     DC.Logger.Print
+                       ("failed to fetch Web push subscription: "
+                        & Ada.Exceptions.Exception_Message (E));
+                     return Internal;
+               end;
+               if Natural (Subs.Length) > 25 then
+                  return FAIL (["WEBPUSH", "INTERNAL_ERROR", Sub_Cmd,
+                                "Too many subscriptions"]);
+               end if;
+
+               Old := Find (Subs, Endpoint);
+               if Old /= 0 then
+                  --  Update the old subscription, not a new one.
+                  New_Sub.ID := Subs (Old).ID;
+                  New_Sub.Created_At := Subs (Old).Created_At;
+                  --  Rate-limit subscription checks.
+                  Update :=
+                    Ada.Calendar.Clock - Subs (Old).Updated_At
+                      > Soja.Server.Webpush_Check_Subscription_Delay
+                    or else Subs (Old).Key_Auth /= New_Sub.Key_Auth
+                    or else Subs (Old).Key_P256DH /= New_Sub.Key_P256DH
+                    or else Subs (Old).Key_VAPID /= New_Sub.Key_VAPID;
+               end if;
+
+               --  Send a test Web Push message, to make sure the endpoint is
+               --  valid.
+               if Update then
+                  begin
+                     Soja.Core.Push.Send
+                       (DC.Srv.all, New_Sub,
+                        Make ("NOTE", ["WEBPUSH", "REGISTERED",
+                                       "Push notifications enabled"]));
+                  exception
+                     when E : others =>
+                        DC.Logger.Print
+                          ("failed to send Web push notification to endpoint "
+                           & Quote (Endpoint) & ": "
+                           & Ada.Exceptions.Exception_Message (E));
+                        return FAIL (["WEBPUSH", "INVALID_PARAMS", Sub_Cmd,
+                                      "Invalid endpoint"]);
+                  end;
+                  begin
+                     DB.Store_WebPush_Subscription (User_ID, Net_ID, New_Sub);
+                  exception
+                     when E : others =>
+                        DC.Logger.Print
+                          ("failed to store Web push subscription: "
+                           & Ada.Exceptions.Exception_Message (E));
+                        return Internal;
+                  end;
+               end if;
+               Send_Message (DC, Make ("WEBPUSH", ["REGISTER", Endpoint]));
+            end;
+
+         elsif Sub_Cmd = "UNREGISTER" then
+            PR := Parse_Message_Params (M, 2);
+            if not PR.Ok then
+               return Need_More (PR);
+            end if;
+            declare
+               Endpoint : constant String := Param (M, 1);
+               Subs     : Soja.Database.WebPush_Subscription_Lists.Vector;
+               Old      : Natural;
+            begin
+               begin
+                  Subs := DB.List_WebPush_Subscriptions (User_ID, Net_ID);
+               exception
+                  when E : others =>
+                     DC.Logger.Print
+                       ("failed to fetch Web push subscription: "
+                        & Ada.Exceptions.Exception_Message (E));
+                     return Internal;
+               end;
+               Old := Find (Subs, Endpoint);
+               if Old /= 0 then
+                  begin
+                     DB.Delete_WebPush_Subscription (Subs (Old).ID);
+                  exception
+                     when E : others =>
+                        DC.Logger.Print
+                          ("failed to delete Web push subscription: "
+                           & Ada.Exceptions.Exception_Message (E));
+                        return Internal;
+                  end;
+               end if;
+               Send_Message (DC, Make ("WEBPUSH", ["UNREGISTER", Endpoint]));
+            end;
+
+         else
+            return FAIL (["WEBPUSH", "INVALID_PARAMS", Sub_Cmd,
+                          "Unknown command"]);
+         end if;
+      end;
+      return Success;
+   end Cmd_Webpush;
 
    ----------------------------------------------------------------------
    --  The dispatch
@@ -2351,6 +2523,8 @@ package body Soja.Core.Downstream_Commands is
          return Cmd_Search (DC, M);
       elsif Cmd = "READ" or else Cmd = "MARKREAD" then
          return Cmd_Read (DC, M);
+      elsif Cmd = "WEBPUSH" then
+         return Cmd_Webpush (DC, M);
       end if;
 
       DC.Logger.Debug ("unhandled message: " & Image (M));

@@ -513,6 +513,122 @@ def main():
     r.close()
 
     # --- 7: restart: reconnect and rejoin the saved channels once ---
+    webpush_section(b)
+    log("certfp generate: SASL EXTERNAL with the generated certificate")
+    import hashlib
+    import sqlite3
+    import threading
+
+    # an ircs "upstream" that asks for a client certificate and speaks just
+    # enough IRC for SASL EXTERNAL
+    server_cert = os.path.join(DIR, "tls.crt")
+    server_key = os.path.join(DIR, "tls.key")
+    with open(server_cert) as f:
+        server_der = ssl.PEM_cert_to_DER_cert(f.read())
+    server_fp = hashlib.sha256(server_der).hexdigest()
+    seen = {"peer": None, "lines": [], "done": threading.Event()}
+    ctx_holder = {}
+
+    def fake_ircs(listener):
+        conn, _ = listener.accept()
+        conn.settimeout(10)
+        try:
+            tconn = ctx_holder["ctx"].wrap_socket(conn, server_side=True)
+        except (ssl.SSLError, OSError) as e:
+            seen["error"] = str(e)
+            seen["done"].set()
+            return
+        seen["peer"] = tconn.getpeercert(binary_form=True)
+        buf = b""
+        nick = "alice"
+        try:
+            while not seen["done"].is_set():
+                data = tconn.recv(4096)
+                if not data:
+                    break
+                buf += data
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    text = line.decode(errors="replace").strip()
+                    seen["lines"].append(text)
+                    if text.startswith("NICK "):
+                        nick = text.split()[1]
+                    if text.startswith("CAP LS"):
+                        tconn.sendall(b":irc CAP * LS :sasl\r\n")
+                    elif text.startswith("CAP REQ"):
+                        tconn.sendall(b":irc CAP * ACK :sasl\r\n")
+                    elif text == "AUTHENTICATE EXTERNAL":
+                        tconn.sendall(b"AUTHENTICATE +\r\n")
+                    elif text == "AUTHENTICATE +":
+                        tconn.sendall(
+                            f":irc 903 {nick} :SASL authentication successful\r\n".encode())
+                    elif text == "CAP END":
+                        tconn.sendall(
+                            f":irc 001 {nick} :Welcome\r\n".encode())
+                        seen["done"].set()
+        except (ssl.SSLError, OSError):
+            pass
+        finally:
+            seen["done"].set()
+            tconn.close()
+
+    listener = socket.socket()
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 7070))
+    listener.listen(1)
+    listener.settimeout(30)
+
+    c = bouncer()
+    c.send("PRIVMSG BouncerServ :network create -addr ircs://127.0.0.1:7070 "
+           f"-name tlsnet -certfp {server_fp} -enabled false")
+    c.expect(r'created network "tlsnet"')
+    c.send("PRIVMSG BouncerServ :certfp generate -network tlsnet "
+           "-key-type ed25519")
+    c.expect(r"certificate generated")
+    c.expect(r"SHA-256 fingerprint: [0-9a-f]{64}")
+    c.send("PRIVMSG BouncerServ :sasl status -network tlsnet")
+    c.expect(r"SASL EXTERNAL \(CertFP\) enabled")
+
+    # the certificate is stored as DER, as soju stores it
+    db = sqlite3.connect(os.path.join(DIR, "soja.db"))
+    cert_der, key_der = db.execute(
+        "SELECT sasl_external_cert, sasl_external_key FROM Network "
+        "WHERE name = 'tlsnet'").fetchone()
+    db.close()
+    if not cert_der or cert_der[0] != 0x30 or not key_der or key_der[0] != 0x30:
+        raise Fail("the certificate or key is not stored as DER")
+    cert_pem = ssl.DER_cert_to_PEM_cert(bytes(cert_der))
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(server_cert, server_key)
+    ctx.verify_mode = ssl.CERT_OPTIONAL
+    # the certificate is a leaf (its issuer is not kept): trust it as it is
+    ctx.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
+    ctx.load_verify_locations(cadata=cert_pem)
+    ctx_holder["ctx"] = ctx
+    t = threading.Thread(target=fake_ircs, args=(listener,), daemon=True)
+    t.start()
+
+    c.send("PRIVMSG BouncerServ :network update tlsnet -enabled true")
+    c.expect(r'updated network "tlsnet"')
+    if not seen["done"].wait(30):
+        raise Fail(f"the fake server did not finish: {seen}")
+    if seen.get("error") or seen["peer"] != bytes(cert_der):
+        raise Fail(f"the upstream did not see the generated certificate: "
+                   f"{seen.get('error')!r} {seen['lines']}")
+    if "AUTHENTICATE EXTERNAL" not in seen["lines"]:
+        raise Fail(f"no SASL EXTERNAL: {seen['lines']}")
+    listener.close()
+    # key types, and a missing network
+    for kt in ("ecdsa", "rsa"):
+        c.send(f"PRIVMSG BouncerServ :certfp generate -network tlsnet "
+               f"-key-type {kt}" + (" -bits 2048" if kt == "rsa" else ""))
+        c.expect(r"certificate generated", timeout=60)
+    c.send("PRIVMSG BouncerServ :certfp generate -network tlsnet -key-type dsa")
+    c.expect(r"error: unknown key type")
+    c.send("PRIVMSG BouncerServ :network delete tlsnet")
+    c.expect(r'deleted network "tlsnet"')
+    c.close()
+
     log("file upload")
     import base64
     import http.client
@@ -665,14 +781,334 @@ def main():
     log("all good: " + joined)
 
 
+def pam_section():
+    """auth pam: PAM's `login` service, with a password the module reads."""
+    check = os.path.join(DIR, "pamcheck.sh")
+    with open(check, "w") as f:
+        f.write('#!/bin/sh\nread p\n[ "$PAM_USER" = pamuser ] && '
+                '[ "$p" = pamsecret ]\n')
+    os.chmod(check, 0o755)
+    try:
+        os.makedirs("/etc/pam.d", exist_ok=True)
+        with open("/etc/pam.d/login", "w") as f:
+            f.write("auth requisite pam_exec.so expose_authtok quiet "
+                    f"{check}\naccount required pam_permit.so\n")
+    except OSError:
+        log("auth pam: skipped (cannot write /etc/pam.d)")
+        return
+    conf = os.path.join(DIR, "pam.conf")
+    with open(conf, "w") as f:
+        f.write("listen irc+insecure://127.0.0.1:6700\n"
+                "hostname soja.example.net\n"
+                f"db sqlite3 {DIR}/pam.db\n"
+                "enable-user-on-auth true\nauth pam\n")
+    out = open(os.path.join(DIR, "pam.log"), "ab")
+    p = subprocess.Popen([SOJA, "-config", conf], stdout=out, stderr=out)
+    try:
+        wait_port(6700)
+        c = Client(6700, "pam:ok")
+        c.register("pamuser", "pamuser", "pamsecret")
+        c.close()
+        for user, pw in (("pamuser", "wrong"), ("other", "pamsecret")):
+            c = Client(6700, "pam:bad")
+            c.send(f"PASS {pw}")
+            c.send(f"NICK {user}")
+            c.send(f"USER {user} 0 * :x")
+            c.expect(r" 464 |ERROR|FAIL")
+            c.close()
+    finally:
+        p.kill()
+    log("auth pam: PAM login service")
+
+
+def webpush_section(bob):
+    """soju.im/webpush: registration, the encrypted push, the VAPID header."""
+    import base64
+    import http.server
+    import threading
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.utils import \
+        encode_dss_signature
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF, HKDFExpand
+
+    def b64(b):
+        return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+    def unb64(t):
+        return base64.urlsafe_b64decode(t + "=" * (-len(t) % 4))
+
+    got = []
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(n)
+            got.append((self.path, dict(self.headers), body))
+            self.send_response(404 if self.path == "/gone" else 201)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 9202), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    ua_priv = ec.generate_private_key(ec.SECP256R1())
+    ua_pub = ua_priv.public_key().public_bytes(
+        serialization.Encoding.X962,
+        serialization.PublicFormat.UncompressedPoint)
+    auth = os.urandom(16)
+
+    def decrypt(body):
+        salt, rs, idlen = body[:16], int.from_bytes(body[16:20], "big"), body[20]
+        as_pub = body[21:21 + idlen]
+        if rs != 2048 or idlen != 65:
+            raise Fail(f"push record size {rs}, key length {idlen}")
+        shared = ua_priv.exchange(
+            ec.ECDH(), ec.EllipticCurvePublicKey.from_encoded_point(
+                ec.SECP256R1(), as_pub))
+        ikm = HKDFExpand(hashes.SHA256(), 32,
+                         b"WebPush: info\0" + ua_pub + as_pub).derive(
+            _prk(auth, shared))
+        prk = _prk(salt, ikm)
+        cek = HKDFExpand(hashes.SHA256(), 16,
+                         b"Content-Encoding: aes128gcm\0").derive(prk)
+        nonce = HKDFExpand(hashes.SHA256(), 12,
+                           b"Content-Encoding: nonce\0").derive(prk)
+        plain = AESGCM(cek).decrypt(nonce, body[21 + idlen:], None)
+        return plain.rstrip(b"\0")[:-1].decode()
+
+    def _prk(salt, ikm):
+        import hmac
+        import hashlib
+        return hmac.new(salt, ikm, hashlib.sha256).digest()
+
+    def wait_push(count, timeout=10):
+        end = time.time() + timeout
+        while time.time() < end:
+            if len(got) >= count:
+                return got[count - 1]
+            time.sleep(0.1)
+        raise Fail(f"no Web Push request #{count}; got {len(got)}")
+
+    try:
+        c = bouncer_history(caps="soju.im/webpush")
+        c.drain(1.0)
+        vapid = None
+        for line in c.seen:
+            m = re.search(r" VAPID=(\S+)", line)
+            if m:
+                vapid = m.group(1)
+        if not vapid:
+            raise Fail("no VAPID in ISUPPORT: " + repr(c.seen))
+        ep = "http://127.0.0.1:9202/push/1"
+        keys = f"auth={b64(auth)};p256dh={b64(ua_pub)}"
+        c.send(f"WEBPUSH REGISTER {ep} :{keys}")
+        c.expect(rf"WEBPUSH REGISTER {re.escape(ep)}")
+        path, hdr, body = wait_push(1)
+        if path != "/push/1" or hdr.get("Content-Encoding") != "aes128gcm":
+            raise Fail(f"bad push request: {path} {hdr}")
+        if hdr.get("Urgency") != "normal" or hdr.get("TTL") != "604800":
+            raise Fail(f"bad push headers: {hdr}")
+        text = decrypt(body)
+        if text != "NOTE WEBPUSH REGISTERED :Push notifications enabled":
+            raise Fail(f"bad test push: {text!r}")
+        # the VAPID header: a JWT signed by the key of ISUPPORT
+        m = re.fullmatch(r"vapid t=(\S+)\.(\S+)\.(\S+), k=(\S+)",
+                         hdr["Authorization"])
+        if not m or m.group(4) != vapid:
+            raise Fail(f"bad VAPID header: {hdr['Authorization']}")
+        sig = unb64(m.group(3))
+        pub = ec.EllipticCurvePublicKey.from_encoded_point(
+            ec.SECP256R1(), unb64(vapid))
+        pub.verify(encode_dss_signature(int.from_bytes(sig[:32], "big"),
+                                        int.from_bytes(sig[32:], "big")),
+                   (m.group(1) + "." + m.group(2)).encode(),
+                   ec.ECDSA(hashes.SHA256()))
+        claims = unb64(m.group(2)).decode()
+        if '"aud":"http://127.0.0.1:9202"' not in claims or \
+                "mailto:webpush@soju.im" not in claims:
+            raise Fail(f"bad JWT claims: {claims}")
+
+        # a highlight is pushed, with a high urgency
+        bob.send("PRIVMSG #u :alice: web push please")
+        path, hdr, body = wait_push(2)
+        text = decrypt(body)
+        if "PRIVMSG #u" not in text or "web push please" not in text \
+                or hdr.get("Urgency") != "high":
+            raise Fail(f"bad highlight push: {text!r} {hdr}")
+
+        # an endpoint that is gone is refused; a repeated register is quiet
+        c.send(f"WEBPUSH REGISTER http://127.0.0.1:9202/gone :{keys}")
+        c.expect(r"FAIL WEBPUSH INVALID_PARAMS REGISTER :Invalid endpoint")
+        n = len(got)
+        c.send(f"WEBPUSH REGISTER {ep} :{keys}")
+        c.expect(rf"WEBPUSH REGISTER {re.escape(ep)}")
+        c.send("WEBPUSH REGISTER x")
+        c.expect(r" 461 \S+ WEBPUSH :Not enough parameters")
+        c.send("WEBPUSH BOGUS")
+        c.expect(r"FAIL WEBPUSH INVALID_PARAMS BOGUS :Unknown command")
+        if len(got) != n:
+            raise Fail("a repeated registration sent a new test push")
+
+        # after UNREGISTER nothing is pushed
+        c.send(f"WEBPUSH UNREGISTER {ep}")
+        c.expect(rf"WEBPUSH UNREGISTER {re.escape(ep)}")
+        n = len(got)
+        bob.send("PRIVMSG #u :alice: and again")
+        time.sleep(2)
+        if len(got) != n:
+            raise Fail("pushed after UNREGISTER")
+        c.close()
+    finally:
+        srv.shutdown()
+    log("web push: registration, encrypted push and VAPID verified")
+
+
+def oauth_section():
+    """auth oauth2: a fake authorization server, PLAIN and OAUTHBEARER."""
+    import base64
+    import http.server
+    import json
+    import threading
+
+    seen = []
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            seen.append(("GET", self.path))
+            if self.path != "/.well-known/oauth-authorization-server/realm":
+                self.send_response(404)
+                self.end_headers()
+                return
+            body = json.dumps({
+                "issuer": "http://127.0.0.1:9201/realm",
+                "introspection_endpoint": "http://127.0.0.1:9201/introspect",
+                "introspection_endpoint_auth_methods_supported":
+                    ["client_secret_basic"]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length", 0))
+            form = self.rfile.read(n).decode()
+            seen.append(("POST", form, self.headers.get("Authorization")))
+            want = "Basic " + base64.b64encode(b"my+id:p%40ss").decode()
+            tok = form.removeprefix("token=")
+            ok = self.headers.get("Authorization") == want
+            who = {"goodtoken": "carol", "othertoken": "dave"}.get(tok)
+            if ok and who:
+                body = {"active": True, "username": who}
+            elif ok and tok == "nouser":
+                body = {"active": True}
+            else:
+                body = {"active": False}
+            data = json.dumps(body).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 9201), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    port = 6699
+    conf = os.path.join(DIR, "oauth.conf")
+    with open(conf, "w") as f:
+        f.write(f"listen irc+insecure://127.0.0.1:{port}\n"
+                f"hostname soja.example.net\n"
+                f"db sqlite3 {DIR}/oauth.db\n"
+                f"enable-user-on-auth true\n"
+                f"auth oauth2 http://my%20id:p%40ss@127.0.0.1:9201/realm\n")
+    out = open(os.path.join(DIR, "oauth.log"), "ab")
+    p = subprocess.Popen([SOJA, "-config", conf], stdout=out, stderr=out)
+    try:
+        wait_port(port)
+        if seen[0][0] != "GET":
+            raise Fail("no discovery request")
+
+        def sasl(mech, payload, nick):
+            c = Client(port, f"oauth:{nick}")
+            c.send("CAP REQ :sasl")
+            c.expect(r"CAP \S+ ACK")
+            c.send(f"AUTHENTICATE {mech}")
+            c.expect(r"AUTHENTICATE \+")
+            c.send("AUTHENTICATE " +
+                   base64.b64encode(payload).decode())
+            return c
+
+        def bearer(user, tok):
+            return (f"n,a={user},\x01auth=Bearer {tok}\x01\x01").encode()
+
+        # OAUTHBEARER, right user
+        c = sasl("OAUTHBEARER", bearer("carol", "goodtoken"), "carol")
+        c.expect(r" 903 ")
+        c.send("NICK carol")
+        c.send("USER carol 0 * :x")
+        c.send("CAP END")
+        c.expect(r" 001 ")
+        c.close()
+        # no authzid is fine
+        c = sasl("OAUTHBEARER", bearer("", "goodtoken"), "carol")
+        c.expect(r" 903 ")
+        c.close()
+        # wrong authzid, inactive token, no username
+        for tok, who in (("goodtoken", "dave"), ("badtoken", "carol"),
+                         ("nouser", "carol")):
+            c = sasl("OAUTHBEARER", bearer(who, tok), "x")
+            c.expect(r" 904 ")
+            c.close()
+        # a malformed initial response
+        # (as in soju, go-sasl's error is not an IRC one: the connection ends)
+        c = sasl("OAUTHBEARER", b"garbage", "x")
+        try:
+            c.expect(r" 903 ", timeout=3)
+            raise Fail("a malformed OAUTHBEARER response succeeded")
+        except Fail as e:
+            if "connection closed" not in str(e):
+                raise
+        c.close()
+        # PLAIN: the password is the token
+        c = Client(port, "oauth:plain")
+        c.register("carol", "carol", "goodtoken")
+        c.close()
+        c = Client(port, "oauth:plain2")
+        c.send("PASS othertoken")
+        c.send("NICK carol")
+        c.send("USER carol 0 * :x")
+        c.expect(r" 464 |ERROR|FAIL")
+        c.close()
+        if not any(x[0] == "POST" and
+                   x[2] == "Basic " + base64.b64encode(b"my+id:p%40ss").decode()
+                   for x in seen):
+            raise Fail(f"introspection was not authenticated: {seen}")
+    finally:
+        p.kill()
+        srv.shutdown()
+    log("auth oauth2: OAUTHBEARER and PLAIN through a fake server")
+
+
 try:
     main()
+    oauth_section()
+    pam_section()
     print("E2E PASS")
 except Fail as e:
     print(f"E2E FAIL: {e}")
     log("soja log")
     try:
-        print(open(os.path.join(DIR, "soja.log")).read()[-4000:])
+        text = open(os.path.join(DIR, "soja.log")).read()
+        print(text[-4000:])
+        if os.environ.get("E2E_KEEP_LOG"):
+            open(os.environ["E2E_KEEP_LOG"], "w").write(text)
     except OSError:
         pass
     sys.exit(1)

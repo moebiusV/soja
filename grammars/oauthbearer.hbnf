@@ -1,0 +1,36 @@
+; oauthbearer.hbnf -- the client's initial response of SASL OAUTHBEARER
+; (RFC 7628 3.1), as go-sasl's server reads it:
+;
+;     n,a=user,^Ahost=irc.example.org^Aport=6697^Aauth=Bearer <token>^A^A
+;
+; A GS2 header ("n,", the authorization identity after "a=" if there is one, and
+; ","), then the key=value pairs, each ended by ^A (0x01), and a last ^A.  What
+; the pairs mean is the caller's (soja-sasl-oauthbearer.adb): "auth" holds
+; "Bearer " and the token, "host" and "port" are the client's, a key it does
+; not know is ignored (RFC 7628 3.1).
+;
+; The `&` lookaheads consume nothing; they make a rule a record in the tree,
+; where a rule of text rules only would be one text.
+
+prefix none
+whitespace none
+include "common.hbnf"
+
+response = gs2-header pairs final
+gs2-header = with-authzid | without-authzid
+with-authzid    = &"n,a=" "n,a=" authzid ","
+without-authzid = &"n,," "n,,"
+authzid   = *authz-char
+
+pairs = soh *pair
+pair  = &key-char key "=" value soh
+key   = 1*key-char
+value = *value-char
+final = soh
+soh   = 0x01
+
+; Character classes as ranges: hbnf's Ada backend writes a control character
+; it has to spell out inside an Ada string literal, which does not compile.
+authz-char = 0x00 | 0x02..0x2B | 0x2D..0x10FFFF
+key-char   = 0x00 | 0x02..0x3C | 0x3E..0x10FFFF
+value-char = 0x00 | 0x02..0x10FFFF

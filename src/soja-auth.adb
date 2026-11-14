@@ -2,6 +2,9 @@ pragma Ada_2022;
 
 with Ada.Exceptions;
 
+with Soja.Auth.OAuth2;
+with Soja.Auth.Pam;
+
 package body Soja.Auth is
 
    use type Soja.Database.Database_Access;
@@ -19,6 +22,23 @@ package body Soja.Auth is
         or else Driver = "oauth2";
    end Supports_Plain;
 
+   function Supports_Bearer (Driver : String) return Boolean is
+     (Driver = "oauth2");
+
+   function Auth_Bearer
+     (Driver   : String;
+      Token    : String;
+      Username : out Unbounded_String) return Result
+   is
+   begin
+      Username := Null_Unbounded_String;
+      if Driver /= "oauth2" then
+         return Failure ("the " & Driver & " authenticator has no bearer "
+                         & "tokens", "Authentication failed");
+      end if;
+      return Soja.Auth.OAuth2.Bearer (Token, Username);
+   end Auth_Bearer;
+
    function Auth_Plain
      (Driver   : String;
       DB       : Soja.Database.Database_Access;
@@ -27,7 +47,11 @@ package body Soja.Auth is
    is
       U : Soja.Database.User;
    begin
-      if Driver /= "internal" then
+      if Driver = "oauth2" then
+         return Soja.Auth.OAuth2.Plain (Username, Password);
+      elsif Driver = "pam" then
+         return Soja.Auth.Pam.Plain (Username, Password);
+      elsif Driver /= "internal" then
          return Failure
            ("the " & Driver & " authenticator is not ported",
             "Authentication failed");

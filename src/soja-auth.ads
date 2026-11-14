@@ -24,6 +24,16 @@ package Soja.Auth is
    --  (PlainAuthenticator).
    function Supports_Plain (Driver : String) return Boolean;
 
+   --  Whether the driver can authenticate with an OAuth 2.0 bearer token
+   --  (OAuthBearerAuthenticator): `oauth2`.
+   function Supports_Bearer (Driver : String) return Boolean;
+
+   --  AuthOAuthBearer: the user a token is for; Username is set when Ok.
+   function Auth_Bearer
+     (Driver   : String;
+      Token    : String;
+      Username : out Unbounded_String) return Result;
+
    --  AuthPlain.  DB may be null only for drivers that don't use it.
    function Auth_Plain
      (Driver   : String;

@@ -92,6 +92,12 @@ package Soja.Server is
 
    procedure Set_DB (S : in out Server; DB : Soja.Database.Database_Access);
 
+   --  Server.webPush: the VAPID key pair, loaded (or made) at startup before
+   --  anything else reads it.
+   function Web_Push (S : Server) return Soja.Database.WebPush_Config;
+   procedure Set_Web_Push
+     (S : in out Server; Config : Soja.Database.WebPush_Config);
+
    procedure Initialize
      (S : in out Server; Logger : Soja.Logging.Logger_Access := null);
 
@@ -187,6 +193,7 @@ private
       Cfg      : Config_Holder;
       Logger   : Soja.Logging.Logger_Access;
       DB       : Soja.Database.Database_Access;
+      Push     : Soja.Database.WebPush_Config;
       H        : Handler;
       Ident    : Soja.Identd.Identd_Access;
       Listener : AWS.Net.Socket_Access;

@@ -12,7 +12,10 @@ with AWS.Net;
 with AWS.Net.Std;
 with GNAT.OS_Lib;
 
+with Soja.Auth.OAuth2;
+with Soja.Auth.Pam;
 with Soja.Bouncer;
+with Soja.Core.Push;
 with Soja.Config;
 with Soja.Database;
 with Soja.Database.Sqlite;
@@ -121,12 +124,28 @@ procedure Soja_Main is
             end;
          end if;
 
-         --  Only the internal authenticator is ported.  A bouncer that
-         --  cannot check passwords must not start as if it could.
+         --  auth.New: the internal authenticator, or OAuth 2.0 (the server is
+         --  discovered now, and again at a reload).  PAM is not ported: a
+         --  bouncer that cannot check passwords must not start as if it could.
          declare
             Driver : constant String := To_String (Raw.Auth.Driver);
          begin
-            if Driver /= "internal" then
+            if Driver = "oauth2" then
+               begin
+                  Soja.Auth.OAuth2.Setup (To_String (Raw.Auth.Source));
+               exception
+                  when E : Soja.Auth.OAuth2.Setup_Error =>
+                     raise Program_Error with
+                       "failed to create authenticator: "
+                       & Ada.Exceptions.Exception_Message (E);
+               end;
+            elsif Driver = "pam" then
+               if not Soja.Auth.Pam.Available then
+                  raise Program_Error with
+                    "failed to create authenticator: PAM is not available "
+                    & "(libpam could not be loaded)";
+               end if;
+            elsif Driver /= "internal" then
                raise Program_Error with
                  "failed to create authenticator: the " & Quote (Driver)
                  & " authentication driver is not supported by soja";
@@ -562,6 +581,13 @@ begin
 
       Srv.Initialize (Log'Unchecked_Access);
       Srv.Set_DB (DB);
+      begin
+         Soja.Core.Push.Load_Config (Srv);
+      exception
+         when E : Constraint_Error =>
+            Fatal ("failed to load Web push config: "
+                   & Ada.Exceptions.Exception_Message (E));
+      end;
       Srv.Set_Config (Loaded_Config.Cfg);
       Soja.Bouncer.Initialize (B, Srv'Unchecked_Access);
 

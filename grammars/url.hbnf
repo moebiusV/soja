@@ -1,0 +1,53 @@
+; url.hbnf -- an absolute URL as the OAuth 2.0 discovery needs it (what Go's
+; url.Parse gives for the pieces used there): the scheme, the user and password
+; of the authority, the host and port, and the path.  The query and the
+; fragment are not read (they are the end of the text).
+;
+;     https://client:secret@auth.example.com:8443/realms/main?x=1
+;
+; Percent escapes are the caller's to take off.
+;
+; A rule that consumes nothing fails and a rule of text rules only is one text,
+; so the optional parts are alternatives of rules that each hold a lookahead
+; (`&"@"`-style) and consume something.
+
+prefix none
+whitespace none
+include "common.hbnf"
+
+url       = scheme "://" authority path trailer
+scheme    = ALPHA *( ALPHA | DIGIT | "+" | "-" | "." )
+
+authority = with-user | without-user
+with-user    = &userinfo-end userinfo "@" host-port
+without-user = &host-start host-port
+userinfo-end = *~( "@" | "/" | "?" | "#" ) "@"
+host-start   = ~( "/" | "?" | "#" )
+
+userinfo   = user-pass | user-only
+user-pass  = &user-colon user-name ":" password
+user-only  = &user-name-1 user-name-1
+user-colon = *~( ":" | "@" ) ":"
+user-name  = *~( ":" | "@" )
+user-name-1 = 1*~( ":" | "@" )
+password   = *~( "@" )
+
+host-port  = bracketed-port | bracketed-only | plain-host-port
+bracketed-port = &"[" "[" ipv6 "]" ":" port
+bracketed-only = &"[" "[" ipv6 "]"
+ipv6       = *~"]"
+plain-host-port = host-with-port | host-only
+host-with-port  = &host-colon host ":" port
+host-only       = &host-name-1 host-name-1
+host-colon = *~( ":" | "/" | "?" | "#" ) ":"
+host       = *~( ":" | "/" | "?" | "#" )
+host-name-1 = 1*~( "/" | "?" | "#" )
+port       = *DIGIT
+
+path = [ path-chars ]
+path-chars = &"/" "/" *~( "?" | "#" )
+
+; The query and the fragment: read and dropped.
+trailer       = [ trailer-chars ]
+trailer-chars = &( "?" | "#" ) *rune
+rune          = 0x00..0x10FFFF

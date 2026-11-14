@@ -12,6 +12,7 @@ with AWS.Net.SSL.Certificate;
 with AWS.Net.Std;
 with CryptoLib.Hashes;
 with Soja.Backoff;
+with Soja.Certgen;
 with Soja.Conn.Net;
 with Soja.Core.Downstream_Commands;
 with Soja.Core.Downstream_Handshake;
@@ -519,8 +520,8 @@ package body Soja.Core is
 
    --  A TLS connection to the URL's host:port (ircs scheme).  With a certfp
    --  configured, peer verification is done manually against the fingerprint;
-   --  otherwise the peer is verified against the system CA bundle.  SASL
-   --  EXTERNAL (client certificate) is deferred.
+   --  otherwise the peer is verified against the system CA bundle.  With SASL
+   --  EXTERNAL set up the network's certificate is sent as the client's.
    function Dial_TLS
      (Net : not null Network_Access; U : Soja.Database.Network_URL;
       Ent : out Ident_Entry)
@@ -532,7 +533,30 @@ package body Soja.Core is
       Config   : AWS.Net.SSL.Config := AWS.Net.SSL.Null_Config;
       SSL_Sock : AWS.Net.SSL.Socket_Type;
       CertFP   : constant String := To_String (Net.Network_Record.Cert_FP);
+      SASL     : Soja.Database.SASL renames Net.Network_Record.SASL;
+      With_Cert : constant Boolean := To_String (SASL.Mechanism) = "EXTERNAL";
+      Client   : Soja.Certgen.Client_File;
    begin
+      if With_Cert then
+         if Length (SASL.External_Cert) = 0 then
+            Net.Logger.Print ("missing certificate for authentication");
+            return null;
+         elsif Length (SASL.External_Key) = 0 then
+            Net.Logger.Print ("missing private key for authentication");
+            return null;
+         end if;
+         begin
+            Client := Soja.Certgen.Write_Client_File
+              (To_String (SASL.External_Cert), To_String (SASL.External_Key));
+         exception
+            when E : Soja.Certgen.Generate_Error =>
+               Net.Logger.Print
+                 ("failed to use the TLS client certificate: "
+                  & Ada.Exceptions.Exception_Message (E));
+               return null;
+         end;
+      end if;
+
       Split_Host_Port (To_String (U.Host), 6697, Host, Port);
       AWS.Net.Std.Socket_Type (Plain.all).Connect (To_String (Host), Port);
       Register_Ident (Net, Plain.all, Ent);
@@ -540,11 +564,27 @@ package body Soja.Core is
       if CertFP /= "" then
          AWS.Net.SSL.Initialize
            (Config,
-            Security_Mode     => AWS.Net.SSL.TLS_Client,
-            Check_Certificate => False);
-         SSL_Sock := AWS.Net.SSL.Secure_Client
-           (Plain.all, Config, To_String (Host));
-         AWS.Net.Free (Plain);
+            Security_Mode        => AWS.Net.SSL.TLS_Client,
+            Client_Certificate   => To_String (Client.Path),
+            --  (Not Exchange_Certificate: AWS signs a token with the key then,
+            --  and cannot with an Ed25519 one; the certificate is sent anyway.)
+            Check_Certificate    => False);
+      else
+         AWS.Net.SSL.Initialize
+           (Config,
+            Security_Mode        => AWS.Net.SSL.TLS_Client,
+            Client_Certificate   => To_String (Client.Path),
+            --  (Not Exchange_Certificate: AWS signs a token with the key then,
+            --  and cannot with an Ed25519 one; the certificate is sent anyway.)
+            Check_Certificate    => True,
+            Trusted_CA_Filename  => AWS.Default.Trusted_CA);
+      end if;
+      Soja.Certgen.Remove (Client);   --  (the library has read the files)
+      SSL_Sock := AWS.Net.SSL.Secure_Client
+        (Plain.all, Config, To_String (Host));
+      AWS.Net.Free (Plain);
+
+      if CertFP /= "" then
          if not Verify_CertFP (SSL_Sock, CertFP) then
             Net.Logger.Print
               ("TLS certificate fingerprint doesn't match for "
@@ -555,15 +595,6 @@ package body Soja.Core is
             Forget_Ident (Net.User.Srv, Ent);
             return null;
          end if;
-      else
-         AWS.Net.SSL.Initialize
-           (Config,
-            Security_Mode       => AWS.Net.SSL.TLS_Client,
-            Check_Certificate   => True,
-            Trusted_CA_Filename => AWS.Default.Trusted_CA);
-         SSL_Sock := AWS.Net.SSL.Secure_Client
-           (Plain.all, Config, To_String (Host));
-         AWS.Net.Free (Plain);
       end if;
 
       return new AWS.Net.SSL.Socket_Type'(SSL_Sock);

@@ -12,6 +12,7 @@ with Interfaces.C;
 with Soja.Base64;
 with Soja.Core.Downstream_Helpers;
 with Soja.Core.Network_Ops;
+with Soja.Core.Push;
 with Soja.Downstream;
 with Soja.Irc.Cap_Registry;
 with Soja.Irc.Case_Mapping;
@@ -1880,7 +1881,7 @@ package body Soja.Core.Upstream_Dispatch is
                end if;
 
                if not Self and then (Highlight or else Direct) then
-                  --  TODO: Web Push (broadcastWebPush) is not ported yet.
+                  Soja.Core.Push.Broadcast (Net, Msg);
                   declare
                      Valid : Boolean;
                      T     : constant Ada.Calendar.Time :=
@@ -2160,7 +2161,9 @@ package body Soja.Core.Upstream_Dispatch is
                Send_Message (DC, Msg);
             end if;
          end loop;
-         --  TODO: Web Push (broadcastWebPush) when we are invited.
+         if Invited then
+            Soja.Core.Push.Broadcast (UC.Network, Msg);
+         end if;
       end;
       return Success;
    end Handle_Invite;

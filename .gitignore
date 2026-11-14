@@ -74,3 +74,6 @@ tests/metrics_check
 tests/mime_check
 tests/fileupload_check
 tests/irc_fuzz_check
+tests/certgen_check
+tests/oauth_check
+tests/webpush_check

@@ -9,6 +9,7 @@ with Ada.Strings.Fixed;
 
 with CryptoLib.Hashes;
 
+with Soja.Certgen;
 with Soja.Core.Downstream_Helpers;
 with Soja.Core.Network_Ops;
 with Soja.Core.Upstream_Dispatch;
@@ -735,6 +736,16 @@ package body Soja.Core.Service is
       return FS;
    end Network_Flag_Set;
 
+   procedure Store_Network_Record
+     (Ctx : Service_Context; Net : not null Network_Access) is
+   begin
+      Soja.Database.Store_Network
+        (DB_Of (Ctx).all, Ctx.User.User_Record.ID, Net.Network_Record);
+   exception
+      when E : others =>
+         Fail (Ada.Exceptions.Exception_Message (E));
+   end Store_Network_Record;
+
    procedure Handle_Certfp_Generate
      (Ctx : Service_Context; Params : String_Vector)
    is
@@ -750,10 +761,21 @@ package body Soja.Core.Service is
       declare
          Net : constant Network_Access :=
            Network_From_Flag (Ctx, FS.Get ("network"));
-         pragma Unreferenced (Net);
+         Key, Cert : Unbounded_String;
       begin
-         --  Needs X.509 certificate creation; see PORTING.md (Milestone B).
-         Fail ("generating certificates is not supported by this build yet");
+         begin
+            Soja.Certgen.Generate
+              (FS.Get ("key-type"), FS.Get_Int ("bits"), Key, Cert);
+         exception
+            when E : Soja.Certgen.Generate_Error =>
+               Fail (Ada.Exceptions.Exception_Message (E));
+         end;
+         Net.Network_Record.SASL.External_Cert := Cert;
+         Net.Network_Record.SASL.External_Key := Key;
+         Net.Network_Record.SASL.Mechanism := To_Unbounded_String ("EXTERNAL");
+         Store_Network_Record (Ctx, Net);
+         Say (Ctx, "certificate generated");
+         Say_Fingerprints (Ctx, To_String (Cert));
       end;
    end Handle_Certfp_Generate;
 
@@ -811,16 +833,6 @@ package body Soja.Core.Service is
          end if;
       end;
    end Handle_Sasl_Status;
-
-   procedure Store_Network_Record
-     (Ctx : Service_Context; Net : not null Network_Access) is
-   begin
-      Soja.Database.Store_Network
-        (DB_Of (Ctx).all, Ctx.User.User_Record.ID, Net.Network_Record);
-   exception
-      when E : others =>
-         Fail (Ada.Exceptions.Exception_Message (E));
-   end Store_Network_Record;
 
    procedure Handle_Sasl_Set_Plain
      (Ctx : Service_Context; Params : String_Vector)

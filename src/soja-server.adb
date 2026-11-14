@@ -125,6 +125,17 @@ package body Soja.Server is
       S.DB := DB;
    end Set_DB;
 
+   function Web_Push (S : Server) return Soja.Database.WebPush_Config is
+   begin
+      return S.Push;
+   end Web_Push;
+
+   procedure Set_Web_Push
+     (S : in out Server; Config : Soja.Database.WebPush_Config) is
+   begin
+      S.Push := Config;
+   end Set_Web_Push;
+
    procedure Initialize
      (S : in out Server; Logger : Soja.Logging.Logger_Access := null)
    is

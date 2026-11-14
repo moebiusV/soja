@@ -138,6 +138,32 @@ begin
          end;
       end;
 
+      --  SASL EXTERNAL: the certificate and key are binary (DER), NUL bytes
+      --  and all, and come back whole (a text column stops at the first NUL).
+      declare
+         Blob : constant String :=
+           "0" & ASCII.NUL & "ab" & ASCII.NUL & ASCII.NUL & "tail"
+           & Character'Val (255);
+         Ext  : Network := New_Network ("irc.example.net");
+      begin
+         Ext.Name := To_Unbounded_String ("external");
+         Ext.SASL.Mechanism := To_Unbounded_String ("EXTERNAL");
+         Ext.SASL.External_Cert := To_Unbounded_String (Blob);
+         Ext.SASL.External_Key := To_Unbounded_String (Blob & Blob);
+         Store_Network (DB.all, User_ID, Ext);
+         Ext.SASL.External_Cert := To_Unbounded_String (Blob & "!");
+         Store_Network (DB.all, User_ID, Ext);   --  (and the UPDATE path)
+         for N of List_Networks (DB.all, User_ID) when N.Name = "external" loop
+            if To_String (N.SASL.External_Cert) /= Blob & "!"
+              or else To_String (N.SASL.External_Key) /= Blob & Blob
+            then
+               raise Program_Error with
+                 "a binary certificate or key did not come back whole";
+            end if;
+         end loop;
+         Delete_Network (DB.all, Ext.ID);
+      end;
+
       --  Store a channel.
       declare
          Net_ID : constant Long_Long_Integer := Net.ID;

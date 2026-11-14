@@ -31,6 +31,11 @@ library project Soja is
       for Default_Switches ("Ada") use
         ("-gnat2022", "-gnatwa", "-gnatVa", "-gnato",
          "-gnaty3abcefhiklmnprt");
+      --  bracke-cryptolib's RSA and random specifications have characters
+      --  that are not ASCII in their comments: read this unit as UTF-8.
+      for Switches ("soja-certgen.adb") use
+        ("-gnat2022", "-gnatwa", "-gnatVa", "-gnato", "-gnatW8",
+         "-gnaty3abcefhiklmnprt");
    end Compiler;
 
    package Binder is

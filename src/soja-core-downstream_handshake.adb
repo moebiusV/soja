@@ -11,6 +11,7 @@ with AWS.Net.SSL;
 with AWS.Net.Std;
 
 with Soja.Auth;
+with Soja.Oauthbearer;
 with Soja.Base64;
 with Soja.Core.Downstream_Helpers;
 with Soja.Core.Upstream_Dispatch;
@@ -314,9 +315,9 @@ package body Soja.Core.Downstream_Handshake is
          declare
             Mech : constant String := Upper (Param (M, 0));
          begin
-            --  PLAIN and ANONYMOUS are supported; OAUTHBEARER needs the
-            --  oauth2 authenticator, which is not ported.
-            if Mech /= "PLAIN" and then Mech /= "ANONYMOUS" then
+            if Mech /= "PLAIN" and then Mech /= "ANONYMOUS"
+              and then Mech /= "OAUTHBEARER"
+            then
                return SASL_Fail ("Unsupported SASL mechanism");
             end if;
             DC.Sasl := new Downstream_SASL;
@@ -400,6 +401,20 @@ package body Soja.Core.Downstream_Handshake is
                   DC.Sasl.Plain_Username := To_Unbounded_String (Username);
                   DC.Sasl.Plain_Password := To_Unbounded_String (Password);
                end;
+            end;
+         end if;
+         if Mech = "OAUTHBEARER" then
+            declare
+               Options : Soja.Oauthbearer.Options;
+               Valid   : Boolean;
+            begin
+               Soja.Oauthbearer.Parse (To_String (Resp), Options, Valid);
+               if not Valid then
+                  return Fail (Text_Fail ("sasl: invalid response"));
+               end if;
+               DC.Sasl.Bearer_Set := True;
+               DC.Sasl.Bearer_Username := Options.Username;
+               DC.Sasl.Bearer_Token := Options.Token;
             end;
          end if;
          --  (ANONYMOUS takes any trace string.)
@@ -490,6 +505,33 @@ package body Soja.Core.Downstream_Handshake is
                              & To_Unbounded_String
                                  (Quote (To_String (Username))) & ")";
                            Reason := R.External;
+                        end if;
+                     end;
+                  end if;
+               elsif Mech = "OAUTHBEARER" then
+                  if not Soja.Auth.Supports_Bearer (Driver) then
+                     Failure := To_Unbounded_String
+                       ("SASL OAUTHBEARER not supported");
+                  else
+                     declare
+                        R : constant Soja.Auth.Result :=
+                          Soja.Auth.Auth_Bearer
+                            (Driver, To_String (DC.Sasl.Bearer_Token),
+                             Username);
+                     begin
+                        if not R.Ok then
+                           Failure := R.Internal;
+                           Reason := R.External;
+                        elsif Length (DC.Sasl.Bearer_Username) > 0
+                          and then DC.Sasl.Bearer_Username /= Username
+                        then
+                           Failure := To_Unbounded_String
+                             ("username mismatch (client provided "
+                              & Quote (To_String (DC.Sasl.Bearer_Username))
+                              & ", but server returned "
+                              & Quote (To_String (Username)) & ")");
+                           Reason := To_Unbounded_String
+                             ("Invalid credentials");
                         end if;
                      end;
                   end if;
@@ -868,7 +910,10 @@ package body Soja.Core.Downstream_Handshake is
                        Ada.Strings.Left));
                Isupport.Append ("MSGREFTYPES=timestamp");
             end if;
-            --  TODO: VAPID (Web Push) is not ported.
+            if Is_Enabled (DC.Caps, "soju.im/webpush") then
+               Isupport.Append
+                 ("VAPID=" & To_String (Soja.Server.Web_Push (DC.Srv.all).VAPID_Public));
+            end if;
             if Cfg.Has_File_Uploader then
                Isupport.Append
                  ("soju.im/FILEHOST=" & To_String (Cfg.HTTP_Ingress)

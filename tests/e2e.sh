@@ -9,7 +9,7 @@
 # the scenario in tests/e2e_scenario.py.
 set -eu
 
-apk add --no-cache openssl-libs-static zlib-static ngircd python3 openssl >/dev/null 2>&1
+apk add --no-cache openssl-libs-static zlib-static ngircd python3 openssl linux-pam py3-cryptography >/dev/null 2>&1
 (cd cmd/soja && gprbuild -q -P soja.gpr) >&2
 (cd cmd/sojadb && gprbuild -q -P sojadb.gpr) >&2
 (cd cmd/sojuctl && gprbuild -q -P sojuctl.gpr) >&2

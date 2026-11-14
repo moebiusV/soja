@@ -455,6 +455,28 @@ package body Soja.Database.Sqlite is
       return As_Bigint (ID);
    end P_Network_Null;
 
+   --  The bytes a hexadecimal text spells (SQLite's hex()): the certificate
+   --  and key of a network are binary, and a column read as text stops at
+   --  its first NUL byte.
+   function From_Hex (Text : Unbounded_String) return Unbounded_String is
+      S      : constant String := To_String (Text);
+      Result : Unbounded_String;
+
+      function Digit (C : Character) return Natural is
+        (case C is
+            when '0' .. '9' => Character'Pos (C) - Character'Pos ('0'),
+            when 'a' .. 'f' => Character'Pos (C) - Character'Pos ('a') + 10,
+            when 'A' .. 'F' => Character'Pos (C) - Character'Pos ('A') + 10,
+            when others     => 0);
+   begin
+      for I in 1 .. S'Length / 2 loop
+         Append (Result, Character'Val
+           (Digit (S (S'First + 2 * (I - 1))) * 16
+            + Digit (S (S'First + 2 * (I - 1) + 1))));
+      end loop;
+      return Result;
+   end From_Hex;
+
    function Col_Str (C : Forward_Cursor; F : Field_Index)
       return Unbounded_String
    is
@@ -936,7 +958,8 @@ package body Soja.Database.Sqlite is
       Fetch (C, DB.DB,
         "SELECT id, name, addr, nick, username, realname, certfp, pass, " &
         "connect_commands, sasl_mechanism, sasl_plain_username, " &
-        "sasl_plain_password, sasl_external_cert, sasl_external_key, " &
+        "sasl_plain_password, hex(sasl_external_cert), " &
+        "hex(sasl_external_key), " &
         "auto_away, enabled FROM Network WHERE user = ?1",
         [1 => As_Bigint (User_ID)]);
       Check (DB'Access);
@@ -956,8 +979,8 @@ package body Soja.Database.Sqlite is
             Net.SASL.Mechanism := Col_Str (C, 9);
             Net.SASL.Plain_Username := Col_Str (C, 10);
             Net.SASL.Plain_Password := Col_Str (C, 11);
-            Net.SASL.External_Cert := Col_Str (C, 12);
-            Net.SASL.External_Key := Col_Str (C, 13);
+            Net.SASL.External_Cert := From_Hex (Col_Str (C, 12));
+            Net.SASL.External_Key := From_Hex (Col_Str (C, 13));
             Net.Auto_Away := Boolean_Value (C, 14);
             Net.Enabled := Boolean_Value (C, 15);
             V.Append (Net);
@@ -1005,8 +1028,10 @@ package body Soja.Database.Sqlite is
            "?4, realname = ?5, certfp = ?6, pass = ?7, connect_commands = " &
            "?8, " &
            "sasl_mechanism = ?9, sasl_plain_username = ?10, " &
-           "sasl_plain_password = ?11, sasl_external_cert = ?12, " &
-           "sasl_external_key = ?13, auto_away = ?14, enabled = ?15 " &
+           "sasl_plain_password = ?11, " &
+           "sasl_external_cert = CAST(?12 AS BLOB), " &
+           "sasl_external_key = CAST(?13 AS BLOB), auto_away = ?14, " &
+           "enabled = ?15 " &
            "WHERE id = ?16",
            [1 => P_Str (Net.Name),
             2 => +To_String (Net.Addr),
@@ -1031,8 +1056,8 @@ package body Soja.Database.Sqlite is
            "certfp, pass, connect_commands, sasl_mechanism, " &
            "sasl_plain_username, sasl_plain_password, sasl_external_cert, " &
            "sasl_external_key, auto_away, enabled) VALUES " &
-           "(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, " &
-           "?15, ?16)",
+           "(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, " &
+           "CAST(?13 AS BLOB), CAST(?14 AS BLOB), ?15, ?16)",
            [1 => As_Bigint (User_ID),
             2 => P_Str (Net.Name),
             3 => +To_String (Net.Addr),

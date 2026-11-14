@@ -84,7 +84,7 @@ the note: it takes minutes, and the last three such notes were wrong.
 | `irc.go` + `xirc/`         | `Soja.Irc.*` (`Messages`, `Modes`, `Helpers`, `Xirc`, `Genmsg`, `Members`, …) | — (pure Ada) |
 | `config/config.go`         | `Soja.Config`     | `hbnf` (`grammars/scfg.hbnf`)     |
 | `conn.go` (TLS, buffering) | `Soja.Conn`       | `aws` (`AWS.Net.SSL`, OpenSSL 3) |
-| `certfp.go` (generateCertFP) | `Soja.Certfp`   | **deferred** — X.509 cert creation (see below) |
+| `certfp.go` (generateCertFP) | `Soja.Certgen`  | `bracke-cryptolib` X.509 (see "Features added last") |
 | `downstream.go`            | `Soja.Downstream` (leaves) + `Soja.Core` (downstreamConn) | — |
 | `upstream.go`              | `Soja.Upstream` (leaves) + `Soja.Core` (upstreamConn) | — |
 | `server.go`                | `Soja.Server`     | — (Ada tasking)                  |
@@ -133,8 +133,8 @@ CSPRNG are all already in `bracke-cryptolib`; TLS is already in `aws`.
 | `nhooyr.io/websocket` | WebSocket transport | hand-written RFC6455 (SHA-1 + base64) |
 | `git.sr.ht/~sircmpwn/go-bare` | msgstore message IDs (and the fs store's encoding) | `Soja.Bare` (hand-written: uint, int, string) |
 | `github.com/prometheus/client_golang` | metrics | `aws` + hand-written text format |
-| `github.com/SherClockHolmes/webpush-go` | push | `bracke-cryptolib` + `aws` — defer |
-| `github.com/msteinert/pam/v2` | PAM auth | libpam binding — defer |
+| `github.com/SherClockHolmes/webpush-go` | push | `Soja.Webpush` (`bracke-cryptolib` + `aws`) |
+| `github.com/msteinert/pam/v2` | PAM auth | `Soja.Auth.Pam` (libpam through `dlopen`) |
 | `golang.org/x/crypto/ssh/terminal` | sojudb password entry | termios — minor |
 
 ### TLS: OpenSSL via `aws`, not GNUTLS/libressl
@@ -329,8 +329,8 @@ elaboration; prefix matching, `help`, the admin/global rules and the output
 ports the parts of Go's `flag` the commands use, with its error texts.
 Deviations:
 
-- `certfp generate` answers that it is not supported yet (needs X.509 creation,
-  Milestone B); `certfp fingerprint` works.
+- `certfp generate` and `certfp fingerprint` both work (see "Features added
+  last").
 - The user table is reached through `Service.Directory`, which `Soja.Bouncer`
   implements, since the table lives above `Soja.Core`.
 - `user update -password ""` is refused (Go stores the hash of the empty
@@ -538,7 +538,7 @@ through `grammars/http-range.hbnf`.
 Deviations: a chunked request body is refused (411); conditional requests
 (`If-Modified-Since`, ...) are not handled; several byte ranges at once are
 answered with the whole file (Go sends multipart/byteranges); a Bearer token
-is refused (there is no oauth2 driver); the system's `mime.types` is not read,
+is checked with the oauth2 driver, and refused with the others; the system's `mime.types` is not read,
 so fewer extensions are known (the rest are sniffed); an RFC 2231 continuation
 (`filename*0=`) is not joined; the sniffing covers the usual signatures, not all
 of WHATWG's; `O_EXCL`/`O_CREAT` are the Linux values.  A request over 50 MiB
@@ -576,8 +576,8 @@ in its own dialect (`MARKREAD` for `draft/read-marker`, `READ` for
 `soju.im/read`; a client with neither is sent nothing, the check being on what
 goes out, as in Go).  The channel replay on join already sent the marker.
 BouncerServ keeps none (always `*`).  Not ported: the web push notification
-soju sends when a marker clears a pending push target (the target is cleared,
-as in Go, but nothing is pushed; web push is not ported).
+soju sends when a marker clears a pending push target is sent as well (see
+"Features added last").
 
 ### Executables (`cmd/soja`, `cmd/sojadb`) and the end-to-end check
 
@@ -596,8 +596,8 @@ What it refuses or changes, loudly:
   `http+unix://`), `http+prometheus://localhost:<port>`; any other scheme
   (pprof) is a startup error.
   `accept-proxy-ip` (PROXY protocol) works on the IRC TCP listeners.
-- Auth drivers other than `internal` (pam, oauth2) are a startup error: a
-  bouncer that cannot check passwords must not start as if it could.
+- Auth drivers: `internal`, `oauth2` and `pam` work; anything else is a startup
+  error: a bouncer that cannot check passwords must not start as if it could.
 - All three message stores (`memory`, `db`, `fs`) work;
   only the SQLite database driver.
 - SIGHUP re-reads the TLS certificate and key (`Server.Reload_TLS`): new TLS
@@ -924,6 +924,55 @@ once.  It passes.
   packages cannot be mutually `with`ed the way Go files share one package.
   `msgstore` (message history) and `certfp.go` are supporting, and are not
   needed for a basic connect-to-IRC build.
+
+## Features added last (SASL EXTERNAL, OAuth 2, PAM, Web Push)
+
+The statements above that call these features deferred or not ported are
+superseded by this section.
+
+- **`certfp generate`** (`Soja.Certgen`, `Handle_Certfp_Generate`).  The key is
+  RSA (2048, 3072 or 4096 bits), ECDSA (P-384; cryptolib has no P-521) or
+  Ed25519; the certificate has the TLS client profile, the common name
+  `soju-auto-generated-certificate` (hyphens: cryptolib refuses blanks, and
+  wants one subject alternative name, so the name is also the DNS name) and is
+  valid 7300 days.  cryptolib cannot self-sign a client-profile certificate,
+  so it is issued by a throwaway CA that is not kept; IRC servers check the
+  fingerprint and do not look at the issuer.  Both are stored as DER, as soju
+  does.  `Dial_TLS` hands AWS the certificate and key as a combined PEM in a
+  0700 temporary directory, removed right after `Initialize`; AWS is not told
+  to `Exchange_Certificate` (it then signs a SHA-224 token with the key, which
+  fails for Ed25519).
+- **A soja bug found on the way** (not soju's): SQLite read the BLOB columns
+  `sasl_external_cert` and `sasl_external_key` as text, so DER was cut at its
+  first NUL when the network was loaded again.  Writes now `CAST(... AS BLOB)`
+  and reads use `hex()`; `tests/sqlite_check.adb` has the regression.
+- **OAuth 2** (`Soja.Auth.OAuth2`, `Soja.Json`, `Soja.Url`, `Soja.Oauthbearer`).
+  `auth oauth2 <url>` as in `auth/oauth2.go`: RFC 8414 discovery (10 s) and RFC
+  7662 introspection, client id and secret from the URL's userinfo
+  (query-escaped in the Basic header, as Go does).  JSON is read by the parser
+  hbnf makes of `grammars/json.hbnf` (copied from hbnf's corpus; the three
+  literals read their letters so that the tree says which was read), the URL
+  by `grammars/url.hbnf` and the SASL OAUTHBEARER response by
+  `grammars/oauthbearer.hbnf`.  Members are found by name in any case, a
+  `null` member is absent and one of another type is an error, as
+  `encoding/json` has it.  The discovery is done at startup (a failure stops
+  `soja`); a reload (SIGHUP) does not repeat it.  TLS to the server is checked
+  against the system CA bundle (`Soja.Tls_Default`).  OAUTHBEARER works in
+  the SASL handshake and for the file upload's `Authorization: Bearer`.  A
+  response that is not valid OAUTHBEARER ends the connection (go-sasl's
+  error is not an IRC one, as for PLAIN).
+- **PAM** (`Soja.Auth.Pam`).  libpam is loaded with `dlopen` when `soja`
+  starts (it runs where PAM is not installed and then refuses `auth pam`);
+  service `login`, as soju; the conversation answers the password prompt and
+  gives empty answers to the others.
+- **Web Push** (`Soja.Webpush`, `Soja.Core.Push`).  VAPID keys (P-256), the
+  JWT (ES256), and RFC 8291 `aes128gcm` encryption with cryptolib's ECDH, HKDF
+  and AES-GCM; `Encrypt` is checked against RFC 8291's example.  The
+  `WEBPUSH` command, `VAPID=` in ISUPPORT, the pushes for highlights, direct
+  messages, invites and read markers, and the 24 h / 30 day subscription
+  rules are as in soju.  Differences: each broadcast is one task, as Go
+  has one goroutine; the whole payload is one
+  record (no padding); the 15 s limit is per request.
 
 [soju]: https://soju.im
 [ada-on-alpine]: https://github.com/moebiusV/ada-on-alpine

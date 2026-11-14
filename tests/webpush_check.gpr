@@ -1,0 +1,9 @@
+with "../soja.gpr";
+project Webpush_Check is
+   for Languages use ("Ada");
+   for Source_Dirs use (".");
+   for Object_Dir use "obj-s";
+   for Create_Missing_Dirs use "True";
+   for Exec_Dir use ".";
+   for Main use ("webpush_check.adb");
+end Webpush_Check;

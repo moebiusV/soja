@@ -20,6 +20,7 @@ with Ada.Strings.Unbounded;
 with Soja.Byte_Stream;
 with Soja.Http;
 with Soja.Server;
+with Soja.Url;
 
 package Soja.Fileupload is
 
@@ -42,18 +43,18 @@ package Soja.Fileupload is
    --  path.Join ("/", P)[1:]: dots and doubled slashes resolved, no way out of
    --  the root.
    function Clean_Path (P : String) return String
-     with Global => null;
+     renames Soja.Url.Clean_Path;
 
    --  path.Base.
    function Path_Base (P : String) return String
-     with Global => null;
+     renames Soja.Url.Path_Base;
 
    --  url.PathEscape and the path of a request with its escapes taken off
    --  (Ok is False for a bad escape).
    function Path_Escape (S : String) return String
-     with Global => null;
+     renames Soja.Url.Path_Escape;
    function Path_Unescape (S : String; Ok : out Boolean) return String
-     with Global => null;
+     renames Soja.Url.Path_Unescape;
 
    --  The name a file is shown with: what follows the first '-' of its name
    --  (the random part before it is not the user's).

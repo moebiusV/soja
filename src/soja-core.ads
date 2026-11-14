@@ -198,6 +198,9 @@ package Soja.Core is
       Plain_Set      : Boolean := False;   --  Go's plain != nil
       Plain_Username : Unbounded_String;
       Plain_Password : Unbounded_String;
+      Bearer_Set     : Boolean := False;   --  Go's oauthBearer != nil
+      Bearer_Username : Unbounded_String;
+      Bearer_Token   : Unbounded_String;
       Pending_Resp   : Unbounded_String;   --  Go's pendingResp buffer
    end record;
 

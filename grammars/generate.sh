@@ -29,6 +29,9 @@ http-head Http_Head
 scfg Scfg
 znclog Znc_Line
 media-type Mime_Media
+json Json_Doc
+url Url_Parts
+oauthbearer Oauth_Response
 http-range Http_Range"
 
 generate() {
