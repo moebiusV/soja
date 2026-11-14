@@ -243,6 +243,11 @@ begin
       Soja.Core.User_Ops.Check_Network (U, R ("irc.example"));
       Soja.Core.User_Ops.Check_Network (U, R ("ircs://irc.example:6697"));
       Soja.Core.User_Ops.Check_Network (U, R ("irc+insecure://h:6667"));
+      --  A unix address is for administrators.
+      Raises_Operation_Error
+        (U, R ("irc+unix:///run/ircd.sock", "local"),
+         "non-admin users cannot add networks with a unix address");
+      U.User_Record.Admin := True;
       Soja.Core.User_Ops.Check_Network (U, R ("irc+unix:///run/ircd.sock", "local"));
       Soja.Core.User_Ops.Check_Network (U, R ("unix:///run/ircd.sock", "local2"));
       Raises_Operation_Error
@@ -262,6 +267,7 @@ begin
          "irc+unix:// URL must not have a host");
       Raises_Operation_Error
         (U, R ("unix://"), "unix:// URL must have a path");
+      U.User_Record.Admin := False;
       Raises_Operation_Error
         (U, R ("http://irc.example"), "unknown URL scheme ""http""");
       Raises_Operation_Error
@@ -323,25 +329,48 @@ begin
              and then DC_Log.Has ("state=disconnected"),
              "attributes of the new network");
 
-      --  Limits.
+      --  Limits: only enabled networks count, and the user's own limit
+      --  overrides the global one.
       declare
          Cfg : constant Soja.Server.Server_Config_Access :=
            new Soja.Server.Server_Config;
-      begin
-         Cfg.Max_User_Networks := 2;
-         Srv.Set_Config (Cfg);
-         declare
-            X : Network_Access;
+
+         --  An enabled network is refused before anything is started.
+         procedure Refused (What : String) is
+            NRec : SD.Network := SD.New_Network ("third.example");
+            X    : Network_Access;
             pragma Unreferenced (X);
          begin
-            X := Add_Net (U, "third.example", "third");
-            Check (False, "the network limit must apply");
+            NRec.Name := To_Unbounded_String ("third");
+            NRec.Enabled := True;
+            X := Soja.Core.User_Ops.Create_Network (U, NRec);
+            Check (False, What & ": the network limit must apply");
          exception
             when E : Soja.Core.User_Ops.Operation_Error =>
                Check (Ada.Exceptions.Exception_Message (E)
-                      = "maximum number of networks reached", "limit text");
+                      = "maximum number of enabled networks reached",
+                      What & ": limit text");
+         end Refused;
+      begin
+         for N of U.Networks loop
+            N.Network_Record.Enabled := True;   --  (counted, not started)
+         end loop;
+         Cfg.Max_User_Networks := 2;
+         Srv.Set_Config (Cfg);
+         Refused ("global limit");
+         declare
+            X : constant Network_Access := Add_Net (U, "dis.example", "dis");
+         begin
+            Check (X /= null, "a disabled network does not count");
+            Soja.Core.User_Ops.Delete_Network (U, X.Network_Record.ID);
          end;
          Cfg.Max_User_Networks := -1;
+         U.User_Record.Max_Networks := 2;
+         Refused ("the user's own limit");
+         U.User_Record.Max_Networks := -1;
+         for N of U.Networks loop
+            N.Network_Record.Enabled := False;
+         end loop;
       end;
 
       --  Update: a fresh network replaces the old one, keeping its channels

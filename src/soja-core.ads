@@ -279,6 +279,8 @@ package Soja.Core is
       Admin        : Boolean := False;
       Has_Enabled  : Boolean := False;
       Enabled      : Boolean := False;
+      Has_Max_Networks : Boolean := False;
+      Max_Networks     : Integer := -1;
       Result       : Update_Result_Access;
    end record;
 

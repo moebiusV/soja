@@ -18,13 +18,13 @@ change can be read.
 | [x] | WAL and `synchronous = NORMAL` | `36cd653` | done |
 | [ ] | foreign keys on (`PRAGMA foreign_keys`), with the delete order audited | `2a7a469` | open |
 | [ ] | `DeleteUser` removes the user's device certificates | | open |
-| [ ] | default `message-store` is `db` | `4040927` | open |
-| [ ] | drivers that take no source refuse one (`message-store db x`, `auth internal x`) | `6d79a8f` | open |
+| [x] | default `message-store` is `db` | `4040927` | done |
+| [x] | drivers that take no source refuse one (`message-store db x`, `auth internal x`) | `6d79a8f` | done |
 | [ ] | several `auth` lines; `auth http <url>` | `f13b47e` `04fdb35` | open |
 | [ ] | `icon`, `accept-proxy-unix`, `message-expiry`, `client-cert-auth` directives | `89ce2f1` `ff99b6a` `2155529` `19e86d2` | open |
 | [ ] | `file-upload http <url>` | `c4dcf1d` | open |
 | [ ] | `listen` schemes `irc://`, `ws://`, `http://` (localhost), `http+insecure+prometheus://`, `irc+unix://host/path` | `ec9be26` `645c696` `a7e2be3` | open |
-| [ ] | PAM service name is `soju`, with a `pam.d` file | `fa03c22` | open |
+| [x] | PAM service name is `soju` (the `pam.d` file is the administrator's) | `fa03c22` | done |
 
 ## 2. Protocol and core
 
@@ -55,13 +55,13 @@ change can be read.
 
 | | Item | Upstream | Status |
 |---|---|---|---|
-| [ ] | `user create/update -max-networks`, `network -ignore-limit`, limit counts enabled networks, `user status` text | `c13c50c` `8e6a353` | open |
-| [ ] | `channel create`; `server debug` | `8c2bc64` `9bc8f67` | open |
-| [ ] | help texts: `-h` answer, fixed choices without angle brackets, `irc+unix` only, "reserved" wording | `1e8c492` `b62df53` `69d529e` | open |
-| [ ] | non-administrators cannot add `unix://` networks | `e75b8c7` | open |
+| [x] | `user create/update -max-networks`, `network -ignore-limit`, limit counts enabled networks, `user status` text | `c13c50c` `8e6a353` | done |
+| [x] | `channel create`; `server debug` | `8c2bc64` `9bc8f67` | done |
+| [x] | help texts: `-h` answer, fixed choices without angle brackets, `irc+unix` only, "reserved" wording | `1e8c492` `b62df53` `69d529e` | done |
+| [x] | non-administrators cannot add `unix://` networks | `e75b8c7` | done |
 | [ ] | `message-expiry` for the db and fs stores | `2155529` | open |
 | [ ] | search text without formatting codes (`stripANSI`) | `2489318` | open |
-| [ ] | file upload: PDF inline, `media-src 'self'`, 413 with `Upload-Limit`, username cut at `/` or `@` | `aadecee` `3ef9cb8` `c1116b5` | open |
+| [x] | file upload: PDF inline, `media-src 'self'`, 413 with `Upload-Limit`, username cut at `/` or `@` | `aadecee` `3ef9cb8` `c1116b5` | done |
 | [ ] | Forwarded headers on `auth` requests | `d343f4b` `a1631a2` | open |
 
 ## 4. soju bugs still present

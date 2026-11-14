@@ -359,6 +359,7 @@ package body Soja.Core.Service is
       FS.Add_String ("certfp");
       FS.Add_Bool_Value ("auto-away");
       FS.Add_Bool_Value ("enabled");
+      FS.Add_Bool ("ignore-limit");
       FS.Add_List ("connect-command");
       return FS;
    end New_Network_Flags;
@@ -392,10 +393,11 @@ package body Soja.Core.Service is
                   Scheme : constant String := Addr (Addr'First .. Sep - 1);
                begin
                   if Scheme /= "ircs" and then Scheme /= "irc+insecure"
-                    and then Scheme /= "unix"
+                    and then Scheme /= "irc+unix"
                   then
                      Fail ("unknown scheme " & Quote (Scheme)
-                           & " (supported schemes: ircs, irc+insecure, unix)");
+                           & " (supported schemes: ircs, irc+insecure, "
+                           & "irc+unix)");
                   end if;
                end;
             end if;
@@ -404,8 +406,7 @@ package body Soja.Core.Service is
       end if;
       if Is_Set (FS, "name") then
          if Get (FS, "name") = "*" then
-            Fail ("the network name " & Quote ("*")
-                  & " is reserved for multi-upstream mode");
+            Fail ("the network name " & Quote ("*") & " is reserved");
          end if;
          Rec.Name := To_Unbounded_String (Get (FS, "name"));
       end if;
@@ -495,6 +496,9 @@ package body Soja.Core.Service is
       if not FS.Is_Set ("addr") then
          Fail ("flag -addr is required");
       end if;
+      if FS.Get_Bool ("ignore-limit") and then not Ctx.Admin then
+         Fail ("you must be an admin to use the flag -ignore-limit");
+      end if;
 
       declare
          Rec : Soja.Database.Network := Soja.Database.New_Network (FS.Get
@@ -503,7 +507,9 @@ package body Soja.Core.Service is
          Update_Network_From_Flags (FS, Rec);
          declare
             Net : constant Network_Access :=
-              Soja.Core.User_Ops.Create_Network (Ctx.User, Rec);
+              Soja.Core.User_Ops.Create_Network
+                (Ctx.User, Rec,
+                 Enforce_Limit => not FS.Get_Bool ("ignore-limit"));
          begin
             Say (Ctx, "created network " & Quote (Net_Name (Net)));
          end;
@@ -590,13 +596,20 @@ package body Soja.Core.Service is
            Network_From_Arg (Ctx, To_String (Name));
          FS  : Soja.Flags.Flag_Set := New_Network_Flags;
          Rec : Soja.Database.Network := Net.Network_Record;
+         Was_Enabled : constant Boolean := Rec.Enabled;
       begin
          Parse_Flags (FS, Rest);
          No_Extra_Args (FS);
+         if FS.Get_Bool ("ignore-limit") and then not Ctx.Admin then
+            Fail ("you must be an admin to use the flag -ignore-limit");
+         end if;
          Update_Network_From_Flags (FS, Rec);
          declare
             Updated : constant Network_Access :=
-              Soja.Core.User_Ops.Update_Network (Ctx.User, Rec);
+              Soja.Core.User_Ops.Update_Network
+                (Ctx.User, Rec,
+                 Enforce_Limit => not FS.Get_Bool ("ignore-limit")
+                                  and then not Was_Enabled);
          begin
             Say (Ctx, "updated network " & Quote (Net_Name (Updated)));
          end;
@@ -1025,6 +1038,152 @@ package body Soja.Core.Service is
       end;
    end Strip_Network_Suffix;
 
+   --  channelFlagSet.update, for the options but -detached.  Fails (and the
+   --  caller's record is then not to be used) when a value is bad.
+   procedure Apply_Channel_Flags
+     (FS : Soja.Flags.Flag_Set; Rec : in out Soja.Database.Channel) is
+   begin
+      if FS.Is_Set ("relay-detached") then
+         Rec.Relay_Detached := Parse_Filter (FS.Get ("relay-detached"));
+      end if;
+      if FS.Is_Set ("reattach-on") then
+         Rec.Reattach_On := Parse_Filter (FS.Get ("reattach-on"));
+      end if;
+      if FS.Is_Set ("detach-after") then
+         declare
+            Dur : Duration;
+            Ok  : Boolean;
+         begin
+            Soja.Irc.Helpers.Parse_Go_Duration
+              (FS.Get ("detach-after"), Dur, Ok);
+            if not Ok or else Dur < 0.0 then
+               Fail ("unknown duration for -detach-after "
+                     & Quote (FS.Get ("detach-after"))
+                     & " (duration format: 0, 300s, 22h30m, ...)");
+            end if;
+            Rec.Detach_After := Dur;
+         end;
+      end if;
+      if FS.Is_Set ("detach-on") then
+         Rec.Detach_On := Parse_Filter (FS.Get ("detach-on"));
+      end if;
+   end Apply_Channel_Flags;
+
+   procedure Add_Channel_Flags (FS : in out Soja.Flags.Flag_Set) is
+   begin
+      FS.Add_Bool_Value ("detached");
+      FS.Add_String ("relay-detached");
+      FS.Add_String ("reattach-on");
+      FS.Add_String ("detach-after");
+      FS.Add_String ("detach-on");
+   end Add_Channel_Flags;
+
+   procedure Handle_Channel_Create
+     (Ctx : Service_Context; Params : String_Vector)
+   is
+      FS   : Soja.Flags.Flag_Set;
+      Net  : Network_Access;
+      Name : Unbounded_String;
+   begin
+      if Params.Length < 1 then
+         Fail ("expected at least one argument");
+      end if;
+      Name := To_Unbounded_String (Params (1));
+
+      Add_Channel_Flags (FS);
+      Parse_Flags (FS, Tail (Params, 2));
+      No_Extra_Args (FS);
+
+      Strip_Network_Suffix (Ctx, Name, Net);
+
+      declare
+         Chan_Name : constant String := To_String (Name);
+      begin
+         if Chan_Name = ""
+           or else (for some C of Chan_Name =>
+                      C = ' ' or else C = ',' or else C = ASCII.BEL)
+         then
+            Fail ("invalid channel name: " & Chan_Name);
+         end if;
+         if Net.Conn /= null
+           and then not Soja.Core.Upstream_Dispatch.Is_Channel
+                          (Net.Conn, Chan_Name)
+         then
+            Fail ("not a channel name: " & Chan_Name);
+         end if;
+         if Net.Channels.Get (Chan_Name) /= null then
+            Fail ("channel " & Quote (Chan_Name) & " already exists");
+         end if;
+
+         declare
+            Rec : Soja.Database.Channel;
+         begin
+            Rec.Name := Name;
+            Apply_Channel_Flags (FS, Rec);
+            if FS.Is_Set ("detached") then
+               Rec.Detached := FS.Get_Bool ("detached");
+            end if;
+
+            Net.Channels.Set (Chan_Name, new Soja.Database.Channel'(Rec));
+            declare
+               Stored : Soja.Database.Channel := Rec;
+            begin
+               Soja.Database.Store_Channel
+                 (DB_Of (Ctx).all, Net.Network_Record.ID, Stored);
+               Net.Channels.Get (Chan_Name).ID := Stored.ID;
+            exception
+               when E : others =>
+                  Fail ("failed to create channel: "
+                        & Ada.Exceptions.Exception_Message (E));
+            end;
+         end;
+
+         if Net.Conn /= null then
+            Send_Message
+              (Net.Conn, Soja.Irc.Genmsg.Make ("JOIN", [Chan_Name]));
+         end if;
+         Say (Ctx, "created channel " & Quote (Chan_Name));
+      end;
+   end Handle_Channel_Create;
+
+   procedure Handle_Server_Debug
+     (Ctx : Service_Context; Params : String_Vector)
+   is
+      Logger : constant Soja.Logging.Logger_Access :=
+        Soja.Server.Logger (Ctx.Srv.all);
+   begin
+      if Params.Length /= 1 then
+         Fail ("expected exactly one argument");
+      end if;
+      declare
+         Text : constant String :=
+           Ada.Characters.Handling.To_Lower (Params (1));
+         On   : Boolean;
+      begin
+         --  strconv.ParseBool.
+         if Text in "1" | "t" | "true" then
+            On := True;
+         elsif Text in "0" | "f" | "false" then
+            On := False;
+         else
+            Fail ("strconv.ParseBool: parsing " & Quote (Params (1))
+                  & ": invalid syntax");
+         end if;
+         if Logger.all in Soja.Logging.Standard_Logger'Class then
+            declare
+               L : Soja.Logging.Standard_Logger renames
+                 Soja.Logging.Standard_Logger (Logger.all);
+            begin
+               if L.Debug_Enabled /= On then
+                  L.Debug_Enabled := On;
+                  Logger.Print ((if On then "enabling" else "disabling")
+                                & " debug logging");
+               end if;
+            end;
+         end if;
+      end;
+   end Handle_Server_Debug;
+
    procedure Handle_Channel_Update
      (Ctx : Service_Context; Params : String_Vector)
    is
@@ -1037,11 +1196,7 @@ package body Soja.Core.Service is
       end if;
       Name := To_Unbounded_String (Params (1));
 
-      FS.Add_Bool_Value ("detached");
-      FS.Add_String ("relay-detached");
-      FS.Add_String ("reattach-on");
-      FS.Add_String ("detach-after");
-      FS.Add_String ("detach-on");
+      Add_Channel_Flags (FS);
       Parse_Flags (FS, Tail (Params, 2));
       No_Extra_Args (FS);
 
@@ -1059,30 +1214,7 @@ package body Soja.Core.Service is
          declare
             Rec : Soja.Database.Channel := Ch.all;
          begin
-            if FS.Is_Set ("relay-detached") then
-               Rec.Relay_Detached := Parse_Filter (FS.Get ("relay-detached"));
-            end if;
-            if FS.Is_Set ("reattach-on") then
-               Rec.Reattach_On := Parse_Filter (FS.Get ("reattach-on"));
-            end if;
-            if FS.Is_Set ("detach-after") then
-               declare
-                  Dur : Duration;
-                  Ok  : Boolean;
-               begin
-                  Soja.Irc.Helpers.Parse_Go_Duration
-                    (FS.Get ("detach-after"), Dur, Ok);
-                  if not Ok or else Dur < 0.0 then
-                     Fail ("unknown duration for -detach-after "
-                           & Quote (FS.Get ("detach-after"))
-                           & " (duration format: 0, 300s, 22h30m, ...)");
-                  end if;
-                  Rec.Detach_After := Dur;
-               end;
-            end if;
-            if FS.Is_Set ("detach-on") then
-               Rec.Detach_On := Parse_Filter (FS.Get ("detach-on"));
-            end if;
+            Apply_Channel_Flags (FS, Rec);
             Ch.all := Rec;
          end;
 
@@ -1198,6 +1330,12 @@ package body Soja.Core.Service is
                   Append
                     (Line, ":" & Natural'Image (Natural (Networks.Length))
                      & " networks");
+                  if Rec.Max_Networks >= 0 then
+                     Append
+                       (Line, " (" & Ada.Strings.Fixed.Trim
+                                       (Integer'Image (Rec.Max_Networks),
+                                        Ada.Strings.Left) & " max)");
+                  end if;
                end;
             exception
                when E : others =>
@@ -1229,6 +1367,7 @@ package body Soja.Core.Service is
       FS.Add_String ("realname");
       FS.Add_Bool ("admin");
       FS.Add_Bool ("enabled", Default => True);
+      FS.Add_Int ("max-networks", Default => -1);
       Parse_Flags (FS, Params);
       No_Extra_Args (FS);
       if FS.Get ("username") = "" then
@@ -1252,6 +1391,7 @@ package body Soja.Core.Service is
          Rec.Realname := To_Unbounded_String (FS.Get ("realname"));
          Rec.Admin := FS.Get_Bool ("admin");
          Rec.Enabled := FS.Get_Bool ("enabled");
+         Rec.Max_Networks := FS.Get_Int ("max-networks");
          if not FS.Get_Bool ("disable-password") then
             begin
                Soja.Database.Set_Password (Rec, FS.Get ("password"));
@@ -1289,6 +1429,7 @@ package body Soja.Core.Service is
       FS.Add_String ("realname");
       FS.Add_Bool_Value ("admin");
       FS.Add_Bool_Value ("enabled");
+      FS.Add_Int ("max-networks");
 
       Pop_Arg (Params, Username, Rest);
       Parse_Flags (FS, Rest);
@@ -1351,6 +1492,8 @@ package body Soja.Core.Service is
                      Admin        => FS.Get_Bool ("admin"),
                      Has_Enabled  => FS.Is_Set ("enabled"),
                      Enabled      => FS.Get_Bool ("enabled"),
+                     Has_Max_Networks => FS.Is_Set ("max-networks"),
+                     Max_Networks     => FS.Get_Int ("max-networks"),
                      Result       => Result));
                select
                   Result.Wait (Error);
@@ -1371,6 +1514,9 @@ package body Soja.Core.Service is
          end if;
          if FS.Is_Set ("enabled") then
             Fail ("cannot update -enabled of own user");
+         end if;
+         if FS.Is_Set ("max-networks") and then not Ctx.Admin then
+            Fail ("cannot update -max-networks of own user");
          end if;
 
          declare
@@ -1393,6 +1539,9 @@ package body Soja.Core.Service is
                end if;
                if FS.Is_Set ("realname") then
                   Rec.Realname := To_Unbounded_String (FS.Get ("realname"));
+               end if;
+               if FS.Is_Set ("max-networks") then
+                  Rec.Max_Networks := FS.Get_Int ("max-networks");
                end if;
             end Apply;
          begin
@@ -1637,7 +1786,30 @@ package body Soja.Core.Service is
             Fail ("command " & Quote (Words (1)) & " not found");
          end if;
 
-         N.Run (Ctx, Tail (Words, Next));
+         begin
+            N.Run (Ctx, Tail (Words, Next));
+         exception
+            when E : Service_Error =>
+               --  -h and -help: soju answers with where to find the help
+               --  (1e8c492), not with Go's "flag: help requested".
+               if Ada.Exceptions.Exception_Message (E)
+                    = "flag: help requested"
+               then
+                  declare
+                     Name : Unbounded_String;
+                  begin
+                     for I in 1 .. Next - 1 loop
+                        if I > 1 then
+                           Append (Name, " ");
+                        end if;
+                        Append (Name, Words (I));
+                     end loop;
+                     Fail ("unsupported flag (type ""help "
+                           & To_String (Name) & """ for a help message)");
+                  end;
+               end if;
+               raise;
+         end;
       end;
    end Handle_Command;
 
@@ -1717,7 +1889,7 @@ package body Soja.Core.Service is
      "[-addr addr] [-name name] [-username username] [-pass pass] "
      & "[-realname realname] [-certfp fingerprint] [-nick nick] "
      & "[-auto-away auto-away] [-enabled enabled] "
-     & "[-connect-command command]...";
+     & "[-ignore-limit ignore-limit] [-connect-command command]...";
 
    Help_Node, Network_Node, Certfp_Node, Sasl_Node, User_Node, Channel_Node,
    Server_Node, Unused : Natural;
@@ -1732,6 +1904,7 @@ begin
                   "-addr <addr> [-name name] [-username username] "
                   & "[-pass pass] [-realname realname] [-certfp fingerprint] "
                   & "[-nick nick] [-auto-away auto-away] [-enabled enabled] "
+                  & "[-ignore-limit ignore-limit] "
                   & "[-connect-command command]...",
                   "add a new network", Handle_Network_Create'Access);
    Unused := Add (Network_Node, "status", "",
@@ -1771,13 +1944,15 @@ begin
    Unused := Add (User_Node, "create",
                   "-username <username> -password <password> "
                   & "[-disable-password] [-admin true|false] [-nick <nick>] "
-                  & "[-realname <realname>] [-enabled true|false]",
+                  & "[-realname <realname>] [-enabled true|false]  "
+                  & "[-max-networks <max-networks>]",
                   "create a new soju user", Handle_User_Create'Access,
                   Admin => True, Global => True);
    Unused := Add (User_Node, "update",
                   "[username] [-password <password>] [-disable-password] "
                   & "[-admin true|false] [-nick <nick>] "
-                  & "[-realname <realname>] [-enabled true|false]",
+                  & "[-realname <realname>] [-enabled true|false] "
+                  & "[-max-networks <max-networks>]",
                   "update a user", Handle_User_Update'Access, Global => True);
    Unused := Add (User_Node, "delete", "<username> [confirmation token]",
                   "delete a user", Handle_User_Delete'Access, Global => True);
@@ -1789,12 +1964,19 @@ begin
    Unused := Add (Channel_Node, "status", "[-network name]",
                   "show a list of saved channels and their current status",
                   Handle_Channel_Status'Access);
-   Unused := Add (Channel_Node, "update",
-                  "<name> [-detached <true|false>] "
-                  & "[-relay-detached <default|none|highlight|message>] "
-                  & "[-reattach-on <default|none|highlight|message>] "
+   Unused := Add (Channel_Node, "create",
+                  "<name> [-detached true|false] "
+                  & "[-relay-detached default|none|highlight|message] "
+                  & "[-reattach-on default|none|highlight|message] "
                   & "[-detach-after <duration>] "
-                  & "[-detach-on <default|none|highlight|message>]",
+                  & "[-detach-on default|none|highlight|message]",
+                  "create a channel", Handle_Channel_Create'Access);
+   Unused := Add (Channel_Node, "update",
+                  "<name> [-detached true|false] "
+                  & "[-relay-detached default|none|highlight|message] "
+                  & "[-reattach-on default|none|highlight|message] "
+                  & "[-detach-after <duration>] "
+                  & "[-detach-on default|none|highlight|message]",
                   "update a channel", Handle_Channel_Update'Access);
    Unused := Add (Channel_Node, "delete", "<name>", "delete a channel",
                   Handle_Channel_Delete'Access);
@@ -1805,4 +1987,8 @@ begin
    Unused := Add (Server_Node, "notice", "<notice>",
                   "broadcast a notice to all connected bouncer users",
                   Handle_Server_Notice'Access, Admin => True, Global => True);
+   Unused := Add (Server_Node, "debug", "true|false",
+                  "enable/disable debug logging to stderr (will leak "
+                  & "sensitive information)",
+                  Handle_Server_Debug'Access, Admin => True, Global => True);
 end Soja.Core.Service;

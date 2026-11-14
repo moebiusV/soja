@@ -272,6 +272,10 @@ package body Soja.Core.User_Ops is
               Scheme & ":// URL must not have a path";
          end if;
       elsif Scheme = "irc+unix" or else Scheme = "unix" then
+         if not U.User_Record.Admin then
+            raise Operation_Error with
+              "non-admin users cannot add networks with a unix address";
+         end if;
          if Length (Web.Host) > 0 then
             raise Operation_Error with
               Scheme & ":// URL must not have a host";
@@ -308,23 +312,44 @@ package body Soja.Core.User_Ops is
    -- Create / update / delete --
    ---------------------------------
 
+   --  user.canEnableNewNetwork: only enabled networks count against the
+   --  limit, which is the user's own when it has one.
+   procedure Check_Can_Enable_New_Network (U : not null User_Access) is
+      Max : constant Integer :=
+        (if U.User_Record.Max_Networks >= 0 then U.User_Record.Max_Networks
+         else Soja.Server.Config (U.Srv.all).Max_User_Networks);
+      N   : Natural := 0;
+   begin
+      if Max < 0 then
+         return;
+      end if;
+      for Net of U.Networks loop
+         if Net.Network_Record.Enabled then
+            N := N + 1;
+         end if;
+      end loop;
+      if N >= Max then
+         raise Operation_Error with
+           "maximum number of enabled networks reached";
+      end if;
+   end Check_Can_Enable_New_Network;
+
    function Create_Network
-     (U : not null User_Access; Rec : Soja.Database.Network)
+     (U : not null User_Access; Rec : Soja.Database.Network;
+      Enforce_Limit : Boolean := True)
       return Network_Access
    is
-      Max : constant Integer :=
-        Soja.Server.Config (U.Srv.all).Max_User_Networks;
       DB  : constant Soja.Database.Database_Access := DB_Of (U);
    begin
       if Rec.ID /= 0 then
          raise Program_Error with "tried creating an already-existing network";
       end if;
 
-      Check_Network (U, Rec);
-
-      if Max >= 0 and then Integer (U.Networks.Length) >= Max then
-         raise Operation_Error with "maximum number of networks reached";
+      if Enforce_Limit and then Rec.Enabled then
+         Check_Can_Enable_New_Network (U);
       end if;
+
+      Check_Network (U, Rec);
 
       declare
          Net : constant Network_Access :=
@@ -349,7 +374,8 @@ package body Soja.Core.User_Ops is
    end Create_Network;
 
    function Update_Network
-     (U : not null User_Access; Rec : Soja.Database.Network)
+     (U : not null User_Access; Rec : Soja.Database.Network;
+      Enforce_Limit : Boolean := False)
       return Network_Access
    is
       Record_Copy : Soja.Database.Network := Rec;
@@ -357,6 +383,10 @@ package body Soja.Core.User_Ops is
    begin
       if Record_Copy.ID = 0 then
          raise Program_Error with "tried updating a new network";
+      end if;
+
+      if Enforce_Limit and then Record_Copy.Enabled then
+         Check_Can_Enable_New_Network (U);
       end if;
 
       --  If the nickname/realname is reset to the default, just wipe the

@@ -108,11 +108,11 @@ begin
       Text : constant String := Run ("help");
    begin
       Check (Has (Text, "available commands: certfp fingerprint, certfp generate, "
-                        & "channel delete, channel status, channel update, help, "
+                        & "channel create, channel delete, channel status, channel update, help, "
                         & "network create, network delete, network quote, "
                         & "network status, network update, sasl reset"),
              "help: " & Text);
-      Check (Has (Text, "server notice, server status, user create"),
+      Check (Has (Text, "server debug, server notice, server status, user create"),
              "an admin sees the admin commands");
    end;
    Check (not Has (Run ("help", Admin => False), "server status")
@@ -149,12 +149,18 @@ begin
           = "No network configured, add one with ""network create"".",
           "no networks");
    Check (Run ("network create") = "!flag -addr is required", "-addr");
+   Check (Run ("network create -h")
+          = "!unsupported flag (type ""help network create"" for a help "
+            & "message)", "-h points to the help");
    Check (Run ("network create -addr http://x")
           = "!unknown scheme ""http"" (supported schemes: ircs, irc+insecure, "
-            & "unix)", "scheme");
+            & "irc+unix)", "scheme");
    Check (Run ("network create -addr x -name *")
-          = "!the network name ""*"" is reserved for multi-upstream mode",
-          "reserved name");
+          = "!the network name ""*"" is reserved", "reserved name");
+   Check (Run ("network create -addr irc.example -ignore-limit",
+               Admin => False)
+          = "!you must be an admin to use the flag -ignore-limit",
+          "-ignore-limit is for administrators");
    Check (Run ("network create -addr x -certfp zz")
           = "!the certificate fingerprint must be hex-encoded", "hex");
    Check (Run ("network create -addr x -certfp abcd")
@@ -253,6 +259,21 @@ begin
       Check (Run ("channel status -network nope") = "!unknown network ""nope""",
              "unknown network");
 
+      --  channel create: the name is checked, the options are applied.
+      Check (Run ("channel create #c/foo -relay-detached message")
+             = "created channel ""#c""", "create");
+      Check (Net.Channels.Get ("#c") /= null
+             and then Net.Channels.Get ("#c").Relay_Detached = SD.Filter_Message,
+             "the new channel is kept, with its options");
+      Check (Run ("channel create #c/foo") = "!channel ""#c"" already exists",
+             "create twice");
+      Check (Run ("channel create /foo") = "!invalid channel name: ",
+             "empty name");
+      Check (Run ("channel create #bad,name/foo")
+             = "!invalid channel name: #bad,name", "illegal characters");
+      Check (Run ("channel create #d/foo -detach-after bogus")(1 .. 1) = "!"
+             and then Net.Channels.Get ("#d") = null,
+             "a bad value creates nothing");
       Check (Run ("channel update #a/foo -relay-detached none -detach-after 5m")
              = "updated channel ""#a""", "update");
       Check (Net.Channels.Get ("#a").Relay_Detached = SD.Filter_None
@@ -296,8 +317,11 @@ begin
           "exclusive");
    Check (Run ("user create -password x") = "!flag -username is required",
           "username required");
-   Check (Run ("user create -username bob -password pw -nick bobby")
+   Check (Run ("user create -username bob -password pw -nick bobby "
+               & "-max-networks 3")
           = "created user ""bob""", "create user");
+   Check (Has (Run ("user status bob"), "bob: 0 networks (3 max)"),
+          "the user's limit is shown: " & Run ("user status bob"));
    declare
       Bob : constant User_Access := Soja.Bouncer.Get_User (B, "bob");
    begin
@@ -308,8 +332,8 @@ begin
       Check (Has (Run ("user create -username bob -password pw"),
                   "!could not create user: "), "a duplicate");
       Check (Run ("user status") = "alice (admin): 1 networks|"
-             & "bob: 0 networks"
-             or else Run ("user status") = "bob: 0 networks|"
+             & "bob: 0 networks (3 max)"
+             or else Run ("user status") = "bob: 0 networks (3 max)|"
                      & "alice (admin): 1 networks", "both users");
 
       --  Updating another user goes through that user's own task.

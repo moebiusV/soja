@@ -311,6 +311,9 @@ package body Soja.Core.User_Events is
          if E.Has_Enabled then
             Rec.Enabled := E.Enabled;
          end if;
+         if E.Has_Max_Networks then
+            Rec.Max_Networks := E.Max_Networks;
+         end if;
       end Apply;
    begin
       begin

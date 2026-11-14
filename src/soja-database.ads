@@ -46,6 +46,7 @@ package Soja.Database is
       Admin                    : Boolean := False;
       Enabled                  : Boolean := False;
       Downstream_Interacted_At : Time;               -- zero = never
+      Max_Networks             : Integer := -1;      -- < 0: the global limit
    end record;
 
    function New_User (Username : String) return User;

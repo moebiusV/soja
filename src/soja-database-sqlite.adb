@@ -872,7 +872,7 @@ package body Soja.Database.Sqlite is
       Acquire (G, DB.Lock);
       Fetch (C, DB.DB,
         "SELECT id, username, password, admin, nick, realname, enabled, " &
-        "downstream_interacted_at FROM User");
+        "downstream_interacted_at, max_networks FROM User");
       Check (DB'Access);
       while Has_Row (C) loop
          declare
@@ -886,6 +886,7 @@ package body Soja.Database.Sqlite is
             U.Realname := Col_Str (C, 5);
             U.Enabled := Boolean_Value (C, 6);
             U.Downstream_Interacted_At := Col_Time (C, 7);
+            U.Max_Networks := Integer (Bigint_Value (C, 8));
             V.Append (U);
          end;
          Next (C);
@@ -907,7 +908,7 @@ package body Soja.Database.Sqlite is
       Acquire (G, DB.Lock);
       Fetch (C, DB.DB,
         "SELECT id, password, admin, nick, realname, enabled, " &
-        "downstream_interacted_at FROM User WHERE username = ?1",
+        "downstream_interacted_at, max_networks FROM User WHERE username = ?1",
         [1 => +Username]);
       Check (DB'Access);
       if not Has_Row (C) then
@@ -920,6 +921,7 @@ package body Soja.Database.Sqlite is
       U.Realname := Col_Str (C, 4);
       U.Enabled := Boolean_Value (C, 5);
       U.Downstream_Interacted_At := Col_Time (C, 6);
+      U.Max_Networks := Integer (Bigint_Value (C, 7));
       return U;
    end Get_User;
 
@@ -934,21 +936,22 @@ package body Soja.Database.Sqlite is
       if U.ID /= 0 then
          Execute (DB.DB,
            "UPDATE User SET password = ?1, admin = ?2, nick = ?3, " &
-           "realname = ?4, enabled = ?5, downstream_interacted_at = ?6 " &
-           "WHERE username = ?7",
+           "realname = ?4, enabled = ?5, downstream_interacted_at = ?6, " &
+           "max_networks = ?8 WHERE username = ?7",
            [1 => P_Str (U.Password),
             2 => +U.Admin,
             3 => P_Str (U.Nick),
             4 => P_Str (U.Realname),
             5 => +U.Enabled,
             6 => P_Time (U.Downstream_Interacted_At),
-            7 => +To_String (U.Username)]);
+            7 => +To_String (U.Username),
+            8 => +U.Max_Networks]);
          Check (DB'Access);
       else
          Execute (DB.DB,
            "INSERT INTO User(username, password, admin, nick, realname, " &
-           "created_at, enabled, downstream_interacted_at) VALUES " &
-           "(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+           "created_at, enabled, downstream_interacted_at, max_networks) " &
+           "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
            [1 => +To_String (U.Username),
             2 => P_Str (U.Password),
             3 => +U.Admin,
@@ -956,7 +959,8 @@ package body Soja.Database.Sqlite is
             5 => P_Str (U.Realname),
             6 => +Format_Time (Ada.Calendar.Clock),
             7 => +U.Enabled,
-            8 => P_Time (U.Downstream_Interacted_At)]);
+            8 => P_Time (U.Downstream_Interacted_At),
+            9 => +U.Max_Networks]);
          Check (DB'Access);
          U.ID := Last_ID (DB'Access);
       end if;

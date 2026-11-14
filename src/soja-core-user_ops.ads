@@ -38,11 +38,17 @@ package Soja.Core.User_Ops is
 
    --  user.createNetwork / updateNetwork / deleteNetwork.  Update reconnects
    --  with a fresh network built from the new record.
+   --  Enforce_Limit: whether the limit on enabled networks (the user's
+   --  max-networks, else the global max-user-networks) applies when the
+   --  network is enabled.  Creating applies it by default; updating only
+   --  when the caller says so (the network is being enabled).
    function Create_Network
-     (U : not null User_Access; Rec : Soja.Database.Network)
+     (U : not null User_Access; Rec : Soja.Database.Network;
+      Enforce_Limit : Boolean := True)
       return Network_Access;
    function Update_Network
-     (U : not null User_Access; Rec : Soja.Database.Network)
+     (U : not null User_Access; Rec : Soja.Database.Network;
+      Enforce_Limit : Boolean := False)
       return Network_Access;
    procedure Delete_Network (U : not null User_Access; ID : Long_Long_Integer);
 

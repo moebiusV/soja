@@ -52,7 +52,8 @@ package body Soja.Database is
          Realname                 => Null_Unbounded_String,
          Admin                    => False,
          Enabled                  => True,
-         Downstream_Interacted_At => Null_Time);
+         Downstream_Interacted_At => Null_Time,
+         Max_Networks             => -1);
    end New_User;
 
    ---------

@@ -1703,6 +1703,7 @@ package body Soja.Core.Downstream_Commands is
                   end if;
                   declare
                      Rec : Soja.Database.Network := Net.Network_Record;
+                     Was_Enabled : constant Boolean := Rec.Enabled;
                      R   : constant Irc_Error_Result :=
                        Update_Network_Attrs
                          (Rec, Parse_Tags (Param (M, 2)), Sub);
@@ -1712,8 +1713,10 @@ package body Soja.Core.Downstream_Commands is
                      end if;
                      Drop_Defaults (Rec);
                      declare
+                        --  Only enabling a disabled network is limited.
                         Updated : constant Network_Access :=
-                          Soja.Core.User_Ops.Update_Network (U, Rec);
+                          Soja.Core.User_Ops.Update_Network
+                            (U, Rec, Enforce_Limit => not Was_Enabled);
                         pragma Unreferenced (Updated);
                      begin
                         Send_Message
