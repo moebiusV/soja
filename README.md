@@ -63,8 +63,7 @@ sh tests/e2e.sh                              # end to end, against ngircd
 ```
 
 The unit tests are `tests/*_check.gpr`; each builds a program that prints
-`ALL PASS`. The reference soju source is pinned as a git submodule at
-`upstream/soju`.
+`ALL PASS`.
 
 ## Status
 

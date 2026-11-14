@@ -4,8 +4,9 @@ This is the working list for the upstream pull requests: once soja is complete,
 **each entry below becomes its own PR against soju** (one branch, one commit,
 one Go test per bug).  Add an entry the moment a bug is found; do not batch.
 
-- Reference revision: `upstream/soju` = `6541047` (`v0.8.0-9-g6541047`,
-  2024-07-04, "readme: move to Codeberg").  Re-check every entry against
+- Reference revision: soju `6541047` (`v0.8.0-9-g6541047`, 2024-07-04,
+  "readme: move to Codeberg"), from <https://git.sr.ht/~emersion/soju>
+  (clone it to check an entry).  Re-check every entry against
   soju's current `master` before opening its PR: some may already be fixed.
 - Line numbers are in that revision.
 - "Soja fix" says where the Ada port deviates from the Go code, and "Soja

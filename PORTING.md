@@ -1,9 +1,11 @@
 # Porting notes: soju (Go) → soja (Ada)
 
 soja is a translation of [soju] from Go to Ada 2022, reusing the packages
-published by [ada-on-alpine]. The upstream Go source is pinned at
-`upstream/soju` (submodule). Keep the translation faithful: same structure
-and logic.  Wire-format quirks of irc.v4 stay (see below).  Clear bugs in soju
+published by [ada-on-alpine]. The translation is complete (2026-11-14), and soju's
+source is no longer carried in this repository: the reference revision was
+`6541047` (`v0.8.0-9-g6541047`, 2024-07-04) of
+<https://git.sr.ht/~emersion/soju>; clone it to compare. Keep the translation
+faithful: same structure and logic.  Wire-format quirks of irc.v4 stay (see below).  Clear bugs in soju
 itself are fixed, not copied (decided 2026-11-12), and each fix is recorded
 here under "Bugs in soju that soja fixes" and, in PR-ready form, in
 `SOJU-BUGS.md` (each becomes its own upstream PR once soja is complete).
@@ -277,7 +279,7 @@ A file with bytes that are not UTF-8 is read with them kept as they are.
 
 soju's source only relays these numerics to the client and does not retry, so
 this rule is written explicitly, not assumed. Reference anchors:
-`upstream/soju/upstream.go` (KICK ~1255) and `downstream.go` (JOIN ~1867);
+soju's `upstream.go` (KICK ~1255) and `downstream.go` (JOIN ~1867);
 `rate.go` is the backoff primitive.
 
 ### Registered-client dispatch (`Soja.Core.Downstream_Commands`)

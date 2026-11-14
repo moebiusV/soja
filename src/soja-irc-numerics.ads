@@ -34,11 +34,11 @@ package Soja.Irc.Numerics is
    ERR_SASLTOOLONG       : constant String := "905";
    ERR_SASLABORTED       : constant String := "906";
 
-   --  soju-specific numerics (upstream/soju/xirc/xirc.go), not in irc.v4.
+   --  soju-specific numerics (soju's xirc/xirc.go), not in irc.v4.
    ERR_UNKNOWNERROR      : constant String := "400";
    ERR_INVALIDCAPCMD     : constant String := "410";
 
-   --  soju-specific replies (upstream/soju/xirc/xirc.go), not in irc.v4.
+   --  soju-specific replies (soju's xirc/xirc.go), not in irc.v4.
    RPL_STATSPING       : constant String := "246";
    RPL_LOCALUSERS      : constant String := "265";
    RPL_GLOBALUSERS     : constant String := "266";
