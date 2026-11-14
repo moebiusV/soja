@@ -210,6 +210,7 @@ begin
              and then To_String (R.Net.Kicked.Get ("#a").Reason) = "behave",
              "the kick survives a restart");
       Ok (R, ":irc 001 alice :Welcome");
+      Soja.Core.Upstream_Dispatch.Join_Saved_Channels (R.UC);
       Check (Wait (R.Wire.all, 1) and then R.Wire.Last = "JOIN #b",
              "after a restart only #b is joined: " & R.Wire.Last);
       delay 0.15;
