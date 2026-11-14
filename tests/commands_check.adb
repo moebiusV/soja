@@ -752,6 +752,11 @@ begin
       Ok (DC, "TAGMSG #one");
       Check (Wait (UC_Log, N + 2) and then Last (UC_Log) = "TAGMSG #one",
              "NOTICE and TAGMSG");
+      N := UC_Log.Count;
+      Ok (DC, "REDACT #one msg123 :not wanted");
+      Check (Wait (UC_Log, N + 1)
+             and then Last (UC_Log) = "REDACT #one msg123 :not wanted",
+             "REDACT is relayed with its parameters: " & Last (UC_Log));
       Check (Error_Of (DC, "PRIVMSG carol")(1 .. 3) = "461",
              "PRIVMSG needs text");
       Check (Error_Of (DC, "PRIVMSG")(1 .. 3) = "461", "PRIVMSG needs a target");

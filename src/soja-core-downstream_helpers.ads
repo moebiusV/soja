@@ -12,12 +12,13 @@ package Soja.Core.Downstream_Helpers is
    --  needAllDownstreamCaps: the capabilities that need support from every
    --  upstream to be enabled (each with an empty value).
    Need_All_Downstream_Caps :
-     constant array (1 .. 10) of access constant String :=
+     constant array (1 .. 11) of access constant String :=
      [new String'("account-notify"), new String'("account-tag"),
       new String'("away-notify"), new String'("chghost"),
       new String'("extended-join"), new String'("extended-monitor"),
       new String'("labeled-response"), new String'("message-tags"),
-      new String'("multi-prefix"), new String'("draft/extended-monitor")];
+      new String'("multi-prefix"), new String'("draft/extended-monitor"),
+      new String'("draft/message-redaction")];
 
    --  servicePrefix: BouncerServ's prefix.
    function Service_Prefix return Soja.Irc.Messages.Prefix_Access;

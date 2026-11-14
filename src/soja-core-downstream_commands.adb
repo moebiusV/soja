@@ -1039,8 +1039,9 @@ package body Soja.Core.Downstream_Commands is
       return Irc_Error_Result
    is
       Cmd : constant String := To_String (M.Command);
+      Is_Text : constant Boolean := Cmd in "PRIVMSG" | "NOTICE";
       PR  : constant Params_Result :=
-        Parse_Message_Params (M, (if Cmd /= "TAGMSG" then 2 else 1));
+        Parse_Message_Params (M, (if Is_Text then 2 else 1));
    begin
       if not PR.Ok then
          return Need_More (PR);
@@ -1049,14 +1050,19 @@ package body Soja.Core.Downstream_Commands is
       declare
          Targets : constant String := Param (M, 0);
          Text    : constant String :=
-           (if Cmd /= "TAGMSG" then Param (M, 1) else "");
+           (if Is_Text then Param (M, 1) else "");
          Tags    : constant Tag_Map := Copy_Client_Tags (M.Tags);
          Cfg     : constant Soja.Server.Server_Config_Access :=
            Soja.Server.Config (DC.Srv.all);
 
          function Params_For (Name : String) return String_Vectors.Vector is
+            --  append([]string{name}, msg.Params[1:]...)
+            Result : String_Vectors.Vector := [Name];
          begin
-            return (if Cmd /= "TAGMSG" then [Name, Text] else [Name]);
+            for I in 2 .. Natural (M.Params.Length) loop
+               Result.Append (To_String (M.Params (I)));
+            end loop;
+            return Result;
          end Params_For;
 
          function Now_Tag return String is
@@ -2596,7 +2602,7 @@ package body Soja.Core.Downstream_Commands is
          return Cmd_Who (DC, M);
       elsif Cmd = "WHOIS" then
          return Cmd_Whois (DC, M);
-      elsif Cmd = "PRIVMSG" or else Cmd = "NOTICE" or else Cmd = "TAGMSG" then
+      elsif Cmd in "PRIVMSG" | "NOTICE" | "TAGMSG" | "REDACT" then
          return Cmd_Chat (DC, M);
       elsif Cmd = "INVITE" then
          return Cmd_Invite (DC, M);

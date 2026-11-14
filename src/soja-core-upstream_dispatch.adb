@@ -58,7 +58,8 @@ package body Soja.Core.Upstream_Dispatch is
       new String'("multi-prefix"), new String'("sasl"),
       new String'("server-time"), new String'("setname"),
       new String'("draft/account-registration"),
-      new String'("draft/extended-monitor")];
+      new String'("draft/extended-monitor"),
+      new String'("draft/message-redaction")];
 
    function Is_Permanent_Upstream_Cap (Name : String) return Boolean is
    begin
@@ -2122,10 +2123,12 @@ package body Soja.Core.Upstream_Dispatch is
    is
       use Soja.Database;
       Cmd : constant String := To_String (Msg.Command);
+      --  NOTICE and PRIVMSG have a text; TAGMSG and REDACT do not.
+      Is_Text : constant Boolean := Cmd in "NOTICE" | "PRIVMSG";
       Net : constant Network_Access := UC.Network;
       Bad : Boolean;
       R   : constant Handle_Result :=
-        Check_Params (Msg, (if Cmd /= "TAGMSG" then 2 else 1), Bad);
+        Check_Params (Msg, (if Is_Text then 2 else 1), Bad);
    begin
       if Bad then
          return R;
@@ -2183,7 +2186,7 @@ package body Soja.Core.Upstream_Dispatch is
                Buffer : constant String := To_String (Buffer_Name);
                Ch     : constant Channel_Access := Net.Channels.Get (Buffer);
             begin
-               if Ch /= null and then Cmd /= "TAGMSG" and then not Self then
+               if Ch /= null and then Is_Text and then not Self then
                   if Ch.Detached then
                      Handle_Detached_Message (UC, Ch, Msg);
                   end if;
@@ -2198,7 +2201,9 @@ package body Soja.Core.Upstream_Dispatch is
                   end if;
                end if;
 
-               if not Self and then (Highlight or else Direct) then
+               if not Self and then Is_Text
+                 and then (Highlight or else Direct)
+               then
                   Soja.Core.Push.Broadcast (Net, Msg);
                   declare
                      Valid : Boolean;
@@ -3422,7 +3427,7 @@ package body Soja.Core.Upstream_Dispatch is
       elsif Cmd = ERR_NOMOTD or else Cmd = RPL_ENDOFMOTD then
          return Handle_End_Of_Motd (UC, Msg, Downstream_ID);
 
-      elsif Cmd = "NOTICE" or else Cmd = "PRIVMSG" or else Cmd = "TAGMSG" then
+      elsif Cmd in "NOTICE" | "PRIVMSG" | "TAGMSG" | "REDACT" then
          return Handle_Chat (UC, Msg, Downstream_ID);
 
       elsif Cmd = "BATCH" then

@@ -1046,7 +1046,12 @@ begin
 
       --  TAGMSG needs one parameter; PRIVMSG two.
       Down ("@+typing=active :carol!c@h TAGMSG #t", 1, "TAGMSG");
+      Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "draft/message-redaction", True);
+      Down (":carol!c@h REDACT #t msg123 :spam", 1, "REDACT");
+      Check (DC_Log.Has ("REDACT #t msg123"), "REDACT reaches the client");
+      Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "draft/message-redaction", False);
       Check (H (":carol!c@h TAGMSG").Failed, "TAGMSG without a target");
+      Check (H (":carol!c@h REDACT").Failed, "REDACT without a target");
       Check (H (":carol!c@h PRIVMSG #t").Failed, "PRIVMSG without text");
 
       --  +draft/channel-context files a direct message under the channel.

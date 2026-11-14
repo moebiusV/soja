@@ -945,6 +945,8 @@ package body Soja.Core is
                  and then not Is_Enabled (DC.Caps, "draft/read-marker"))
         or else (Cmd = "READ"
                  and then not Is_Enabled (DC.Caps, "soju.im/read"))
+        or else (Cmd = "REDACT"
+                 and then not Is_Enabled (DC.Caps, "draft/message-redaction"))
       then
          return;
       end if;

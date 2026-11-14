@@ -49,7 +49,7 @@ change can be read.
 | [x] | `draft/ICON` on the bouncer connection (the `icon` directive and the `/icon` route; no ranges) | `89ce2f1` `5b9a73d` | done |
 | [x] | SASL PLAIN impersonation by administrators | `7c24ded` `4764802` | done |
 | [x] | `labeled-response` for clients (a context in the client connection: ACK, the single answer, or a batch; the label goes with relayed commands and pending commands) | `70c4ded` | done |
-| [ ] | `draft/message-redaction` and `REDACT` | `34affa3` | open |
+| [x] | `draft/message-redaction` and `REDACT` | `34affa3` | done |
 | [ ] | `METADATA` / `draft/metadata-2`: pinned, muted, blocked targets | `6f9d7cb` `a30cda7` `527ad97` | open (large) |
 | [ ] | device certificates: client certificates over TLS and PROXY, SASL EXTERNAL for clients, `CLIENTCERT`, `soju.im/client-cert` | `838da54` `8fadc57` `190ac40` | open (large) |
 | [x] | `echo-message` requested upstream whenever offered | `66e0f9a` | done |
