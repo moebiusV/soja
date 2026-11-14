@@ -574,7 +574,15 @@ package body Soja.Database.Sqlite is
    procedure Check (DB : access Sqlite_DB) is
    begin
       if not Success (DB.DB) then
-         raise Database_Error with Last_Error_Message (DB.DB);
+         declare
+            Message : constant String := Last_Error_Message (DB.DB);
+         begin
+            --  Leave no half-done transaction behind: the next operation
+            --  starts clean (a refused row, now that foreign keys are
+            --  enforced, must not spoil the one after it).
+            Rollback (DB.DB);
+            raise Database_Error with Message;
+         end;
       end if;
    end Check;
 
@@ -772,6 +780,10 @@ package body Soja.Database.Sqlite is
       Fetch (C, DB.DB, "PRAGMA journal_mode = WAL");
       Check (DB);
       Execute (DB.DB, "PRAGMA synchronous = NORMAL");
+      Check (DB);
+      --  Foreign keys are enforced (as soju has them); deletes go from the
+      --  rows that refer to the rows they refer to.
+      Execute (DB.DB, "PRAGMA foreign_keys = ON");
       Check (DB);
    end Set_Pragmas;
 
@@ -1001,6 +1013,7 @@ package body Soja.Database.Sqlite is
         "KickRecord JOIN Network ON KickRecord.network = Network.id WHERE " &
         "Network.user = ?1)");
       Del ("DELETE FROM WebPushSubscription WHERE user = ?1");
+      Del ("DELETE FROM DeviceCertificate WHERE user = ?1");
       Del ("DELETE FROM Channel WHERE id IN (SELECT Channel.id FROM Channel " &
         "JOIN Network ON Channel.network = Network.id WHERE Network.user = " &
         "?1)");

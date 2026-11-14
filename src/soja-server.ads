@@ -56,6 +56,11 @@ package Soja.Server is
       Upstream_User_IPs : Soja.Config.IPNet_Vectors.Vector;
       Disable_Inactive_Users_Delay : Duration := 0.0;
       Message_Expiry               : Duration := 0.0;
+      --  The icon, as a URL (https) or as a file served at /icon.
+      Icon_URL          : Ada.Strings.Unbounded.Unbounded_String;
+      Icon_Path         : Ada.Strings.Unbounded.Unbounded_String;
+      Accept_Proxy_Unix : Boolean := False;
+      Client_Cert_Auth  : Boolean := False;
       Enable_Users_On_Auth : Boolean := False;
       Auth_Driver       : Ada.Strings.Unbounded.Unbounded_String :=
         Ada.Strings.Unbounded.To_Unbounded_String ("internal");

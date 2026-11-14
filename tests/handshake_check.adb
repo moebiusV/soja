@@ -566,6 +566,7 @@ begin
    Cfg := new Soja.Server.Server_Config;
    Cfg.Has_File_Uploader := True;
    Cfg.HTTP_Ingress := To_Unbounded_String ("https://bnc.example");
+   Cfg.Icon_Path := To_Unbounded_String ("/tmp/icon.png");
    Srv.Set_Config (Cfg);
    U.User_Record.Admin := True;
    declare
@@ -583,6 +584,24 @@ begin
       Check (Out_Log.Has (" 422 alice :No MOTD"), "no MOTD");
       Check (Out_Log.Has ("soju.im/FILEHOST=https://bnc.example/uploads"),
              "file host");
+      Check (Out_Log.Has ("draft/ICON=https://bnc.example/icon"),
+             "an icon file is served at /icon");
+   end;
+   Cfg.Icon_Path := Null_Unbounded_String;
+   Cfg.Icon_URL := To_Unbounded_String ("https://cdn.example/i.png");
+   declare
+      Out_Log : Recorder_Access;
+      DC : constant Downstream_Conn_Access := New_Client
+        (Script ("NICK ali"), 24, Out_Log);
+      Res : Irc_Error_Result;
+   begin
+      DC.Registered := True;
+      DC.Registration.Auth_Username := To_Unbounded_String ("alice");
+      Res := HS.Welcome (DC, U);
+      Check (not Res.Failed, "welcome (icon URL)");
+      Settle;
+      Check (Out_Log.Has ("draft/ICON=https://cdn.example/i.png"),
+             "an icon URL is told as it is");
    end;
    U.User_Record.Admin := False;
    Srv.Set_Config (new Soja.Server.Server_Config);

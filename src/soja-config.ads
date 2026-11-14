@@ -85,6 +85,9 @@ package Soja.Config is
       Disable_Inactive_Users_Delay : Duration;
       Message_Expiry               : Duration;
       Enable_Users_On_Auth : Boolean;
+      Icon                 : Unbounded_String;   --  a URL or a file path
+      Accept_Proxy_Unix    : Boolean;
+      Client_Cert_Auth     : Boolean;
    end record;
 
    --  The defaults, mirroring config.go's Defaults(): hostname from the OS,

@@ -567,6 +567,33 @@ begin
       DB := Soja.Database.Sqlite.Open_Sqlite_DB (Path);
       Close (DB.all);
       Check_Current ("upgraded");
+
+      --  Foreign keys are enforced, and deleting a user takes the device
+      --  certificates with it.
+      DB := Soja.Database.Sqlite.Open_Sqlite_DB (Path);
+      declare
+         U : User := New_User ("cert-owner");
+         N : Network := New_Network ("irc.example");
+      begin
+         begin
+            Store_Network (DB.all, 987_654, N);
+            raise Program_Error with "a network of an unknown user was stored";
+         exception
+            when Database_Error => null;
+         end;
+         Store_User (DB.all, U);
+         Close (DB.all);
+         Exec ("INSERT INTO DeviceCertificate (user, label, fingerprint, "
+               & "last_used, last_ip) VALUES ("
+               & Long_Long_Integer'Image (U.ID) & ", 'phone', x'0102', "
+               & "'2026-01-01T00:00:00.000Z', '')");
+         Expect ("SELECT count(*) FROM DeviceCertificate", "1", "inserted");
+         DB := Soja.Database.Sqlite.Open_Sqlite_DB (Path);
+         Delete_User (DB.all, U.ID);
+         Close (DB.all);
+         Expect ("SELECT count(*) FROM DeviceCertificate", "0",
+                 "device certificates go with their user");
+      end;
       Ada.Directories.Delete_File (Path);
    end;
 

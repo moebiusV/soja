@@ -3,6 +3,7 @@ pragma Ada_2022;
 
 with Ada.Command_Line;
 with Ada.Environment_Variables;
+with Ada.Directories;
 with Ada.Exceptions;
 with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
@@ -194,7 +195,30 @@ procedure Soja_Main is
          Cfg.Max_User_Networks := Raw.Max_User_Networks;
          Cfg.Upstream_User_IPs := Raw.Upstream_User_IPs;
          Cfg.Disable_Inactive_Users_Delay := Raw.Disable_Inactive_Users_Delay;
-         Cfg.Message_Expiry := Raw.Message_Expiry;
+            Cfg.Message_Expiry := Raw.Message_Expiry;
+         Cfg.Accept_Proxy_Unix := Raw.Accept_Proxy_Unix;
+         Cfg.Client_Cert_Auth := Raw.Client_Cert_Auth;
+         --  The icon: an https URL (told to clients as it is), or a file
+         --  (served at /icon).
+         declare
+            Icon : constant String := To_String (Raw.Icon);
+         begin
+            if Ada.Strings.Fixed.Index (Icon, "://") > 0 then
+               if Icon'Length < 8 or else Icon (Icon'First .. Icon'First + 7)
+                                          /= "https://"
+               then
+                  Fatal ("unsupported icon URL scheme: "
+                         & Icon (Icon'First .. Ada.Strings.Fixed.Index
+                                   (Icon, "://") - 1));
+               end if;
+               Cfg.Icon_URL := Raw.Icon;
+            elsif Icon /= "" then
+               if not Ada.Directories.Exists (Icon) then
+                  Fatal ("failed to load icon: " & Icon & " does not exist");
+               end if;
+               Cfg.Icon_Path := Raw.Icon;
+            end if;
+         end;
          Cfg.Enable_Users_On_Auth := Raw.Enable_Users_On_Auth;
          Cfg.Has_File_Uploader := Raw.File_Upload /= null;
          if Raw.File_Upload /= null then
@@ -583,10 +607,10 @@ begin
       end;
 
       --  (A test hook, see Soja.Webpush: off unless asked for.)
-   Soja.Webpush.Allow_Internal_Endpoints :=
-     Ada.Environment_Variables.Exists ("SOJA_WEBPUSH_TEST");
+      Soja.Webpush.Allow_Internal_Endpoints :=
+        Ada.Environment_Variables.Exists ("SOJA_WEBPUSH_TEST");
 
-   Srv.Initialize (Log'Unchecked_Access);
+      Srv.Initialize (Log'Unchecked_Access);
       Srv.Set_DB (DB);
       begin
          Soja.Core.Push.Load_Config (Srv);

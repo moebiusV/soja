@@ -16,13 +16,13 @@ change can be read.
 |---|---|---|---|
 | [x] | SQLite schema version 31: `User.max_networks`; `MessageTarget` `pinned`, `muted`, `blocked`; foreign-key indexes; `DeviceCertificate`; fresh schema and migrations 25-30 | `a30cda7` `c13c50c` `527ad97` `64fdd53` `838da54` `b978255` | done |
 | [x] | WAL and `synchronous = NORMAL` | `36cd653` | done |
-| [ ] | foreign keys on (`PRAGMA foreign_keys`), with the delete order audited | `2a7a469` | open |
-| [ ] | `DeleteUser` removes the user's device certificates | | open |
+| [x] | foreign keys on (`PRAGMA foreign_keys`); a failed statement is rolled back | `2a7a469` | done |
+| [x] | `DeleteUser` removes the user's device certificates | | done |
 | [x] | default `message-store` is `db` | `4040927` | done |
 | [x] | drivers that take no source refuse one (`message-store db x`, `auth internal x`) | `6d79a8f` | done |
 | [ ] | several `auth` lines; `auth http <url>` | `f13b47e` `04fdb35` | open |
 | [x] | `message-expiry` directive | `2155529` | done |
-| [ ] | `icon`, `accept-proxy-unix`, `client-cert-auth` directives | `89ce2f1` `ff99b6a` `19e86d2` | open |
+| [x] | `icon`, `accept-proxy-unix`, `client-cert-auth` directives (read; `client-cert-auth` acts with the device certificates) | `89ce2f1` `ff99b6a` `19e86d2` | done |
 | [ ] | `file-upload http <url>` | `c4dcf1d` | open |
 | [ ] | `listen` schemes `irc://`, `ws://`, `http://` (localhost), `http+insecure+prometheus://`, `irc+unix://host/path` | `ec9be26` `645c696` `a7e2be3` | open |
 | [x] | PAM service name is `soju` (the `pam.d` file is the administrator's) | `fa03c22` | done |
@@ -46,7 +46,7 @@ change can be read.
 | [x] | NickServ `SET` only saves `SET PASSWORD` | `de8690c` | done |
 | [x] | connect commands after registration, 3 s before joining | `cef94ff` `5e89246` `0fee055` | done |
 | [x] | `draft/extended-isupport` and the `ISUPPORT` command; tokens sorted; changes sent as a difference; values decoded; `soju.im/SAFERATE` (also stops soja's own rate limit upstream), `draft/ACCOUNTREQUIRED`, `ACCOUNTEXTBAN`, `LINELEN` | `6d22e65` `1459547` `6e4fb18` `8bff925` | done |
-| [ ] | `draft/ICON` on the bouncer connection (the `icon` directive and the `/icon` route) | `89ce2f1` `5b9a73d` | open |
+| [x] | `draft/ICON` on the bouncer connection (the `icon` directive and the `/icon` route; no ranges) | `89ce2f1` `5b9a73d` | done |
 | [x] | SASL PLAIN impersonation by administrators | `7c24ded` `4764802` | done |
 | [ ] | `labeled-response` for clients | `70c4ded` | open (large) |
 | [ ] | `draft/message-redaction` and `REDACT` | `34affa3` | open |

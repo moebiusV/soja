@@ -149,6 +149,11 @@ package body Soja.Core.Upstream_Dispatch is
       if DC.Network = null and then Length (Cfg.Title) > 0 then
          Put ("NETWORK", To_String (Cfg.Title));
       end if;
+      if DC.Network = null and then Length (Cfg.Icon_URL) > 0 then
+         Put ("draft/ICON", To_String (Cfg.Icon_URL));
+      elsif DC.Network = null and then Length (Cfg.Icon_Path) > 0 then
+         Put ("draft/ICON", To_String (Cfg.HTTP_Ingress) & "/icon");
+      end if;
       if DC.User /= null then
          if DC.Network = null then
             Put ("BOT", "B");

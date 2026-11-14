@@ -3,6 +3,7 @@ pragma Ada_2022;
 with Ada.Characters.Handling;
 with Ada.Exceptions;
 with Ada.Streams;
+with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 
@@ -17,6 +18,7 @@ with Soja.Glob;
 with Soja.Http;
 with Soja.Logging;
 with Soja.Metrics;
+with Soja.Mime;
 with Soja.Proxy_Protocol;
 
 package body Soja.Web is
@@ -118,6 +120,66 @@ package body Soja.Web is
                                       Subprotocol)
               then Subprotocol else "");
    end Chosen_Subprotocol;
+
+   --  The icon (the `icon` directive, as a file): http.ServeFile of it.
+   --  (No ranges or conditional requests: an icon is small.)
+   procedure Serve_Icon
+     (S      : in out Soja.Server.Server;
+      Stream : not null Soja.Byte_Stream.Stream_Access)
+   is
+      Path : constant String :=
+        To_String (Soja.Server.Config (S).Icon_Path);
+      File : Ada.Streams.Stream_IO.File_Type;
+   begin
+      if Path = "" then
+         Soja.Http.Write_Error (Stream.all, 404, "404 page not found");
+         return;
+      end if;
+      Ada.Streams.Stream_IO.Open
+        (File, Ada.Streams.Stream_IO.In_File, Path);
+      declare
+         Size : constant Natural :=
+           Natural (Ada.Streams.Stream_IO.Size (File));
+         Data : Ada.Streams.Stream_Element_Array
+           (1 .. Ada.Streams.Stream_Element_Offset (Size));
+         Last : Ada.Streams.Stream_Element_Offset;
+         Text : String (1 .. Size);
+         Dot  : Natural := 0;
+      begin
+         Ada.Streams.Stream_IO.Read (File, Data, Last);
+         Ada.Streams.Stream_IO.Close (File);
+         for I in Text'Range loop
+            Text (I) := Character'Val
+              (Data (Ada.Streams.Stream_Element_Offset (I)));
+         end loop;
+         for I in reverse Path'Range loop
+            if Path (I) = '.' then
+               Dot := I;
+               exit;
+            elsif Path (I) = '/' then
+               exit;
+            end if;
+         end loop;
+         declare
+            Kind : constant String :=
+              (if Dot > 0 then Soja.Mime.Type_By_Extension
+                                 (Path (Dot .. Path'Last)) else "");
+            Type_Of : constant String :=
+              (if Kind /= "" then Kind
+               else Soja.Mime.Detect_Content_Type (Text));
+         begin
+            Soja.Http.Write_Response
+              (Stream.all, 200,
+               "Content-Type: " & Type_Of & CRLF
+               & "Accept-Ranges: bytes" & CRLF,
+               Text);
+         end;
+      end;
+   exception
+      when Ada.Streams.Stream_IO.Name_Error
+         | Ada.Streams.Stream_IO.Use_Error =>
+         Soja.Http.Write_Error (Stream.all, 404, "404 page not found");
+   end Serve_Icon;
 
    --  websocket.Accept, then Server.Handle.  False when the request was
    --  answered with an error (the stream is still ours to release).
@@ -294,6 +356,8 @@ package body Soja.Web is
                   Soja.Fileupload.Serve (S, Stream, Req, Common);
                end if;
             end;
+         elsif Mux and then Path = "/icon" then
+            Serve_Icon (S, Stream);
          elsif Mux then
             Soja.Http.Write_Error (Stream.all, 404, "404 page not found");
          else

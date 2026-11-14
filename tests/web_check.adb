@@ -6,6 +6,8 @@ with Ada.IO_Exceptions;
 with Ada.Streams;           use Ada.Streams;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
+with Ada.Streams.Stream_IO;
+with Ada.Directories;
 with Ada.Text_IO;
 with GNAT.OS_Lib;
 
@@ -737,6 +739,28 @@ begin
          Check (Starts (Status (F), "HTTP/1.1 404")
                 and then not Contains (To_String (F.Sent), "Content-Security"),
                 "http: /uploadsx is not /uploads");
+
+         --  /icon: 404 without an icon file, the file with one.
+         F := Run (Upgrade_Request (Path => "/icon"), Http => True);
+         Check (Starts (Status (F), "HTTP/1.1 404"), "http: /icon, no icon");
+         declare
+            Icon : constant String := "/tmp/soja_icon_check.png";
+            Out_F : Ada.Streams.Stream_IO.File_Type;
+         begin
+            Ada.Streams.Stream_IO.Create (Out_F, Ada.Streams.Stream_IO.Out_File,
+                                          Icon);
+            Ada.Streams.Stream_IO.Write
+              (Out_F, [16#89#, 16#50#, 16#4E#, 16#47#, 16#0D#, 16#0A#]);
+            Ada.Streams.Stream_IO.Close (Out_F);
+            Cfg.Icon_Path := To_Unbounded_String (Icon);
+            F := Run (Upgrade_Request (Path => "/icon"), Http => True);
+            Check (Starts (Status (F), "HTTP/1.1 200")
+                   and then Contains (To_String (F.Sent),
+                                      "Content-Type: image/png"),
+                   "http: /icon, the file: " & Status (F));
+            Cfg.Icon_Path := Null_Unbounded_String;
+            Ada.Directories.Delete_File (Icon);
+         end;
       end;
    end;
 

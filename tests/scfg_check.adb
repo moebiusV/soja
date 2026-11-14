@@ -182,6 +182,17 @@ begin
       Check (Fails ("auth pam x"), "pam takes no source");
       Check (Fails ("auth oauth2"), "oauth2 needs a source");
 
+      --  icon, accept-proxy-unix, client-cert-auth.
+      Check (To_String (Soja.Config.Parse ("icon https://x.example/i.png")
+                          .Icon) = "https://x.example/i.png"
+             and then Soja.Config.Parse ("accept-proxy-unix true")
+                        .Accept_Proxy_Unix
+             and then Soja.Config.Parse ("client-cert-auth 1").Client_Cert_Auth
+             and then not Soja.Config.Parse ("title x").Client_Cert_Auth
+             and then not Soja.Config.Parse ("title x").Accept_Proxy_Unix,
+             "icon, accept-proxy-unix and client-cert-auth");
+      Check (Fails ("accept-proxy-unix maybe"), "a bad boolean");
+
       --  message-expiry: days, positive; absent means keep for ever.
       Check (Soja.Config.Parse ("message-expiry 30d").Message_Expiry
              = 30.0 * 86_400.0, "message-expiry 30d");

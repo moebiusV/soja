@@ -377,6 +377,9 @@ package body Soja.Config is
          Upstream_User_IPs => IPNet_Vectors.Empty_Vector,
          Disable_Inactive_Users_Delay => 0.0,
          Message_Expiry => 0.0,
+         Icon => Null_Unbounded_String,
+         Accept_Proxy_Unix => False,
+         Client_Cert_Auth => False,
          Enable_Users_On_Auth => False);
    end Defaults;
 
@@ -436,6 +439,18 @@ package body Soja.Config is
             elsif Name = "title" then
                Want (1);
                Srv.Title := P (1);
+
+            elsif Name = "icon" then
+               Want (1);
+               Srv.Icon := P (1);
+
+            elsif Name = "accept-proxy-unix" then
+               Want (1);
+               Srv.Accept_Proxy_Unix := Parse_Bool (To_String (P (1)));
+
+            elsif Name = "client-cert-auth" then
+               Want (1);
+               Srv.Client_Cert_Auth := Parse_Bool (To_String (P (1)));
 
             elsif Name = "motd" then
                Want (1);
