@@ -127,3 +127,11 @@ To go back to a password login, `sasl set-plain <nick> <password>` or
 [scdoc]: https://git.sr.ht/~sircmpwn/scdoc
 [ada-on-alpine]: https://github.com/moebiusV/ada-on-alpine
 [OFTC]: https://www.oftc.net
+
+---
+
+See also: [README](../README.md) (all documents), [getting started](getting-started.md),
+[differences from soju](differences.md), the manual pages
+[`soja.1.scd`](soja.1.scd), [`sojadb.1.scd`](sojadb.1.scd) and
+[`sojactl.1.scd`](sojactl.1.scd), [PORTING.md](../PORTING.md),
+[SOJU-BUGS.md](../SOJU-BUGS.md).

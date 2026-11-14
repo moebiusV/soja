@@ -39,17 +39,30 @@ soja
 
 [docs/getting-started.md](docs/getting-started.md) is a short guide, ending
 with an example that connects to OFTC, registers a nick and logs in with a
-certificate. Reference:
+certificate. The rest is listed under [Documentation](#documentation).
 
-- [docs/soja.1.scd](docs/soja.1.scd): every configuration directive and every
-  `BouncerServ` command. [docs/sojadb.1.scd](docs/sojadb.1.scd) and
-  [docs/sojactl.1.scd](docs/sojactl.1.scd) are the other two programs. (They are
-  [scdoc](https://git.sr.ht/~sircmpwn/scdoc) sources: `scdoc < soja.1.scd | man -l -`.)
-- [docs/differences.md](docs/differences.md): where soja differs from soju.
-- [PORTING.md](PORTING.md): how the translation is organised, and the
-  deviations in detail. [SOJU-BUGS.md](SOJU-BUGS.md): bugs found in soju while
-  translating, fixed here and written up to be sent to soju.
-- [STYLE.md](STYLE.md): the Ada style the code follows.
+## Documentation
+
+- [docs/getting-started.md](docs/getting-started.md): setting up the server and
+  the clients, and the OFTC example
+- [docs/soja.1.scd](docs/soja.1.scd), [docs/sojadb.1.scd](docs/sojadb.1.scd),
+  [docs/sojactl.1.scd](docs/sojactl.1.scd): the manual pages of `soja`
+  (every configuration directive and every `BouncerServ` command), of `sojadb`
+  and of `sojactl`, as [scdoc](https://git.sr.ht/~sircmpwn/scdoc) sources
+  (`scdoc < docs/soja.1.scd | man -l -`)
+- [docs/differences.md](docs/differences.md): where soja differs from soju
+- [PORTING.md](PORTING.md): how the translation is organised: the component
+  map, the packages used, the decisions and the deviations in detail
+- [SOJU-BUGS.md](SOJU-BUGS.md): the bugs found in soju while translating, fixed
+  here and written up to be sent to soju
+- [STYLE.md](STYLE.md): the Ada style the code follows (a pointer to the shared
+  guide)
+- [grammars/](grammars/): the hbnf grammars all parsing is done with (IRC
+  messages, the configuration file, BouncerServ command lines, JSON, URLs,
+  HTTP heads, ident, PROXY, ZNC logs, SASL OAUTHBEARER, media types, byte
+  ranges); `grammars/generate.sh` regenerates the parsers
+- [tests/](tests/): the unit checks (`*_check.gpr`), the end-to-end scenario
+  (`e2e.sh`, `e2e_scenario.py`, `e2e_client.py`) and the IRC parser oracle
 
 ## Build
 
@@ -75,3 +88,45 @@ been used for long against live networks; reports are welcome.
 ## License
 
 AGPL-3.0, inherited from soju (soja is a translation of soju). See `LICENSE`.
+
+## References
+
+**The program soja translates**
+
+1. soju, the IRC bouncer: <https://soju.im>; source:
+   <https://git.sr.ht/~emersion/soju> (reference revision `6541047`, see
+   [PORTING.md](PORTING.md)); its extension specifications are in
+   `doc/ext/` of that repository.
+2. IRCv3 specifications: <https://ircv3.net/irc/>.
+
+**Standards**
+
+3. RFC 2812, *Internet Relay Chat: Client Protocol*.
+4. RFC 4616, *The PLAIN Simple Authentication and Security Layer (SASL)
+   Mechanism*; RFC 7628, *A Set of Simple Authentication and Security Layer
+   (SASL) Mechanisms for OAuth*.
+5. RFC 8414, *OAuth 2.0 Authorization Server Metadata*; RFC 7662, *OAuth 2.0
+   Token Introspection*.
+6. RFC 8030, *Generic Event Delivery Using HTTP Push*; RFC 8188, *Encrypted
+   Content-Encoding for HTTP*; RFC 8291, *Message Encryption for Web Push*;
+   RFC 8292, *Voluntary Application Server Identification (VAPID) for Web
+   Push*.
+7. RFC 6455, *The WebSocket Protocol*; RFC 7239, *Forwarded HTTP Extension*;
+   RFC 1413, *Identification Protocol*; the HAProxy *PROXY protocol*
+   specification, <https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt>.
+8. RFC 8259, *The JavaScript Object Notation (JSON) Data Interchange Format*;
+   RFC 4648, *The Base16, Base32, and Base64 Data Encodings*.
+
+**What soja is built from**
+
+9. [ada-on-alpine](https://github.com/moebiusV/ada-on-alpine): the packages
+   (and the aport of soja).
+10. [hbnf](https://github.com/moebiusV/hbnf): the grammar compiler.
+11. [AWS](https://github.com/AdaCore/aws) (sockets, TLS, HTTP) and
+    [GNATCOLL](https://github.com/AdaCore/gnatcoll-db) (SQLite).
+12. [bracke/cryptolib](https://github.com/bracke/cryptolib): bcrypt, hashes,
+    X.509, ECDH, ECDSA, AES-GCM.
+13. [ngircd](https://ngircd.barton.de), the server the end-to-end tests run
+    against.
+14. [OFTC's CertFP page](https://www.oftc.net/NickServ/CertFP/), which the
+    getting-started example follows.

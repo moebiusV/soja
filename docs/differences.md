@@ -49,3 +49,11 @@ soja has not yet been used long-term against live networks; it has been tested
 against a local ngircd (registration, channels, replay, history, read markers,
 SASL, TLS, file upload, WebSockets, Web Push, OAuth 2, PAM) and against fake
 servers for the rest. Please report what you find.
+
+---
+
+See also: [README](../README.md) (all documents), [getting started](getting-started.md),
+[differences from soju](differences.md), the manual pages
+[`soja.1.scd`](soja.1.scd), [`sojadb.1.scd`](sojadb.1.scd) and
+[`sojactl.1.scd`](sojactl.1.scd), [PORTING.md](../PORTING.md),
+[SOJU-BUGS.md](../SOJU-BUGS.md).
