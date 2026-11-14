@@ -1,8 +1,11 @@
 pragma Ada_2022;
 
 with Ada.Calendar;
+with Ada.Characters.Handling;
 with Ada.Streams; use Ada.Streams;
 with Ada.Strings.Fixed;
+
+with GNAT.Sockets;
 
 with AWS.Client;
 with AWS.Headers;
@@ -226,6 +229,134 @@ package body Soja.Webpush is
    end VAPID_Authorization;
 
    ----------------------------------------------------------------------
+   --  Endpoints
+   ----------------------------------------------------------------------
+
+   function Endpoint_Is_Acceptable (Endpoint : String) return Boolean is
+      Parts : Soja.Url.Parts;
+      Ok    : Boolean;
+   begin
+      Soja.Url.Parse (Endpoint, Parts, Ok);
+      return Ok and then (To_String (Parts.Scheme) = "https"
+                          or else Allow_Internal_Endpoints);
+   end Endpoint_Is_Acceptable;
+
+   function Is_Internal_Address (Address : String) return Boolean is
+      --  The four octets of a dotted address, or False.
+      procedure Split4 (Text : String; A, B, C, D : out Natural;
+                        Ok : out Boolean)
+      is
+         Values : array (1 .. 4) of Natural := [others => 0];
+         N      : Natural := 1;
+         Digits_Seen : Natural := 0;
+      begin
+         Ok := False;
+         A := 0; B := 0; C := 0; D := 0;
+         for Ch of Text loop
+            if Ch in '0' .. '9' then
+               Values (N) := Values (N) * 10
+                 + (Character'Pos (Ch) - Character'Pos ('0'));
+               Digits_Seen := Digits_Seen + 1;
+               if Values (N) > 255 then
+                  return;
+               end if;
+            elsif Ch = '.' and then Digits_Seen > 0 and then N < 4 then
+               N := N + 1;
+               Digits_Seen := 0;
+            else
+               return;
+            end if;
+         end loop;
+         if N = 4 and then Digits_Seen > 0 then
+            A := Values (1); B := Values (2); C := Values (3); D := Values (4);
+            Ok := True;
+         end if;
+      end Split4;
+
+      function Internal_V4 (A, B : Natural) return Boolean is
+        (A = 127 or else A = 0 or else A in 224 .. 239
+         or else A = 10 or else (A = 172 and then B in 16 .. 31)
+         or else (A = 192 and then B = 168)
+         or else (A = 169 and then B = 254));
+
+      A, B, C, D : Natural;
+      Ok         : Boolean;
+      Lower      : constant String :=
+        Ada.Characters.Handling.To_Lower (Address);
+   begin
+      Split4 (Address, A, B, C, D, Ok);
+      if Ok then
+         return Internal_V4 (A, B);
+      end if;
+
+      --  IPv6.  ::ffff:a.b.c.d is the IPv4 address a.b.c.d.
+      if Lower'Length > 7 and then Lower (Lower'First .. Lower'First + 6)
+                                     = "::ffff:"
+      then
+         Split4 (Lower (Lower'First + 7 .. Lower'Last), A, B, C, D, Ok);
+         if Ok then
+            return Internal_V4 (A, B);
+         end if;
+      end if;
+      if Lower = "::" or else Lower = "::1" then
+         return True;
+      end if;
+      if Lower'Length >= 2 then
+         declare
+            First : constant String := Lower (Lower'First .. Lower'First + 1);
+         begin
+            --  fc00::/7 (private), fe80::/10 (link-local), ff00::/8
+            --  (multicast).
+            if First in "fc" | "fd" | "ff" then
+               return True;
+            end if;
+         end;
+      end if;
+      if Lower'Length >= 3 and then Lower (Lower'First .. Lower'First + 1)
+                                       = "fe"
+        and then Lower (Lower'First + 2) in '8' | '9' | 'a' | 'b'
+      then
+         return True;
+      end if;
+      return False;
+   end Is_Internal_Address;
+
+   --  A push goes to external addresses only: otherwise a client could make
+   --  the bouncer send requests to the machine's own services (0b76d2d,
+   --  a5d11bd).  The name is looked up here, and every address it has must be
+   --  external; the connection then looks the name up again, which leaves the
+   --  window of a name that changes in between (soju checks the address it
+   --  connects to).
+   procedure Require_External (Endpoint : String) is
+      Parts : Soja.Url.Parts;
+      Ok    : Boolean;
+   begin
+      if Allow_Internal_Endpoints then
+         return;
+      end if;
+      Soja.Url.Parse (Endpoint, Parts, Ok);
+      if not Ok or else To_String (Parts.Scheme) /= "https" then
+         raise Webpush_Error with "the endpoint must be an https URL";
+      end if;
+      declare
+         Entry_Of : constant GNAT.Sockets.Host_Entry_Type :=
+           GNAT.Sockets.Get_Host_By_Name (To_String (Parts.Host));
+      begin
+         for I in 1 .. GNAT.Sockets.Addresses_Length (Entry_Of) loop
+            if Is_Internal_Address
+                 (GNAT.Sockets.Image (GNAT.Sockets.Addresses (Entry_Of, I)))
+            then
+               raise Webpush_Error with
+                 "refusing to send to an internal IP address";
+            end if;
+         end loop;
+      exception
+         when GNAT.Sockets.Host_Error =>
+            raise Webpush_Error with "could not resolve the endpoint's host";
+      end;
+   end Require_External;
+
+   ----------------------------------------------------------------------
    --  SendNotification
    ----------------------------------------------------------------------
 
@@ -239,7 +370,7 @@ package body Soja.Webpush is
       Priority    : Urgency;
       Record_Size : Positive := 2048;
       TTL         : Natural := 604_800;
-      Subscriber  : String := "webpush@soju.im") return Natural
+      Subscriber  : String := "https://soju.im") return Natural
    is
       Rng      : CryptoLib.Random.Random_Source;
       Salt     : Stream_Element_Array (1 .. 16);
@@ -257,6 +388,7 @@ package body Soja.Webpush is
       if not Auth_Ok or else not Key_Ok then
          raise Webpush_Error with "invalid subscription keys";
       end if;
+      Require_External (Endpoint);
       CryptoLib.Random.Initialize_Production (Rng);
       Check (CryptoLib.Random.Fill (Rng, Salt), "random salt");
       Check (CryptoLib.ECDH.Generate_Keypair

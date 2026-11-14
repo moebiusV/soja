@@ -39,8 +39,11 @@ def wait_port(port, timeout=15):
 def start_soja():
     global soja_proc
     out = open(os.path.join(DIR, "soja.log"), "ab")
+    # The Web Push test pushes to a server on localhost, which soja refuses
+    # unless this test hook is set (a push goes to external https only).
     soja_proc = subprocess.Popen([SOJA, "-config", CONF], stdout=out,
-                                 stderr=out)
+                                 stderr=out,
+                                 env=dict(os.environ, SOJA_WEBPUSH_TEST="1"))
     wait_port(BOUNCER)
 
 
@@ -931,7 +934,7 @@ def webpush_section(bob):
                    ec.ECDSA(hashes.SHA256()))
         claims = unb64(m.group(2)).decode()
         if '"aud":"http://127.0.0.1:9202"' not in claims or \
-                "mailto:webpush@soju.im" not in claims:
+                '"sub":"https://soju.im"' not in claims:
             raise Fail(f"bad JWT claims: {claims}")
 
         # a highlight is pushed, with a high urgency

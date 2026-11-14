@@ -2,6 +2,7 @@
 pragma Ada_2022;
 
 with Ada.Command_Line;
+with Ada.Environment_Variables;
 with Ada.Exceptions;
 with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
@@ -16,6 +17,7 @@ with Soja.Auth.OAuth2;
 with Soja.Auth.Pam;
 with Soja.Bouncer;
 with Soja.Core.Push;
+with Soja.Webpush;
 with Soja.Config;
 with Soja.Database;
 with Soja.Database.Sqlite;
@@ -580,7 +582,11 @@ begin
          end;
       end;
 
-      Srv.Initialize (Log'Unchecked_Access);
+      --  (A test hook, see Soja.Webpush: off unless asked for.)
+   Soja.Webpush.Allow_Internal_Endpoints :=
+     Ada.Environment_Variables.Exists ("SOJA_WEBPUSH_TEST");
+
+   Srv.Initialize (Log'Unchecked_Access);
       Srv.Set_DB (DB);
       begin
          Soja.Core.Push.Load_Config (Srv);

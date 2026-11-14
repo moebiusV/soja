@@ -21,7 +21,8 @@ change can be read.
 | [x] | default `message-store` is `db` | `4040927` | done |
 | [x] | drivers that take no source refuse one (`message-store db x`, `auth internal x`) | `6d79a8f` | done |
 | [ ] | several `auth` lines; `auth http <url>` | `f13b47e` `04fdb35` | open |
-| [ ] | `icon`, `accept-proxy-unix`, `message-expiry`, `client-cert-auth` directives | `89ce2f1` `ff99b6a` `2155529` `19e86d2` | open |
+| [x] | `message-expiry` directive | `2155529` | done |
+| [ ] | `icon`, `accept-proxy-unix`, `client-cert-auth` directives | `89ce2f1` `ff99b6a` `19e86d2` | open |
 | [ ] | `file-upload http <url>` | `c4dcf1d` | open |
 | [ ] | `listen` schemes `irc://`, `ws://`, `http://` (localhost), `http+insecure+prometheus://`, `irc+unix://host/path` | `ec9be26` `645c696` `a7e2be3` | open |
 | [x] | PAM service name is `soju` (the `pam.d` file is the administrator's) | `fa03c22` | done |
@@ -40,8 +41,9 @@ change can be read.
 | [x] | the admin socket refuses `CAP`, `NICK`, `USER`, `PASS` | `a25b692` | done |
 | [x] | `no-implicit-names` capability (unprefixed) | `c333c3b` | done |
 | [ ] | `CHATHISTORY AROUND` | `dd09fc4` | open |
-| [ ] | Web Push: https endpoints only, no private addresses, VAPID subscriber `https://soju.im`; deferred, muted and blocked rules | `0b76d2d` `a5d11bd` `a29c036` `2d02be7` `d9aebc8` `8c3ef5b` | open |
-| [ ] | NickServ `SET` only saves `SET PASSWORD` | `de8690c` | open |
+| [x] | Web Push: https endpoints only, no internal addresses, VAPID subscriber `https://soju.im` | `0b76d2d` `a5d11bd` `a29c036` `2d02be7` | done (the name is looked up before the push and again by the connection; soju checks the address it connects to) |
+| [ ] | Web Push: deferred pushes and the muted and blocked rules | `d9aebc8` `8c3ef5b` | open (with METADATA) |
+| [x] | NickServ `SET` only saves `SET PASSWORD` | `de8690c` | done |
 | [ ] | connect commands after registration, 3 s before joining | `cef94ff` `5e89246` `0fee055` | open |
 | [ ] | `draft/extended-isupport` and the `ISUPPORT` command; tokens sorted; `soju.im/SAFERATE`, `draft/ACCOUNTREQUIRED`, `ACCOUNTEXTBAN`, `draft/ICON`, `LINELEN` | `6d22e65` `1459547` `6e4fb18` `8bff925` | open |
 | [ ] | SASL PLAIN impersonation by administrators | `7c24ded` `4764802` | open |
@@ -59,8 +61,8 @@ change can be read.
 | [x] | `channel create`; `server debug` | `8c2bc64` `9bc8f67` | done |
 | [x] | help texts: `-h` answer, fixed choices without angle brackets, `irc+unix` only, "reserved" wording | `1e8c492` `b62df53` `69d529e` | done |
 | [x] | non-administrators cannot add `unix://` networks | `e75b8c7` | done |
-| [ ] | `message-expiry` for the db and fs stores | `2155529` | open |
-| [ ] | search text without formatting codes (`stripANSI`) | `2489318` | open |
+| [x] | `message-expiry` for the db and fs stores | `2155529` | done |
+| [x] | search text without formatting codes (`stripANSI`) | `2489318` | done |
 | [x] | file upload: PDF inline, `media-src 'self'`, 413 with `Upload-Limit`, username cut at `/` or `@` | `aadecee` `3ef9cb8` `c1116b5` | done |
 | [ ] | Forwarded headers on `auth` requests | `d343f4b` `a1631a2` | open |
 

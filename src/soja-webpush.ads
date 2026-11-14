@@ -38,6 +38,21 @@ package Soja.Webpush is
       Private_Key : String;
       Now         : Long_Long_Integer) return String;
 
+   --  Test hook: with it set, an endpoint may be plain http and on an
+   --  internal address (soja's end-to-end test pushes to a server on
+   --  localhost).  The daemon sets it from the environment variable
+   --  SOJA_WEBPUSH_TEST; it is off otherwise.
+   Allow_Internal_Endpoints : Boolean := False;
+
+   --  sanityCheckWebPushEndpoint: Ok is False unless the endpoint is an
+   --  https URL.
+   function Endpoint_Is_Acceptable (Endpoint : String) return Boolean;
+
+   --  isInternalIP: whether a numeric address is loopback, unspecified,
+   --  multicast, private or link-local (an IPv4 address inside an IPv6 one
+   --  counts as the IPv4 address).
+   function Is_Internal_Address (Address : String) return Boolean;
+
    type Urgency is (Normal, High);
 
    --  SendNotification: encrypts Payload for the subscription and POSTs it to
@@ -53,6 +68,6 @@ package Soja.Webpush is
       Priority    : Urgency;
       Record_Size : Positive := 2048;
       TTL         : Natural := 604_800;
-      Subscriber  : String := "webpush@soju.im") return Natural;
+      Subscriber  : String := "https://soju.im") return Natural;
 
 end Soja.Webpush;

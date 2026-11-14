@@ -68,6 +68,37 @@ begin
          Check (T = "eyJh", "JWT header: " & T);   --  {"alg":
       end;
    end;
+   --  Endpoints: https only; external addresses only.
+   Check (Soja.Webpush.Endpoint_Is_Acceptable
+            ("https://push.example.com/wpush/abc")
+          and then not Soja.Webpush.Endpoint_Is_Acceptable
+                         ("http://push.example.com/x")
+          and then not Soja.Webpush.Endpoint_Is_Acceptable ("push.example.com"),
+          "endpoints are https URLs");
+   Check (Soja.Webpush.Is_Internal_Address ("127.0.0.1")
+          and then Soja.Webpush.Is_Internal_Address ("0.0.0.0")
+          and then Soja.Webpush.Is_Internal_Address ("10.1.2.3")
+          and then Soja.Webpush.Is_Internal_Address ("172.16.0.1")
+          and then Soja.Webpush.Is_Internal_Address ("172.31.255.255")
+          and then Soja.Webpush.Is_Internal_Address ("192.168.0.1")
+          and then Soja.Webpush.Is_Internal_Address ("169.254.169.254")
+          and then Soja.Webpush.Is_Internal_Address ("224.0.0.1")
+          and then Soja.Webpush.Is_Internal_Address ("::1")
+          and then Soja.Webpush.Is_Internal_Address ("::")
+          and then Soja.Webpush.Is_Internal_Address ("fe80::1")
+          and then Soja.Webpush.Is_Internal_Address ("fd12:3456::1")
+          and then Soja.Webpush.Is_Internal_Address ("ff02::1")
+          and then Soja.Webpush.Is_Internal_Address ("::ffff:127.0.0.1")
+          and then Soja.Webpush.Is_Internal_Address ("::ffff:10.0.0.1"),
+          "internal addresses");
+   Check (not Soja.Webpush.Is_Internal_Address ("8.8.8.8")
+          and then not Soja.Webpush.Is_Internal_Address ("172.32.0.1")
+          and then not Soja.Webpush.Is_Internal_Address ("172.15.0.1")
+          and then not Soja.Webpush.Is_Internal_Address ("192.169.0.1")
+          and then not Soja.Webpush.Is_Internal_Address ("2001:db8::1")
+          and then not Soja.Webpush.Is_Internal_Address ("::ffff:8.8.8.8")
+          and then not Soja.Webpush.Is_Internal_Address ("not an address"),
+          "external addresses");
    Ada.Text_IO.Put_Line ("ALL PASS");
 exception
    when E : others =>

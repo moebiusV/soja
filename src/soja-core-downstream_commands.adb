@@ -25,6 +25,7 @@ with Soja.Irc.Whox;
 with Soja.Irc.Xirc;
 with Soja.Msgstore;
 with Soja.Server;
+with Soja.Webpush;
 
 package body Soja.Core.Downstream_Commands is
 
@@ -1006,10 +1007,12 @@ package body Soja.Core.Downstream_Commands is
             end if;
             Ok := True;
          elsif Command = "SET" then
-            Ok := True;   --  (only when it is "SET PASSWORD <pw>")
+            --  Only "SET PASSWORD <pw>" is credentials: another SET (EMAIL,
+            --  ...) must not blank the saved password (de8690c).
             if Count = 2 and then Upper (Words (2)) = "PASSWORD" then
                Username := To_Unbounded_String (Nick);
                Password := To_Unbounded_String (Words (3));
+               Ok := True;
             end if;
          end if;
       end;
@@ -2413,6 +2416,13 @@ package body Soja.Core.Downstream_Commands is
                --  Send a test Web Push message, to make sure the endpoint is
                --  valid.
                if Update then
+                  if not Soja.Webpush.Endpoint_Is_Acceptable (Endpoint) then
+                     DC.Logger.Print
+                       ("failed to sanity check Web push endpoint "
+                        & Quote (Endpoint) & ": scheme must be HTTPS");
+                     return FAIL (["WEBPUSH", "INVALID_PARAMS", Sub_Cmd,
+                                   "Invalid endpoint"]);
+                  end if;
                   begin
                      Soja.Core.Push.Send
                        (DC.Srv.all, New_Sub,

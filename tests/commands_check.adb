@@ -797,6 +797,19 @@ begin
       Check (To_String (Net.Network_Record.SASL.Plain_Password) = "hunter3",
              "NickServ is recognised behind a STATUSMSG sigil");
       UC.Available_Status_Msg := Null_Unbounded_String;
+
+      --  Only SET PASSWORD is credentials: another SET leaves the saved
+      --  password alone.
+      N := UC_Log.Count;
+      Ok (DC, "PRIVMSG NickServ :SET EMAIL me@example.org");
+      Check (Wait (UC_Log, N + 1), "the SET is relayed");
+      Check (To_String (Net.Network_Record.SASL.Plain_Password) = "hunter3",
+             "SET EMAIL does not change the saved password");
+      N := UC_Log.Count;
+      Ok (DC, "PRIVMSG NickServ :SET PASSWORD hunter4");
+      Check (Wait (UC_Log, N + 1)
+             and then To_String (Net.Network_Record.SASL.Plain_Password)
+                      = "hunter4", "SET PASSWORD does");
    end;
 
    declare
