@@ -5,6 +5,9 @@ with Ada.Directories;
 with Ada.Text_IO;
 with Ada.Strings.Unbounded;
 
+with GNATCOLL.SQL.Exec;
+with GNATCOLL.SQL.Sqlite;
+
 with Soja.Database;
 with Soja.Database.Sqlite;
 
@@ -451,6 +454,90 @@ begin
          raise Program_Error with "DeleteNetwork must delete its kicks";
       end if;
       Close (DB.all);
+      Ada.Directories.Delete_File (Path);
+   end;
+
+   --  The schema is soju's current one (version 31): a fresh database has it,
+   --  and a database left at soja's old version 25 is brought to it.
+   declare
+      use GNATCOLL.SQL.Exec;
+      Path : constant String := "/tmp/soja_schema_check.db";
+
+      function Scalar (Sql : String) return String is
+         Desc : constant Database_Description :=
+           GNATCOLL.SQL.Sqlite.Setup (Path);
+         Conn : Database_Connection := Build_Connection (Desc);
+         C    : Forward_Cursor;
+      begin
+         Fetch (C, Conn, Sql);
+         return R : constant String :=
+           (if Has_Row (C) then Value (C, 0) else "")
+         do
+            Free (Conn);
+         end return;
+      end Scalar;
+
+      procedure Exec (Sql : String) is
+         Desc : constant Database_Description :=
+           GNATCOLL.SQL.Sqlite.Setup (Path);
+         Conn : Database_Connection := Build_Connection (Desc);
+      begin
+         Execute (Conn, Sql);
+         Commit (Conn);
+         Free (Conn);
+      end Exec;
+
+      procedure Expect (Sql, Want, What : String) is
+         Got : constant String := Scalar (Sql);
+      begin
+         if Got /= Want then
+            raise Program_Error with What & ": got " & Got;
+         end if;
+      end Expect;
+
+      procedure Check_Current (When_Text : String) is
+      begin
+         Expect ("PRAGMA user_version", "31", When_Text & ": version");
+         Expect ("SELECT count(*) FROM pragma_table_info('User') WHERE name = "
+                 & "'max_networks'", "1", When_Text & ": User.max_networks");
+         Expect ("SELECT count(*) FROM pragma_table_info('MessageTarget') "
+                 & "WHERE name IN ('pinned', 'muted', 'blocked')", "3",
+                 When_Text & ": MessageTarget columns");
+         Expect ("SELECT count(*) FROM pragma_table_info('DeviceCertificate') "
+                 & "WHERE name IN ('fingerprint', 'last_used', 'last_ip')",
+                 "3", When_Text & ": DeviceCertificate");
+         Expect ("SELECT count(*) FROM sqlite_master WHERE type = 'index' "
+                 & "AND name LIKE '%\_index' ESCAPE '\'", "8",
+                 When_Text & ": foreign key indexes");
+         Expect ("PRAGMA journal_mode", "wal", When_Text & ": journal mode");
+      end Check_Current;
+   begin
+      if Ada.Directories.Exists (Path) then
+         Ada.Directories.Delete_File (Path);
+      end if;
+      DB := Soja.Database.Sqlite.Open_Sqlite_DB (Path);
+      Close (DB.all);
+      Check_Current ("fresh");
+
+      --  Take the new parts away and mark the database as version 25.
+      Exec ("DROP TABLE DeviceCertificate");
+      Exec ("DROP INDEX Network_user_index");
+      Exec ("DROP INDEX Channel_network_index");
+      Exec ("DROP INDEX DeliveryReceipt_network_index");
+      Exec ("DROP INDEX ReadReceipt_network_index");
+      Exec ("DROP INDEX WebPushSubscription_user_index");
+      Exec ("DROP INDEX WebPushSubscription_network_index");
+      Exec ("DROP INDEX Message_target_index");
+      Exec ("DROP INDEX MessageTarget_network_index");
+      Exec ("ALTER TABLE User DROP COLUMN max_networks");
+      Exec ("ALTER TABLE MessageTarget DROP COLUMN pinned");
+      Exec ("ALTER TABLE MessageTarget DROP COLUMN muted");
+      Exec ("ALTER TABLE MessageTarget DROP COLUMN blocked");
+      Exec ("PRAGMA user_version = 25");
+
+      DB := Soja.Database.Sqlite.Open_Sqlite_DB (Path);
+      Close (DB.all);
+      Check_Current ("upgraded");
       Ada.Directories.Delete_File (Path);
    end;
 

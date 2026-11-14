@@ -72,7 +72,8 @@ package body Soja.Database.Sqlite is
         "UNIQUE, password TEXT, admin INTEGER NOT NULL DEFAULT 0, realname " &
         "TEXT, nick TEXT, created_at TEXT NOT NULL, enabled INTEGER NOT " &
         "NULL " &
-        "DEFAULT 1, downstream_interacted_at TEXT)"),
+        "DEFAULT 1, downstream_interacted_at TEXT, max_networks INTEGER " &
+        "NOT NULL DEFAULT -1)"),
       2  => To_Unbounded_String
        ("CREATE TABLE Network (id INTEGER PRIMARY KEY, name TEXT, user " &
         "INTEGER NOT NULL, addr TEXT NOT NULL, nick TEXT, username TEXT, " &
@@ -123,7 +124,9 @@ package body Soja.Database.Sqlite is
       10 => To_Unbounded_String
        ("CREATE TABLE MessageTarget (id INTEGER PRIMARY KEY, network " &
        "INTEGER " &
-        "NOT NULL, target TEXT NOT NULL, FOREIGN KEY(network) REFERENCES " &
+        "NOT NULL, target TEXT NOT NULL, pinned INTEGER NOT NULL DEFAULT " &
+        "0, muted INTEGER NOT NULL DEFAULT 0, blocked INTEGER NOT NULL " &
+        "DEFAULT 0, FOREIGN KEY(network) REFERENCES " &
         "Network(id), UNIQUE(network, target))"),
       11 => To_Unbounded_String
        ("CREATE VIRTUAL TABLE MessageFTS USING fts5 (text, " &
@@ -140,7 +143,31 @@ package body Soja.Database.Sqlite is
        ("CREATE TRIGGER MessageFTSUpdate AFTER UPDATE ON Message " &
         "BEGIN INSERT INTO MessageFTS(MessageFTS, rowid, text) " &
         "VALUES ('delete', old.id, old.text); INSERT INTO " &
-        "MessageFTS(rowid, text) VALUES (new.id, new.text); END")];
+        "MessageFTS(rowid, text) VALUES (new.id, new.text); END"),
+      15 => To_Unbounded_String
+       ("CREATE TABLE DeviceCertificate (id INTEGER PRIMARY KEY, user " &
+        "INTEGER NOT NULL, label TEXT NOT NULL, fingerprint BLOB NOT NULL " &
+        "UNIQUE, last_used TEXT NOT NULL, last_ip TEXT NOT NULL, FOREIGN " &
+        "KEY(user) REFERENCES User(id))"),
+      16 => To_Unbounded_String
+       ("CREATE INDEX Network_user_index ON Network(user)"),
+      17 => To_Unbounded_String
+       ("CREATE INDEX Channel_network_index ON Channel(network)"),
+      18 => To_Unbounded_String
+       ("CREATE INDEX DeliveryReceipt_network_index ON " &
+        "DeliveryReceipt(network)"),
+      19 => To_Unbounded_String
+       ("CREATE INDEX ReadReceipt_network_index ON ReadReceipt(network)"),
+      20 => To_Unbounded_String
+       ("CREATE INDEX WebPushSubscription_user_index ON " &
+        "WebPushSubscription(user)"),
+      21 => To_Unbounded_String
+       ("CREATE INDEX WebPushSubscription_network_index ON " &
+        "WebPushSubscription(network)"),
+      22 => To_Unbounded_String
+       ("CREATE INDEX Message_target_index ON Message(target)"),
+      23 => To_Unbounded_String
+       ("CREATE INDEX MessageTarget_network_index ON MessageTarget(network)")];
 
    --  MessageFTS and its triggers (the full-text index over Message.text,
    --  for `SEARCH`) are part of the schema and of the last migration; they
@@ -149,7 +176,7 @@ package body Soja.Database.Sqlite is
    --  The migrations, flattened into individual statements.  Migration_Start
    --  (V) is the index into Migration_Stmts of migration V's first statement;
    --  Migration_Start (Migration_Count) is one past the last.
-   Migration_Count : constant := 25;
+   Migration_Count : constant := 31;
 
    Migration_Stmts : constant Stmt_Array :=
      [1  => To_Unbounded_String
@@ -299,11 +326,56 @@ package body Soja.Database.Sqlite is
        ("CREATE TRIGGER MessageFTSUpdate AFTER UPDATE ON Message " &
         "BEGIN INSERT INTO MessageFTS(MessageFTS, rowid, text) " &
         "VALUES ('delete', old.id, old.text); INSERT INTO " &
-        "MessageFTS(rowid, text) VALUES (new.id, new.text); END")];
+        "MessageFTS(rowid, text) VALUES (new.id, new.text); END"),
+      --  25: User.max_networks (soju's per-user network limit).
+      45 => To_Unbounded_String
+       ("ALTER TABLE User ADD COLUMN max_networks INTEGER NOT NULL " &
+        "DEFAULT -1"),
+      --  26: MessageTarget.pinned and .muted (METADATA).
+      46 => To_Unbounded_String
+       ("ALTER TABLE MessageTarget ADD COLUMN pinned INTEGER NOT NULL " &
+        "DEFAULT 0"),
+      47 => To_Unbounded_String
+       ("ALTER TABLE MessageTarget ADD COLUMN muted INTEGER NOT NULL " &
+        "DEFAULT 0"),
+      --  27: indexes on the foreign keys.
+      48 => To_Unbounded_String
+       ("CREATE INDEX Network_user_index ON Network(user)"),
+      49 => To_Unbounded_String
+       ("CREATE INDEX Channel_network_index ON Channel(network)"),
+      50 => To_Unbounded_String
+       ("CREATE INDEX DeliveryReceipt_network_index ON " &
+        "DeliveryReceipt(network)"),
+      51 => To_Unbounded_String
+       ("CREATE INDEX ReadReceipt_network_index ON ReadReceipt(network)"),
+      52 => To_Unbounded_String
+       ("CREATE INDEX WebPushSubscription_user_index ON " &
+        "WebPushSubscription(user)"),
+      53 => To_Unbounded_String
+       ("CREATE INDEX WebPushSubscription_network_index ON " &
+        "WebPushSubscription(network)"),
+      54 => To_Unbounded_String
+       ("CREATE INDEX Message_target_index ON Message(target)"),
+      55 => To_Unbounded_String
+       ("CREATE INDEX MessageTarget_network_index ON MessageTarget(network)"),
+      --  28: MessageTarget.blocked.
+      56 => To_Unbounded_String
+       ("ALTER TABLE MessageTarget ADD COLUMN blocked INTEGER NOT NULL " &
+        "DEFAULT 0"),
+      --  29: device certificates.
+      57 => To_Unbounded_String
+       ("CREATE TABLE DeviceCertificate (id INTEGER PRIMARY KEY, user " &
+        "INTEGER NOT NULL, label TEXT NOT NULL, fingerprint BLOB NOT NULL " &
+        "UNIQUE, last_used TEXT NOT NULL, FOREIGN KEY(user) REFERENCES " &
+        "User(id))"),
+      --  30: the address a device certificate was last used from.
+      58 => To_Unbounded_String
+       ("ALTER TABLE DeviceCertificate ADD COLUMN last_ip TEXT NOT NULL " &
+        "DEFAULT ''")];
 
    Migration_Start : constant array (1 .. Migration_Count) of Positive :=
      [1, 2, 3, 4, 5, 6, 10, 14, 18, 19, 20, 21, 22, 26, 27, 29, 31, 32, 33,
-      34, 36, 37, 38, 40, 45];
+      34, 36, 37, 38, 40, 45, 46, 48, 56, 57, 58, 59];
 
    -----------------
    --  Time helpers
@@ -690,6 +762,18 @@ package body Soja.Database.Sqlite is
 
    type Sqlite_DB_Access is access Sqlite_DB;
 
+   --  What soju sets in its connection string: write-ahead logging (a
+   --  property of the file, which a database made by soju already has) and
+   --  the "normal" synchronous mode.
+   procedure Set_Pragmas (DB : Sqlite_DB_Access) is
+      C : Forward_Cursor;
+   begin
+      Fetch (C, DB.DB, "PRAGMA journal_mode = WAL");
+      Check (DB);
+      Execute (DB.DB, "PRAGMA synchronous = NORMAL");
+      Check (DB);
+   end Set_Pragmas;
+
    function Open_Sqlite_DB (Source : String) return Database_Access is
       Desc : constant Database_Description :=
         GNATCOLL.SQL.Sqlite.Setup (Source);
@@ -708,6 +792,7 @@ package body Soja.Database.Sqlite is
          raise Database_Error with "failed to build sqlite connection";
       end if;
 
+      Set_Pragmas (Self);
       Upgrade (Self);
       Ensure_Soja_Tables (Self);
 
