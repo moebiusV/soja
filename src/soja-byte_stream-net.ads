@@ -3,6 +3,8 @@ pragma Ada_2022;
 
 with AWS.Net;
 
+with Soja.Sock_Io;
+
 package Soja.Byte_Stream.Net is
 
    type Net_Stream is limited new Stream with private;
@@ -26,6 +28,7 @@ private
    type Net_Stream is limited new Stream with record
       Sock : AWS.Net.Socket_Access;
       Addr : access constant String;   --  "host:port", taken at accept
+      G    : Soja.Sock_Io.Gate_Access := new Soja.Sock_Io.Gate;
    end record;
 
 end Soja.Byte_Stream.Net;

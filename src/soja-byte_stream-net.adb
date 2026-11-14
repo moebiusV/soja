@@ -2,6 +2,7 @@ pragma Ada_2022;
 
 with Ada.Exceptions;
 with Ada.Strings.Fixed;
+with Ada.Unchecked_Deallocation;
 
 package body Soja.Byte_Stream.Net is
 
@@ -20,7 +21,8 @@ package body Soja.Byte_Stream.Net is
    is
    begin
       return new Net_Stream'
-        (Sock => Sock, Addr => new String'(Host_Port (Sock.all)));
+        (Sock => Sock, Addr => new String'(Host_Port (Sock.all)),
+         G    => new Soja.Sock_Io.Gate);
    end Create;
 
    overriding procedure Receive
@@ -29,7 +31,7 @@ package body Soja.Byte_Stream.Net is
       Last : out Stream_Element_Offset)
    is
    begin
-      S.Sock.Receive (Buf, Last);
+      Soja.Sock_Io.Receive (S.Sock.all, S.G, Buf, Last);
    exception
       when E : AWS.Net.Socket_Error =>
          --  AWS reports an orderly close as an error: it is the EOF.
@@ -49,7 +51,8 @@ package body Soja.Byte_Stream.Net is
       Last : Stream_Element_Offset;
    begin
       while Sent < Data'Last loop
-         S.Sock.Send (Data (Sent + 1 .. Data'Last), Last);
+         Soja.Sock_Io.Send
+           (S.Sock.all, S.G, Data (Sent + 1 .. Data'Last), Last);
          if Last <= Sent then
             raise AWS.Net.Socket_Error with "connection closed";
          end if;
@@ -65,8 +68,11 @@ package body Soja.Byte_Stream.Net is
    end Shutdown;
 
    overriding procedure Release (S : in out Net_Stream) is
+      procedure Free is new Ada.Unchecked_Deallocation
+        (Soja.Sock_Io.Gate, Soja.Sock_Io.Gate_Access);
    begin
       AWS.Net.Free (S.Sock);
+      Free (S.G);
    end Release;
 
    overriding function Peer (S : Net_Stream) return String is (S.Addr.all);

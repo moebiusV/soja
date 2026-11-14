@@ -974,5 +974,14 @@ superseded by this section.
   has one goroutine; the whole payload is one
   record (no padding); the 15 s limit is per request.
 
+- **TLS connections are read and written one call at a time** (`Soja.Sock_Io`).
+  A connection is read by one task and written by others, and OpenSSL does not
+  allow `SSL_read` and `SSL_write` at once on one connection; AWS does not
+  guard against it, and a `wss://` connection was now and then torn down
+  (`System error (0) on SSL receive`, seen in about half the e2e runs).  Each
+  socket call now holds a per-connection gate; a reader waits for input
+  without holding it.  100 `wss` sessions in a row passed afterwards.  (Go's
+  `crypto/tls` has its own locking, so soju has no such code.)
+
 [soju]: https://soju.im
 [ada-on-alpine]: https://github.com/moebiusV/ada-on-alpine

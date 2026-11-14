@@ -6,6 +6,8 @@ pragma Ada_2022;
 
 with Ada.Strings.Unbounded;
 with AWS.Net;
+
+with Soja.Sock_Io;
 with Soja.Irc.Messages;
 
 package Soja.Conn.Net is
@@ -36,6 +38,7 @@ private
 
    type Net_IRC_Conn is new IRC_Conn with record
       Sock   : AWS.Net.Socket_Access;
+      G      : Soja.Sock_Io.Gate_Access := new Soja.Sock_Io.Gate;
       Buffer : Ada.Strings.Unbounded.Unbounded_String;   -- leftover bytes
       --  Set by a PROXY header: "host:port" of the real client.
       Proxied : Ada.Strings.Unbounded.Unbounded_String;

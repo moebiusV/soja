@@ -21,7 +21,8 @@ package body Soja.Conn.Net is
      is
    begin
       return Net_IRC_Conn'
-        (IRC_Conn with Sock => Sock, Buffer => Null_Unbounded_String,
+        (IRC_Conn with Sock => Sock, G => new Soja.Sock_Io.Gate,
+         Buffer => Null_Unbounded_String,
          Proxied => Null_Unbounded_String);
    end Create;
 
@@ -63,7 +64,7 @@ package body Soja.Conn.Net is
          end if;
 
          begin
-            C.Sock.Receive (Chunk, Last);
+            Soja.Sock_Io.Receive (C.Sock.all, C.G, Chunk, Last);
          exception
             when E : AWS.Net.Socket_Error =>
                --  AWS reports an orderly close as an error: it is the EOF.
@@ -111,7 +112,7 @@ package body Soja.Conn.Net is
             Slice : Ada.Streams.Stream_Element_Array renames
               Out_Buf (Out_Buf'First + Sent .. Out_Buf'Last);
          begin
-            C.Sock.Send (Slice, Last);
+            Soja.Sock_Io.Send (C.Sock.all, C.G, Slice, Last);
             exit when Last < Slice'First;
             Sent := Sent + (Last - Slice'First + 1);
          end;

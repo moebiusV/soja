@@ -203,7 +203,8 @@ def main():
     for how, kw in (("ws+insecure", dict(port=8081)),
                     ("wss", dict(port=8443, tls=True)),
                     ("ws+unix", dict(unix=os.path.join(DIR, "ws.sock"))),
-                    ("http /socket", dict(port=8082, path="/socket"))):
+                    ("http /socket", dict(port=8082, path="/socket"))) \
+            * int(os.environ.get("WS_REPEAT", "1")):
         w = WsClient.connect(f"{how}:alice", **kw)
         w.register("alice", "alice/test", "secret")
         w.send("PING :wsping")
