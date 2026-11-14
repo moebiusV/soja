@@ -54,6 +54,6 @@ servers for the rest. Please report what you find.
 
 See also: [README](../README.md) (all documents), [getting started](getting-started.md),
 [differences from soju](differences.md), the manual pages
-[`soja.1.scd`](soja.1.scd), [`sojadb.1.scd`](sojadb.1.scd) and
-[`sojactl.1.scd`](sojactl.1.scd), [PORTING.md](../PORTING.md),
+[`soja.1`](soja.1), [`sojadb.1`](sojadb.1) and
+[`sojactl.1`](sojactl.1), [PORTING.md](../PORTING.md),
 [SOJU-BUGS.md](../SOJU-BUGS.md).

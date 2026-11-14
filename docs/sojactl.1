@@ -1,0 +1,36 @@
+.\" Copyright (c) 2026 The soja authors.  AGPL-3.0, see LICENSE.
+.\" soja is a translation of soju; this page follows soju's sojuctl(1).
+.Dd November 14, 2026
+.Dt SOJACTL 1
+.Os
+.Sh NAME
+.Nm sojactl
+.Nd manage a running instance of the soja IRC bouncer
+.Sh SYNOPSIS
+.Nm
+.Op Fl config Ar path
+.Ar command ...
+.Sh DESCRIPTION
+sojactl sends a \fIBouncerServ\fP command to a running soja instance.
+See the \fIIRC SERVICE\fP section in \fBsoja\fP(1) for more information.
+.Pp
+sojactl requires a \fIlisten unix+admin://\fP directive in the soja configuration file. sojactl needs to be run with write permissions on the soja admin socket.
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Sy "-h, -help"
+.Pp
+Show help message and quit.
+.It Sy -config Ar path
+.Pp
+Path to the config file.
+If unset, the default config file path is used, if any.
+.El
+.Sh SEE ALSO
+.Xr soja 1 ,
+.Xr sojadb 1
+.Sh AUTHORS
+soja is a translation of soju, which is maintained by
+.An Simon Ser Aq Mt contact@emersion.fr
+and other open-source contributors.
+For more information about soju development, see
+.Lk https://codeberg.org/emersion/soju .

@@ -1,0 +1,50 @@
+.\" Copyright (c) 2026 The soja authors.  AGPL-3.0, see LICENSE.
+.Dd November 14, 2026
+.Dt SOJADB 1
+.Os
+.Sh NAME
+.Nm sojadb
+.Nd manage the database of the soja IRC bouncer
+.Sh SYNOPSIS
+.Nm
+.Op Fl config Ar path
+.Cm create-user
+.Ar username
+.Op Fl admin
+.Nm
+.Op Fl config Ar path
+.Cm change-password
+.Ar username
+.Sh DESCRIPTION
+sojadb creates users and changes their passwords directly in the database that \fBsoja\fP(1) uses: the one named by the \fIdb\fP directive of the configuration file.
+It is how the first (administrator) user is made, before soja has anyone to log in.
+.Pp
+The password is asked for on the terminal, without echo.
+If standard input is not a terminal, one line is read from it as the password (and a warning is printed); an empty password is refused.
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Sy "-h, -help"
+.Pp
+Show help message and quit.
+.It Sy -config Ar path
+.Pp
+Path to the config file (default: /etc/soju/config).
+.El
+.Sh ACTIONS
+.Bl -tag -width Ds
+.It Sy create-user Ar username Op Ar -admin
+.Pp
+Create a new user, asking for the password.
+With \fB-admin\fP the user is an administrator, who can create and change other users through BouncerServ (see \fBsoja\fP(1)).
+.It Sy change-password Ar username
+.Pp
+Change the password of an existing user, asking for the new one.
+.El
+.Sh SEE ALSO
+.Xr soja 1 ,
+.Xr sojactl 1
+.Sh AUTHORS
+soja is a translation of soju, which is maintained by
+.An Simon Ser Aq Mt contact@emersion.fr
+and other open-source contributors.
+soju's database tool is called sojudb.

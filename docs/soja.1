@@ -1,0 +1,598 @@
+.\" Copyright (c) 2026 The soja authors.  AGPL-3.0, see LICENSE.
+.\" soja is a translation of soju; this page follows soju's soju(1).
+.Dd November 14, 2026
+.Dt SOJA 1
+.Os
+.Sh NAME
+.Nm soja
+.Nd IRC bouncer, a translation of soju into Ada
+.Sh SYNOPSIS
+.Nm
+.Op Fl debug
+.Op Fl config Ar path
+.Op Fl listen Ar uri ...
+.Nm
+.Fl h | help
+.Sh DESCRIPTION
+soja is a user-friendly IRC bouncer, written in Ada as a drop-in replacement for soju: it reads soju's configuration file and database, speaks the same IRC extensions and has the same BouncerServ commands.
+See \fIdifferences.md\fP in the documentation for what is not the same.
+It connects to upstream IRC servers on behalf of the user to provide extra features.
+.Bl -bullet
+.It
+Multiple separate users sharing the same bouncer, each with their own upstream servers
+.It
+Sending the backlog (messages received while the user was disconnected from the bouncer), with per-client buffers
+.El
+.Pp
+To connect to the bouncer, use the bouncer username and password.
+To use a client which doesn't support the \fIsoju.im/bouncer-networks\fP IRC extension, setup one connection per server configured in soja, and indicate the network name in the username: "<username>/<network>".
+Then channels can be joined and parted as if you were directly connected to the upstream server.
+.Pp
+For per-client history to work on clients which don't support the IRCv3 \fIchathistory\fP extension, clients need to indicate their name.
+This can be done by adding a "@<client>" suffix to the username.
+.Pp
+When joining a channel, the channel will be saved and automatically joined on the next connection.
+When registering or authenticating with NickServ, the credentials will be saved and automatically used on the next connection if the server supports SASL.
+When parting a channel with the reason "detach", the channel will be detached instead of being left.
+.Pp
+If a network specified in the username doesn't exist, and the network name is a valid hostname, the network will be automatically added.
+.Pp
+When all clients are disconnected from the bouncer, the user is automatically marked as away by default.
+.Pp
+soja will reload the configuration file, the TLS certificate/key and the MOTD file when it receives the HUP signal.
+The configuration options \fIlisten\fP, \fIdb\fP and \fIlog\fP cannot be reloaded.
+.Pp
+Administrators can broadcast a message to all bouncer users via \fI/notice $<hostname> <text>\fP, or via \fI/notice $* <text>\fP if the connection isn't bound to a particular network.
+All currently connected bouncer users will receive the message from the special \fIBouncerServ\fP service.
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Sy "-h, -help"
+.Pp
+Show help message and quit.
+.It Sy -config Ar path
+.Pp
+Path to the config file.
+If unset, a default config file is used.
+.It Sy -debug
+.Pp
+Enable debug logging (this will leak sensitive information such as passwords).
+.It Sy -listen Ar uri
+.Pp
+Listening URI (default: ":6697").
+Can be specified multiple times.
+.El
+.Sh CONFIG FILE
+The config file has one directive per line.
+.Pp
+Example:
+.Bd -literal -offset indent
+listen ircs://
+tls cert.pem key.pem
+hostname example.org
+.Ed
+.Pp
+The following directives are supported:
+.Bl -tag -width Ds
+.It Sy listen Ar uri
+.Pp
+Listening URI (default: ":6697").
+.Pp
+The following URIs are supported:
+.Bl -bullet
+.It
+\fI[ircs://][host][:port]\fP listens with TLS over TCP (default port if omitted: 6697)
+.It
+\fIirc+insecure://[host][:port]\fP listens with plain-text over TCP (default port if omitted: 6667)
+.It
+\fIunix://<path>\fP listens on a Unix domain socket
+.It
+\fIhttps://[host][:port]\fP listens for HTTPS connections (default port: 443) and handles WebSocket requests at endpoint \fI/socket\fP
+.It
+\fIhttp+insecure://[host][:port]\fP listens for plain-text HTTP connections (default port: 80) and handles WebSocket requests at endpoint \fI/socket\fP
+.It
+\fIhttp+unix://<path>\fP listens for plain-text HTTP connections on a Unix domain socket and handles WebSocket requests at endpoint \fI/socket\fP
+.It
+\fIwss://[host][:port]\fP listens for WebSocket connections over TLS (default port: 443)
+.It
+\fIws+insecure://[host][:port]\fP listens for plain-text WebSocket connections (default port: 80)
+.It
+\fIws+unix://<path>\fP listens for plain-text WebSocket connections on a Unix domain socket
+.It
+\fIident://[host][:port]\fP listens for plain-text ident connections (default port: 113)
+.It
+\fIhttp+prometheus://localhost:<port>\fP listens for plain-text HTTP connections and serves Prometheus metrics (host must be "localhost")
+.It
+\fIunix+admin://[path]\fP listens on a Unix domain socket for administrative connections, such as sojactl (default path: /run/soju/admin)
+.El
+.Pp
+If the scheme is omitted, "ircs" is assumed.
+If multiple \fBlisten\fP directives are specified, soja will listen on each of them.
+.It Sy hostname Ar name
+.Pp
+Server hostname (default: system hostname).
+.Pp
+This should be set to a fully qualified domain name.
+.It Sy title Ar title
+.Pp
+Server title.
+This will be sent as the \fIISUPPORT NETWORK\fP value when clients don't select a specific network.
+.It Sy tls Ar cert Ar key
+.Pp
+Enable TLS support.
+The certificate and the key files must be PEM-encoded.
+.It Sy db Ar driver Ar source
+.Pp
+Set the database location for user, network and channel storage.
+By default, a \fIsqlite3\fP database is opened in "./soju.db".
+.Pp
+The supported driver is \fIsqlite3\fP: \fIsource\fP is a path to the SQLite file.
+.It Sy message-store Ar driver Op Ar source
+.Pp
+Set the database location for IRC messages.
+By default, an in-memory message database is used.
+.Pp
+Supported drivers:
+.Bl -bullet
+.It
+\fImemory\fP stores messages in memory.
+For each channel/user, only the latest 4K messages are kept in memory, older messages are discarded.
+This driver is very basic and doesn't support features such as the \fIchathistory\fP extension and search.
+.It
+\fIfs\fP stores messages on disk, in the same format as ZNC.
+\fIsource\fP is required and is the root directory path for the database.
+This on-disk format is lossy: some IRCv3 messages (e.g. TAGMSG) and all message tags are discarded.
+.It
+\fIdb\fP stores messages in the database.
+A full-text search index is used to speed up search queries.
+.El
+.Pp
+(\fIlog\fP is a deprecated alias for this directive.)
+.It Sy file-upload Ar driver Op Ar source
+.Pp
+Set the database location for uploaded files.
+.Pp
+File upload requires setting up an HTTP listener (see \fIhttps://\fP and \fIhttp+insecure://\fP URIs in the \fIlisten\fP directive).
+.Pp
+Supported drivers:
+.Bl -bullet
+.It
+\fIfs\fP stores uploaded files on disk.
+\fIsource\fP is required.
+.El
+.It Sy http-origin Ar patterns...
+.Pp
+List of allowed HTTP origins for WebSocket listeners.
+The parameters are interpreted as shell patterns, see \fBglob\fP(7).
+.Pp
+By default, only the request host is authorized.
+Use this directive to enable cross-origin WebSockets.
+.It Sy http-ingress Ar url
+.Pp
+External URL on which HTTPS listeners are exposed.
+.Pp
+By default, this is \fIhttps://<hostname>\fP.
+.It Sy accept-proxy-ip Ar cidr...
+.Pp
+Allow the specified IPs to act as a proxy.
+Proxys have the ability to overwrite the remote and local connection addresses (via the PROXY protocol, the Forwarded HTTP header field defined in RFC 7239 or the X-Forwarded-* HTTP header fields).
+The special name "localhost" accepts the loopback addresses 127.0.0.0/8 and ::1/128.
+.Pp
+By default, all IPs are rejected.
+.It Sy max-user-networks Ar limit
+.Pp
+Maximum number of networks per user.
+By default, there is no limit.
+.It Sy motd Ar path
+.Pp
+Path to the MOTD file.
+The bouncer MOTD is sent to clients which aren't bound to a specific network.
+By default, no MOTD is sent.
+.It Sy upstream-user-ip Ar cidr...
+.Pp
+Enable per-user IP addresses.
+One IPv4 range and/or one IPv6 range can be specified in CIDR notation.
+One IP address per range will be assigned to each user and will be used as the source address when connecting to an upstream network.
+.Pp
+This can be useful to avoid having the whole bouncer banned from an upstream network because of one malicious user.
+.Pp
+soja reads this directive but does not yet choose the source address of upstream connections: they leave from the default address.
+.It Sy disable-inactive-user Ar duration
+.Pp
+Disable inactive users after the specified duration.
+.Pp
+A user is inactive when the last downstream connection is closed.
+.Pp
+The duration is a positive decimal number followed by the unit "d" (days).
+For instance, "30d" disables users 30 days after they last disconnect from the bouncer.
+.It Sy enable-user-on-auth true|false
+.Pp
+Enable users when they successfully authenticate.
+.Pp
+This can be used together with \fIdisable-inactive-user\fP to seamlessly disable and re-enable users during lengthy inactivity.
+.Pp
+When external authentication is used (e.g. \fIauth oauth2\fP), bouncer users are automatically created after successfull authentication.
+.It Sy auth Ar driver No ...
+.Pp
+Set the authentication method.
+By default, internal authentication is used.
+.Pp
+Supported drivers:
+.Bl -tag -width Ds
+.It Sy "auth internal"
+.Pp
+Use internal authentication.
+.It Sy "auth oauth2" Ar url
+.Pp
+Use external OAuth 2.0 authentication.
+The authorization server URL must be provided.
+The client ID and client secret can be provided as username and password in the URL.
+The authorization server must support OAuth 2.0 Authorization Server Metadata (RFC 8414) and OAuth 2.0 Token Introspection (RFC 7662).
+.It Sy "auth pam"
+.Pp
+Use PAM authentication, through the PAM service "login". libpam is loaded when soja starts; if it is not installed, soja refuses to start with this driver.
+.El
+.El
+.Sh IRC SERVICE
+soja exposes an IRC service called \fBBouncerServ\fP to manage the bouncer.
+Commands can be sent via regular private messages (\fI/msg BouncerServ <command> [args...]\fP).
+Commands may be written in full or abbreviated form, for instance \fBnetwork\fP can be abbreviated as \fBnet\fP or just \fBn\fP.
+.Pp
+Commands are parsed according the POSIX shell rules.
+In particular, words can be quoted (via double or single quotes) and a backslash escapes the next character.
+.Bl -tag -width Ds
+.It Sy help Op Ar command
+.Pp
+Show a list of commands.
+If \fIcommand\fP is specified, show a help message for the command.
+.It Sy "network create" Sy -addr Ar addr Op Ar options...
+.Pp
+Connect to a new network at \fIaddr\fP.
+\fI-addr\fP is mandatory.
+.Pp
+\fIaddr\fP supports several connection types:
+.Bl -bullet
+.It
+\fI[ircs://]<host>[:port]\fP connects with TLS over TCP
+.It
+\fIirc+insecure://<host>[:port]\fP connects with plain-text TCP
+.It
+\fIirc+unix:///<path>\fP connects to a Unix socket
+.El
+.Pp
+For example, to connect to Libera Chat:
+.Bd -literal -offset indent
+net create -addr irc.libera.chat
+.Ed
+.Pp
+Other options are:
+.Bl -tag -width Ds
+.It Sy -name Ar name
+.Pp
+Short network name.
+This will be used instead of \fIaddr\fP to refer to the network.
+.It Sy -username Ar username
+.Pp
+Connect with the specified username.
+By default, the nickname is used.
+.It Sy -pass Ar pass
+.Pp
+Connect with the specified server password.
+.It Sy -realname Ar realname
+.Pp
+Connect with the specified real name.
+By default, the account's realname is used if set, otherwise the network's nickname is used.
+.It Sy -certfp Ar fingerprint
+.Pp
+Instead of using certificate authorities to check the server's TLS certificate, check whether the server certificate matches the provided fingerprint.
+This can be used to connect to servers using self-signed certificates.
+The fingerprint format is SHA512.
+An empty string removes any previous fingerprint.
+.Pp
+The following command can be used to fetch the certificate fingerprint of an IRC server:
+.Bd -literal -offset indent
+openssl s_client -connect irc.example.org:6697 -verify_quiet </dev/null | openssl x509 -fingerprint -sha512 -noout -in /dev/stdin
+.Ed
+.It Sy -nick Ar nickname
+.Pp
+Connect with the specified nickname.
+By default, the account's username is used.
+.It Sy -auto-away true|false
+.Pp
+Enable or disable the auto-away feature.
+If the feature is enabled, the user will be marked as away when all clients are disconnected from the bouncer.
+By default, auto-away is enabled.
+.It Sy -enabled true|false
+.Pp
+Enable or disable the network.
+If the network is disabled, the bouncer won't connect to it.
+By default, the network is enabled.
+.It Sy -connect-command Ar command
+.Pp
+Send the specified quoted string as a raw IRC command right after connecting to the server.
+This can be used to identify to an account when the server doesn't support SASL.
+.Pp
+For instance, to identify with \fINickServ\fP, the following command can be used:
+.Bd -literal -offset indent
+"PRIVMSG NickServ :IDENTIFY <password>"
+.Ed
+.Pp
+The flag can be specified multiple times to send multiple IRC messages.
+To clear all commands, set it to the empty string.
+.El
+.It Sy "network update" Op Ar name Op Ar options...
+.Pp
+Update an existing network.
+The options are the same as the \fInetwork create\fP command.
+.Pp
+When this command is executed, soja will disconnect and re-connect to the network.
+.Pp
+If \fIname\fP is not specified, the current network is updated.
+.It Sy "network delete" Op Ar name
+.Pp
+Disconnect and delete a network.
+.Pp
+If \fIname\fP is not specified, the current network is deleted.
+.It Sy "network quote" Op Ar name Ar command
+.Pp
+Send a raw IRC line as-is to a network.
+.Pp
+If \fIname\fP is not specified, the command is sent to the current network.
+.It Sy "network status"
+.Pp
+Show a list of saved networks and their current status.
+.It Sy "channel status" Op Ar options...
+.Pp
+Show a list of saved channels and their current status.
+.Pp
+Options:
+.Bl -tag -width Ds
+.It Sy -network Ar name
+.Pp
+Only show channels for the specified network.
+By default, only the channels in the current network are displayed.
+.El
+.It Sy "channel update" Ar name Op Ar options...
+.Pp
+Update the options of an existing channel.
+.Pp
+Options are:
+.Bl -tag -width Ds
+.It Sy -detached true|false
+.Pp
+Attach or detach this channel.
+.Pp
+A detached channel is joined but is hidden by the bouncer.
+This is useful to e.g. collect logs and highlights in low-interest or high-traffic channels.
+.It Sy -relay-detached Ar mode
+.Pp
+Set when to relay messages from detached channels to the user with a BouncerServ NOTICE.
+.Pp
+Modes are:
+.Bl -tag -width Ds
+.It Sy message
+.Pp
+Relay any message from this channel when detached.
+.It Sy highlight
+.Pp
+Relay only messages mentioning you when detached.
+.It Sy none
+.Pp
+Don't relay any messages from this channel when detached.
+.It Sy default
+.Pp
+Currently same as \fBhighlight\fP.
+This is the default behaviour.
+.El
+.It Sy -reattach-on Ar mode
+.Pp
+Set when to automatically reattach to detached channels.
+.Pp
+Modes are:
+.Bl -tag -width Ds
+.It Sy message
+.Pp
+Reattach to this channel when any message is received.
+.It Sy highlight
+.Pp
+Reattach to this channel when any message mentioning you is received.
+.It Sy none
+.Pp
+Never automatically reattach to this channel.
+.It Sy default
+.Pp
+Currently same as \fBnone\fP.
+This is the default behaviour.
+.El
+.It Sy -detach-after Ar duration
+.Pp
+Automatically detach this channel after the specified duration has elapsed without receving any message corresponding to \fB-detach-on\fP.
+.Pp
+Example duration values: \fB1h30m\fP, \fB30s\fP, \fB2.5h\fP.
+.Pp
+Setting this value to 0 will disable this behaviour, i.e. this channel will never be automatically detached.
+This is the default behaviour.
+.It Sy -detach-on Ar mode
+.Pp
+Set when to reset the auto-detach timer used by \fB-detach-after\fP, causing it to wait again for the auto-detach duration timer before detaching.
+Joining, reattaching, sending a message, or changing any channel option will reset the timer, in addition to the messages specified by the mode.
+.Pp
+Modes are:
+.Bl -tag -width Ds
+.It Sy message
+.Pp
+Receiving any message from this channel will reset the auto-detach timer.
+.It Sy highlight
+.Pp
+Receiving any message mentioning you from this channel will reset the auto-detach timer.
+.It Sy none
+.Pp
+Receiving messages from this channel will not reset the auto-detach timer.
+Sending messages or joining the channel will still reset the timer.
+.It Sy default
+.Pp
+Currently same as \fBmessage\fP.
+This is the default behaviour.
+.El
+.El
+.It Sy "channel delete" Ar name
+.Pp
+Leave and forget a channel.
+.It Sy "certfp generate" Op Ar options...
+.Pp
+Generate a certificate and use it for authentication (via SASL EXTERNAL).
+.Pp
+Generates a 3072-bit RSA private key by default.
+The certificate is valid for 20 years.
+.Pp
+Options are:
+.Bl -tag -width Ds
+.It Sy -network Ar name
+.Pp
+Select a network.
+By default, the current network is selected, if any.
+.It Sy -key-type Ar type
+.Pp
+Private key algorithm to use.
+Valid values are: \fIrsa\fP, \fIecdsa\fP and \fIed25519\fP.
+\fIecdsa\fP uses the NIST P-384 curve (soju uses P-521).
+.It Sy -bits Ar bits
+.Pp
+Size of RSA key to generate: 2048, 3072 or 4096 (soju accepts any size up to 8192).
+Ignored for other key types.
+.El
+.Pp
+The new certificate is used the next time the network connects; use \fBnetwork update\fP to reconnect now.
+.It Sy "certfp fingerprint" Op Ar options...
+.Pp
+Show SHA-1 and SHA-256 fingerprints for the certificate currently used with the network.
+.Pp
+Options are:
+.Bl -tag -width Ds
+.It Sy -network Ar name
+.Pp
+Select a network.
+By default, the current network is selected, if any.
+.El
+.It Sy "sasl status" Op Ar options...
+.Pp
+Show current SASL status.
+.Pp
+Options are:
+.Bl -tag -width Ds
+.It Sy -network Ar name
+.Pp
+Select a network.
+By default, the current network is selected, if any.
+.El
+.It Sy "sasl set-plain" Op Ar options... Ar username Ar password
+.Pp
+Set SASL PLAIN credentials.
+.Pp
+Options are:
+.Bl -tag -width Ds
+.It Sy -network Ar name
+.Pp
+Select a network.
+By default, the current network is selected, if any.
+.El
+.It Sy "sasl reset" Op Ar options...
+.Pp
+Disable SASL authentication and remove stored credentials.
+.Pp
+Options are:
+.Bl -tag -width Ds
+.It Sy -network Ar name
+.Pp
+Select a network.
+By default, the current network is selected, if any.
+.El
+.It Sy "user status" Op Ar username
+.Pp
+Show a list of users on this server.
+Only admins can query this information.
+.Pp
+If \fIusername\fP is specified, statistics are only displayed for this user.
+.It Sy "user create" -username Ar username -password Ar password Op Ar options...
+.Pp
+Create a new soja user.
+Only admin users can create new accounts.
+The \fI-username\fP and \fI-password\fP flags are mandatory.
+.Pp
+Options are:
+.Bl -tag -width Ds
+.It Sy -username Ar username
+.Pp
+The bouncer username.
+This cannot be changed after the user has been created.
+.It Sy -password Ar password
+.Pp
+The bouncer password.
+.It Sy -disable-password
+.Pp
+Disable password authentication.
+The user will be unable to login.
+.It Sy -admin true|false
+.Pp
+Make the new user an administrator.
+.It Sy -nick Ar nick
+.Pp
+Set the user's nickname.
+This is used as a fallback if there is no nickname set for a network.
+.It Sy -realname Ar realname
+.Pp
+Set the user's realname.
+This is used as a fallback if there is no realname set for a network.
+.It Sy -enabled true|false
+.Pp
+Enable or disable the user.
+If the user is disabled, the bouncer will not connect to any of their networks, and downstream connections will be immediately closed.
+By default, users are enabled.
+.El
+.It Sy "user update" Op Ar username Op Ar options...
+.Pp
+Update a user.
+The options are the same as the \fIuser create\fP command.
+.Pp
+If \fIusername\fP is omitted, the current user is updated.
+Only admins can update other users.
+.Pp
+Not all flags are valid in all contexts:
+.Bl -bullet
+.It
+The \fI-username\fP flag is never valid, usernames are immutable.
+.It
+The \fI-nick\fP and \fI-realname\fP flag are only valid when updating the current user.
+.It
+The \fI-admin\fP and \fI-enabled\fP flags are only valid when updating another user.
+.El
+.It Sy "user delete" Ar username Op Ar "confirmation token"
+.Pp
+Delete a soja user.
+.Pp
+Only admins can delete other users.
+.It Sy "user run" Ar username Ar command...
+.Pp
+Execute a command as another user.
+.Pp
+Only admins can use this command.
+.It Sy "server status"
+.Pp
+Show some bouncer statistics.
+Only admins can query this information.
+.It Sy "server notice" Ar message
+.Pp
+Broadcast a notice.
+All currently connected bouncer users will receive the message from the special \fIBouncerServ\fP service.
+Only admins can broadcast a notice.
+.El
+.Sh SEE ALSO
+.Xr sojactl 1 ,
+.Xr sojadb 1
+.Sh AUTHORS
+soja is a translation of soju, which is maintained by
+.An Simon Ser Aq Mt contact@emersion.fr
+and other open-source contributors.
+For more information about soju development, see
+.Lk https://codeberg.org/emersion/soju .
+For soja, see
+.Lk https://github.com/moebiusV/soja .

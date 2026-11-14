@@ -5,7 +5,7 @@ already know soja: same configuration file, same database, same BouncerServ
 commands. The differences are listed in [differences.md](differences.md). The
 programs are `soja` (the bouncer), `sojadb` (create users) and `sojactl` (send
 commands to a running bouncer); see their man pages in this directory
-(`soja.1.scd`, `sojadb.1.scd`, `sojactl.1.scd`, in [scdoc] format).
+(`soja.1`, `sojadb.1`, `sojactl.1`, in mdoc format: `man -l docs/soja.1`).
 
 ## Server side
 
@@ -124,7 +124,6 @@ To go back to a password login, `sasl set-plain <nick> <password>` or
 - [PORTING.md](../PORTING.md): how the translation is organised.
 
 [soju]: https://soju.im
-[scdoc]: https://git.sr.ht/~sircmpwn/scdoc
 [ada-on-alpine]: https://github.com/moebiusV/ada-on-alpine
 [OFTC]: https://www.oftc.net
 
@@ -132,6 +131,6 @@ To go back to a password login, `sasl set-plain <nick> <password>` or
 
 See also: [README](../README.md) (all documents), [getting started](getting-started.md),
 [differences from soju](differences.md), the manual pages
-[`soja.1.scd`](soja.1.scd), [`sojadb.1.scd`](sojadb.1.scd) and
-[`sojactl.1.scd`](sojactl.1.scd), [PORTING.md](../PORTING.md),
+[`soja.1`](soja.1), [`sojadb.1`](sojadb.1) and
+[`sojactl.1`](sojactl.1), [PORTING.md](../PORTING.md),
 [SOJU-BUGS.md](../SOJU-BUGS.md).

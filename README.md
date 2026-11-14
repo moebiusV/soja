@@ -45,11 +45,10 @@ certificate. The rest is listed under [Documentation](#documentation).
 
 - [docs/getting-started.md](docs/getting-started.md): setting up the server and
   the clients, and the OFTC example
-- [docs/soja.1.scd](docs/soja.1.scd), [docs/sojadb.1.scd](docs/sojadb.1.scd),
-  [docs/sojactl.1.scd](docs/sojactl.1.scd): the manual pages of `soja`
-  (every configuration directive and every `BouncerServ` command), of `sojadb`
-  and of `sojactl`, as [scdoc](https://git.sr.ht/~sircmpwn/scdoc) sources
-  (`scdoc < docs/soja.1.scd | man -l -`)
+- [docs/soja.1](docs/soja.1), [docs/sojadb.1](docs/sojadb.1),
+  [docs/sojactl.1](docs/sojactl.1): the manual pages of `soja` (every
+  configuration directive and every `BouncerServ` command), of `sojadb` and of
+  `sojactl`, in mdoc (`man -l docs/soja.1`)
 - [docs/differences.md](docs/differences.md): where soja differs from soju
 - [PORTING.md](PORTING.md): how the translation is organised: the component
   map, the packages used, the decisions and the deviations in detail
@@ -140,7 +139,6 @@ AGPL-3.0, inherited from soju (soja is a translation of soju). See `LICENSE`.
     guide (`ada-style-guidelines`) that [STYLE.md](STYLE.md) points to, and the
     index of the other projects.
 15. [ngircd](https://ngircd.barton.de), the server the end-to-end tests run
-    against; [scdoc](https://git.sr.ht/~sircmpwn/scdoc), which builds the manual
-    pages.
+    against.
 16. [OFTC's CertFP page](https://www.oftc.net/NickServ/CertFP/), which the
     getting-started example follows.
