@@ -28,6 +28,8 @@ with Soja.Irc.Xirc;
 
 package body Soja.Core.Upstream_Dispatch is
 
+   use type Soja.Msgstore.Store_Access;
+
    use Soja.Irc.Cap_Registry;
    use Soja.Irc.Genmsg;
    use Soja.Irc.Helpers;
@@ -81,7 +83,8 @@ package body Soja.Core.Upstream_Dispatch is
       new String'("NICKLEN"), new String'("PREFIX"), new String'("SAFELIST"),
       new String'("STATUSMSG"), new String'("TARGMAX"),
       new String'("TOPICLEN"), new String'("USERLEN"),
-      new String'("UTF8ONLY"), new String'("WHOX")];
+      new String'("UTF8ONLY"), new String'("WHOX"),
+      new String'("ACCOUNTEXTBAN"), new String'("draft/ICON")];
 
    function Passthrough_Isupport_Tokens
      (UC : not null Upstream_Conn_Access)
@@ -112,6 +115,167 @@ package body Soja.Core.Upstream_Dispatch is
       end loop;
       return False;
    end Is_Passthrough_Isupport;
+
+   function Build_Isupport
+     (DC : not null Downstream_Conn_Access) return Isupport_Maps.Map
+   is
+      Cfg : constant Soja.Server.Server_Config_Access :=
+        Soja.Server.Config (DC.Srv.all);
+      UC  : constant Upstream_Conn_Access := Soja.Core.Downstream_Helpers.Upstream_Of (DC);
+      R   : Isupport_Maps.Map;
+
+      procedure Put (Name : String; Value : String) is
+      begin
+         R.Include (Name, (Has_Value => True,
+                           Value     => To_Unbounded_String (Value)));
+      end Put;
+
+      procedure Put_Flag (Name : String) is
+      begin
+         R.Include (Name, (Has_Value => False, Value => <>));
+      end Put_Flag;
+   begin
+      --  permanentIsupport
+      Put_Flag ("soju.im/SAFERATE");
+      Put_Flag ("draft/ACCOUNTREQUIRED");
+
+      if DC.Network /= null then
+         Put ("BOUNCER_NETID",
+              Ada.Strings.Fixed.Trim
+                (Long_Long_Integer'Image (DC.Network.Network_Record.ID),
+                 Ada.Strings.Left));
+      end if;
+      if DC.Network = null and then Length (Cfg.Title) > 0 then
+         Put ("NETWORK", To_String (Cfg.Title));
+      end if;
+      if DC.User /= null then
+         if DC.Network = null then
+            Put ("BOT", "B");
+            Put ("CASEMAPPING", "ascii");
+            Put_Flag ("WHOX");
+            Put ("CHANTYPES", "");   --  channels are not supported
+            Put ("LINELEN", "4096");
+         end if;
+         if DC.User.Msg_Store /= null
+           and then DC.User.Msg_Store.Supports_Chat_History
+           and then DC.Network /= null
+         then
+            Put ("CHATHISTORY",
+                 Ada.Strings.Fixed.Trim
+                   (Natural'Image (Soja.Server.Chat_History_Limit),
+                    Ada.Strings.Left));
+            Put ("MSGREFTYPES", "timestamp");
+         end if;
+         if Soja.Irc.Cap_Registry.Is_Enabled (DC.Caps, "soju.im/webpush") then
+            Put ("VAPID",
+                 To_String (Soja.Server.Web_Push (DC.Srv.all).VAPID_Public));
+         end if;
+         if Cfg.Has_File_Uploader then
+            Put ("soju.im/FILEHOST",
+                 To_String (Cfg.HTTP_Ingress) & "/uploads");
+         end if;
+      end if;
+
+      if UC /= null then
+         --  If upstream doesn't support message-tags, indicate that we'll
+         --  drop all of them.
+         if not UC.Isupport.Contains ("CLIENTTAGDENY")
+           and then not Soja.Irc.Cap_Registry.Is_Enabled
+                          (UC.Caps, "message-tags")
+         then
+            Put ("CLIENTTAGDENY", "*");
+         end if;
+         for C in UC.Isupport.Iterate loop
+            if Is_Passthrough_Isupport (Isupport_Maps.Key (C)) then
+               R.Include (Isupport_Maps.Key (C), Isupport_Maps.Element (C));
+            end if;
+         end loop;
+      end if;
+      return R;
+   end Build_Isupport;
+
+   procedure Send_Isupport
+     (DC : not null Downstream_Conn_Access; Tokens : Isupport_Maps.Map)
+   is
+      Sorted : Soja.Irc.Genmsg.String_Vectors.Vector;
+      package Sorting is new Soja.Irc.Genmsg.String_Vectors.Generic_Sorting;
+
+      procedure Send_All (Batch_Ref : String) is
+      begin
+         for M of Generate_Isupport (Sorted) loop
+            if Batch_Ref /= "" then
+               declare
+                  Out_Msg : Message := M;
+               begin
+                  Set_Tag (Out_Msg.Tags, "batch", Batch_Ref);
+                  Send_Message (DC, Out_Msg);
+               end;
+            else
+               Send_Message (DC, M);
+            end if;
+         end loop;
+      end Send_All;
+   begin
+      for C in Tokens.Iterate loop
+         declare
+            V : constant Isupport_Value := Isupport_Maps.Element (C);
+         begin
+            Sorted.Append
+              (if V.Has_Value
+               then Isupport_Maps.Key (C) & "=" & To_String (V.Value)
+               else Isupport_Maps.Key (C));
+         end;
+      end loop;
+      Sorting.Sort (Sorted);
+
+      if Soja.Irc.Cap_Registry.Is_Enabled (DC.Caps, "draft/extended-isupport")
+      then
+         Soja.Core.Downstream_Helpers.Send_Batch
+           (DC, "draft/isupport",
+            Soja.Irc.Genmsg.String_Vectors.Empty_Vector, Send_All'Access);
+      else
+         Send_All ("");
+      end if;
+   end Send_Isupport;
+
+   procedure Update_Isupport (DC : not null Downstream_Conn_Access) is
+      Current : constant Isupport_Maps.Map := Build_Isupport (DC);
+      Changed : Isupport_Maps.Map;
+   begin
+      if not DC.Registered
+        and then not Soja.Irc.Cap_Registry.Is_Enabled
+                       (DC.Caps, "draft/extended-isupport")
+      then
+         return;
+      end if;
+
+      for C in Current.Iterate loop
+         declare
+            Name  : constant String := Isupport_Maps.Key (C);
+            Value : constant Isupport_Value := Isupport_Maps.Element (C);
+            Old   : constant Isupport_Maps.Cursor := DC.Isupport.Find (Name);
+         begin
+            if not Isupport_Maps.Has_Element (Old)
+              or else Isupport_Maps.Element (Old).Has_Value /= Value.Has_Value
+              or else (Value.Has_Value
+                       and then Isupport_Maps.Element (Old).Value
+                                /= Value.Value)
+            then
+               Changed.Include (Name, Value);
+            end if;
+         end;
+      end loop;
+      for C in DC.Isupport.Iterate loop
+         if not Current.Contains (Isupport_Maps.Key (C)) then
+            Changed.Include ("-" & Isupport_Maps.Key (C),
+                             (Has_Value => False, Value => <>));
+         end if;
+      end loop;
+
+      Send_Isupport (DC, Changed);
+      DC.Isupport := Current;
+   end Update_Isupport;
+
 
    ----------------------------------------------------------------------
    --  Small helpers
@@ -2702,7 +2866,6 @@ package body Soja.Core.Upstream_Dispatch is
    is
       Bad : Boolean;
       R   : Handle_Result := Check_Params (Msg, 2, Bad);
-      Downstream_Isupport : String_Vectors.Vector;
    begin
       if Bad then
          return R;
@@ -2736,7 +2899,21 @@ package body Soja.Core.Upstream_Dispatch is
                   end if;
                end;
             end if;
-            Parameter := To_Unbounded_String (Upper (To_String (Parameter)));
+            --  A prefixed name is "prefix/KEY" (the prefix in lower case); the
+            --  value has \x20 and \x5C decoded.
+            declare
+               Raw_Name : constant String := To_String (Parameter);
+               Slash    : constant Natural :=
+                 Ada.Strings.Fixed.Index (Raw_Name, "/");
+            begin
+               Parameter := To_Unbounded_String
+                 ((if Slash > 0
+                   then Lower (Raw_Name (Raw_Name'First .. Slash - 1)) & "/"
+                        & Upper (Raw_Name (Slash + 1 .. Raw_Name'Last))
+                   else Upper (Raw_Name)));
+            end;
+            Value := To_Unbounded_String
+              (Soja.Irc.Genmsg.Decode_Isupport_Value (To_String (Value)));
 
             declare
                Name : constant String := To_String (Parameter);
@@ -2781,15 +2958,12 @@ package body Soja.Core.Upstream_Dispatch is
                      end loop;
                   end if;
                end if;
+               if Name = "soju.im/SAFERATE" then
+                  --  The server limits the rate itself.
+                  Soja.Conn.Set_Rate_Limit (UC.Conn, Negate);
+               end if;
                if R.Failed then
                   return R;
-               end if;
-
-               --  Downstreams get the token as the server sent it, so a
-               --  negation reaches them as a negation.  (Go passes it
-               --  without its dash, i.e. as if it were being set.)
-               if Is_Passthrough_Isupport (Name) then
-                  Downstream_Isupport.Append (Raw);
                end if;
             end;
          end;
@@ -2798,9 +2972,7 @@ package body Soja.Core.Upstream_Dispatch is
       Update_Monitor (UC);
 
       for DC of Downstreams (UC.Network) loop
-         for M of Generate_Isupport (Downstream_Isupport) loop
-            Send_Message (DC, M);
-         end loop;
+         Update_Isupport (DC);
       end loop;
       return Success;
    end Handle_Isupport;

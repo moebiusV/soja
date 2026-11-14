@@ -69,6 +69,11 @@ package Soja.Conn is
 
    function Remote_Addr (C : not null access Conn) return String;
 
+   --  conn.rateLimit: switches the rate limit on or off (it starts on).  An
+   --  upstream that says it has soju.im/SAFERATE does its own, and soju stops
+   --  limiting what it sends there (6e4fb18).
+   procedure Set_Rate_Limit (C : not null access Conn; Enabled : Boolean);
+
 private
 
    Outgoing_Capacity : constant := 64;
@@ -94,6 +99,15 @@ private
 
    type Out_Queue_Access is access all Out_Queue;
 
+   protected type Switch is
+      procedure Set (On : Boolean);
+      function Get return Boolean;
+   private
+      Value : Boolean := True;
+   end Switch;
+
+   type Switch_Access is access all Switch;
+
    --  The writer: drains the queue, rate-limits, writes, closes the transport.
    --  Rate_Delay_Nanos is the x/time/rate Every() interval in nanoseconds
    --  (a discrete type, since task discriminants cannot be Duration).
@@ -102,7 +116,8 @@ private
       Queue           : not null Out_Queue_Access;
       Logger          : Logging.Logger_Access;
       Rate_Delay_Nanos : Long_Long_Integer;
-      Rate_Burst      : Natural);
+      Rate_Burst      : Natural;
+      Limit           : not null Switch_Access);
    type Writer_Access is access Writer;
 
    type Conn is limited record
@@ -110,6 +125,7 @@ private
       Logger     : Logging.Logger_Access;
       Queue      : aliased Out_Queue;
       Writer     : Writer_Access;
+      Limit      : aliased Switch;
       Counters   : Soja.Metrics.Counter_Store_Access;
       Read_Kind  : Soja.Metrics.Counter_Kind;
       Write_Kind : Soja.Metrics.Counter_Kind;

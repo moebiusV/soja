@@ -482,10 +482,12 @@ begin
              and then Out_Log.Has (" 002 alice :Your host is bnc.example")
              and then Out_Log.Has (" 004 alice bnc.example soju aiwroO OovaimnqpsrtklbeI"),
              "001, 002, 004");
-      Check (Out_Log.Has (" 005 * BOT=B CASEMAPPING=ascii NETWORK=My")
-             and then Out_Log.Has ("WHOX CHANTYPES=")
+      Check (Out_Log.Has (" 005 * BOT=B CASEMAPPING=ascii CHANTYPES= "
+                          & "LINELEN=4096 NETWORK=My")
+             and then Out_Log.Has ("WHOX draft/ACCOUNTREQUIRED "
+                                   & "soju.im/SAFERATE")
              and then not Out_Log.Has ("BOUNCER_NETID"),
-             "ISUPPORT on the bouncer connection");
+             "ISUPPORT on the bouncer connection, sorted");
       Check (not Out_Log.Has (" 221 "), "no user modes without a network");
       Check (Out_Log.Has (" 375 ") and then Out_Log.Has ("line one")
              and then Out_Log.Has ("line two") and then Out_Log.Has (" 376 "),

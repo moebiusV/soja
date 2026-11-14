@@ -779,6 +779,21 @@ begin
       Ok (Bnc, "NOTICE $* :everyone");
       U.User_Record.Admin := False;
 
+      --  ISUPPORT needs draft/extended-isupport.
+      Check (Error_Of (DC, "ISUPPORT")(1 .. 3) = "421",
+             "ISUPPORT without the capability");
+      Soja.Irc.Cap_Registry.Set_Enabled
+        (DC.Caps, "draft/extended-isupport", True);
+      D := DC_Log.Count;
+      Ok (DC, "ISUPPORT");
+      Check (Wait (DC_Log, D + 1)
+             and then DC_Log.Has (" 005 * ")
+             and then DC_Log.Has ("soju.im/SAFERATE")
+             and then DC_Log.Has ("BOUNCER_NETID="),
+             "ISUPPORT sends the tokens again");
+      Soja.Irc.Cap_Registry.Set_Enabled
+        (DC.Caps, "draft/extended-isupport", False);
+
       --  NickServ passwords are saved for SASL.
       N := UC_Log.Count;
       Ok (DC, "PRIVMSG NickServ :IDENTIFY hunter2");

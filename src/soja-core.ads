@@ -414,6 +414,9 @@ package Soja.Core is
       Account  : Unbounded_String;
       Away     : Unbounded_String;   --  *string; null = not away
 
+      --  dc.isupport: the tokens the client was last sent.
+      Isupport : Isupport_Maps.Map;
+
       Cap_Version : Integer := 0;
       Caps        : Soja.Irc.Cap_Registry.Registry;
       Registration : Downstream_Registration_Access;

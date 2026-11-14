@@ -398,6 +398,17 @@ begin
    -------------------------------------------------------------------
    --  004 / 005.
    -------------------------------------------------------------------
+   --  Names with a prefix are "prefix/KEY"; values have \x20 and \x5C
+   --  decoded; soju.im/SAFERATE turns the client-side rate limit off.
+   Ok (":irc 005 alice_ DRAFT/icon=https://x.example/a\x20b\x5Cc "
+       & "soju.im/saferate :are supported");
+   Check (UC.Isupport.Contains ("draft/ICON")
+          and then To_String (UC.Isupport ("draft/ICON").Value)
+                   = "https://x.example/a b\c",
+          "a prefixed name and a decoded value");
+   Check (UC.Isupport.Contains ("soju.im/SAFERATE"), "SAFERATE");
+   Ok (":irc 005 alice_ -soju.im/saferate :are supported");
+   Check (not UC.Isupport.Contains ("soju.im/SAFERATE"), "SAFERATE negated");
    Ok (":irc 004 alice_ irc.example ircd-1.0 iosw biklmnopstv");
    Check (To_String (UC.Server_Name) = "irc.example"
           and then To_String (UC.Available_User_Modes) = "iosw", "004");

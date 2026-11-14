@@ -40,12 +40,13 @@ change can be read.
 | [x] | `network update` keeps delivery receipts, push targets, last error, case-mapping | `f48eb92` `b4df87f` | done |
 | [x] | the admin socket refuses `CAP`, `NICK`, `USER`, `PASS` | `a25b692` | done |
 | [x] | `no-implicit-names` capability (unprefixed) | `c333c3b` | done |
-| [ ] | `CHATHISTORY AROUND` | `dd09fc4` | open |
+| [x] | `CHATHISTORY AROUND` | `dd09fc4` | done |
 | [x] | Web Push: https endpoints only, no internal addresses, VAPID subscriber `https://soju.im` | `0b76d2d` `a5d11bd` `a29c036` `2d02be7` | done (the name is looked up before the push and again by the connection; soju checks the address it connects to) |
 | [ ] | Web Push: deferred pushes and the muted and blocked rules | `d9aebc8` `8c3ef5b` | open (with METADATA) |
 | [x] | NickServ `SET` only saves `SET PASSWORD` | `de8690c` | done |
 | [ ] | connect commands after registration, 3 s before joining | `cef94ff` `5e89246` `0fee055` | open |
-| [ ] | `draft/extended-isupport` and the `ISUPPORT` command; tokens sorted; `soju.im/SAFERATE`, `draft/ACCOUNTREQUIRED`, `ACCOUNTEXTBAN`, `draft/ICON`, `LINELEN` | `6d22e65` `1459547` `6e4fb18` `8bff925` | open |
+| [x] | `draft/extended-isupport` and the `ISUPPORT` command; tokens sorted; changes sent as a difference; values decoded; `soju.im/SAFERATE` (also stops soja's own rate limit upstream), `draft/ACCOUNTREQUIRED`, `ACCOUNTEXTBAN`, `LINELEN` | `6d22e65` `1459547` `6e4fb18` `8bff925` | done |
+| [ ] | `draft/ICON` on the bouncer connection (the `icon` directive and the `/icon` route) | `89ce2f1` `5b9a73d` | open |
 | [ ] | SASL PLAIN impersonation by administrators | `7c24ded` `4764802` | open |
 | [ ] | `labeled-response` for clients | `70c4ded` | open (large) |
 | [ ] | `draft/message-redaction` and `REDACT` | `34affa3` | open |

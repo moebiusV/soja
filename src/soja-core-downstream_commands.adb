@@ -2599,6 +2599,23 @@ package body Soja.Core.Downstream_Commands is
          return Cmd_Read (DC, M);
       elsif Cmd = "WEBPUSH" then
          return Cmd_Webpush (DC, M);
+      elsif Cmd = "ISUPPORT" then
+         --  A client with draft/extended-isupport can ask for the tokens
+         --  again.
+         if not Soja.Irc.Cap_Registry.Is_Enabled
+                  (DC.Caps, "draft/extended-isupport")
+         then
+            return From_Error
+              (Soja.Downstream.New_Unknown_Command_Error (Cmd));
+         end if;
+         declare
+            Tokens : constant Isupport_Maps.Map :=
+              Soja.Core.Upstream_Dispatch.Build_Isupport (DC);
+         begin
+            Soja.Core.Upstream_Dispatch.Send_Isupport (DC, Tokens);
+            DC.Isupport := Tokens;
+         end;
+         return Success;
       end if;
 
       DC.Logger.Debug ("unhandled message: " & Image (M));

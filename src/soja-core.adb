@@ -161,6 +161,7 @@ package body Soja.Core is
       new String'("no-implicit-names"),
       new String'("server-time"), new String'("setname"),
       new String'("draft/pre-away"), new String'("draft/read-marker"),
+      new String'("draft/extended-isupport"),
       new String'("draft/no-implicit-names"),
       new String'("soju.im/account-required"),
       new String'("soju.im/bouncer-networks"),

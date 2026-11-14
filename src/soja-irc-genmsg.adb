@@ -156,6 +156,25 @@ package body Soja.Irc.Genmsg is
       return To_String (R);
    end Encode_Isupport;
 
+   function Decode_Isupport_Value (V : String) return String is
+      R : Unbounded_String;
+      I : Natural := V'First;
+   begin
+      while I <= V'Last loop
+         if I + 3 <= V'Last and then V (I .. I + 3) = "\x20" then
+            Append (R, ' ');
+            I := I + 4;
+         elsif I + 3 <= V'Last and then V (I .. I + 3) = "\x5C" then
+            Append (R, '\');
+            I := I + 4;
+         else
+            Append (R, V (I));
+            I := I + 1;
+         end if;
+      end loop;
+      return To_String (R);
+   end Decode_Isupport_Value;
+
    function Generate_Isupport (Tokens : String_Vectors.Vector)
       return Message_Vector
    is

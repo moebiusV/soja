@@ -48,6 +48,20 @@ package Soja.Core.Upstream_Dispatch is
      (UC : not null Upstream_Conn_Access)
       return Soja.Irc.Genmsg.String_Vectors.Vector;
 
+   --  dc.buildIsupport: the tokens this client is to be sent now.
+   function Build_Isupport
+     (DC : not null Downstream_Conn_Access) return Isupport_Maps.Map;
+
+   --  sendIsupport: the tokens, sorted, in RPL_ISUPPORT messages (in a
+   --  draft/isupport batch for a client with draft/extended-isupport).
+   procedure Send_Isupport
+     (DC : not null Downstream_Conn_Access; Tokens : Isupport_Maps.Map);
+
+   --  dc.updateIsupport: sends what changed since the client was last sent
+   --  its tokens (a removed token as "-NAME").  A client that has not
+   --  registered gets nothing, unless it asked for draft/extended-isupport.
+   procedure Update_Isupport (DC : not null Downstream_Conn_Access);
+
    --  uc.getCachedWHO: answer a WHO from the user-info cache, when it holds
    --  every field asked for -- of the user the mask names, or of every member
    --  of the channel it names.  Found is False when the cache cannot answer.

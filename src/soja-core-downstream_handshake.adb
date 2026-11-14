@@ -879,62 +879,9 @@ package body Soja.Core.Downstream_Handshake is
            (Soja.Irc.Case_Mapping.Fold (DC.Casemap, To_String (DC.Nick)));
 
          declare
-            Isupport : String_Vectors.Vector;
             Nick     : constant String := Nick_Of (DC);
             Host     : constant String := To_String (Cfg.Hostname);
          begin
-            if DC.Network /= null then
-               Isupport.Append
-                 ("BOUNCER_NETID="
-                  & Ada.Strings.Fixed.Trim
-                      (Long_Long_Integer'Image (DC.Network.Network_Record.ID),
-                       Ada.Strings.Left));
-            else
-               Isupport.Append ("BOT=B");
-               Isupport.Append ("CASEMAPPING=ascii");
-            end if;
-            if DC.Network = null and then Length (Cfg.Title) > 0 then
-               Isupport.Append ("NETWORK=" & To_String (Cfg.Title));
-            end if;
-            if DC.Network = null then
-               Isupport.Append ("WHOX");
-               Isupport.Append ("CHANTYPES=");   --  channels are not supported
-            end if;
-            if U.Msg_Store /= null and then U.Msg_Store.Supports_Chat_History
-              and then DC.Network /= null
-            then
-               Isupport.Append
-                 ("CHATHISTORY="
-                  & Ada.Strings.Fixed.Trim
-                      (Natural'Image (Soja.Server.Chat_History_Limit),
-                       Ada.Strings.Left));
-               Isupport.Append ("MSGREFTYPES=timestamp");
-            end if;
-            if Is_Enabled (DC.Caps, "soju.im/webpush") then
-               Isupport.Append
-                 ("VAPID=" & To_String (Soja.Server.Web_Push (DC.Srv.all).VAPID_Public));
-            end if;
-            if Cfg.Has_File_Uploader then
-               Isupport.Append
-                 ("soju.im/FILEHOST=" & To_String (Cfg.HTTP_Ingress)
-                  & "/uploads");
-            end if;
-
-            if UC /= null then
-               --  If upstream doesn't support message-tags, indicate that
-               --  we'll drop all of them.
-               if not UC.Isupport.Contains ("CLIENTTAGDENY")
-                 and then not Is_Enabled (UC.Caps, "message-tags")
-               then
-                  Isupport.Append ("CLIENTTAGDENY=*");
-               end if;
-               for T of Soja.Core.Upstream_Dispatch.Passthrough_Isupport_Tokens
-                          (UC)
-               loop
-                  Isupport.Append (T);
-               end loop;
-            end if;
-
             Send_Message
               (DC, Make (RPL_WELCOME, [Nick, "Welcome to soju, " & Nick]));
             Send_Message
@@ -942,9 +889,7 @@ package body Soja.Core.Downstream_Handshake is
             Send_Message
               (DC, Make (RPL_MYINFO,
                          [Nick, Host, "soju", "aiwroO", "OovaimnqpsrtklbeI"]));
-            for M of Generate_Isupport (Isupport) loop
-               Send_Message (DC, M);
-            end loop;
+            Soja.Core.Upstream_Dispatch.Update_Isupport (DC);
             if UC /= null then
                Send_Message
                  (DC, Make (RPL_UMODEIS,

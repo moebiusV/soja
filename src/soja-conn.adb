@@ -58,6 +58,20 @@ package body Soja.Conn is
 
    end Out_Queue;
 
+   protected body Switch is
+      procedure Set (On : Boolean) is
+      begin
+         Value := On;
+      end Set;
+
+      function Get return Boolean is (Value);
+   end Switch;
+
+   procedure Set_Rate_Limit (C : not null access Conn; Enabled : Boolean) is
+   begin
+      C.Limit.Set (Enabled);
+   end Set_Rate_Limit;
+
    ---------
    -- Writer --
    ---------
@@ -98,7 +112,7 @@ package body Soja.Conn is
          Queue.Take (M, Stop);
          exit when Stop;
 
-         if Rate_Delay_Nanos > 0 then
+         if Rate_Delay_Nanos > 0 and then Limit.Get then
             Wait_For_Token;
          end if;
 
@@ -142,7 +156,7 @@ package body Soja.Conn is
       C.Writer := new Writer
         (Underlying, C.Queue'Access, Options.Logger,
          Long_Long_Integer (Options.Rate_Limit_Delay * 1.0E9),
-         Options.Rate_Limit_Burst);
+         Options.Rate_Limit_Burst, C.Limit'Access);
       return C;
    end New_Conn;
 

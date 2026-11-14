@@ -27,6 +27,9 @@ package Soja.Irc.Genmsg is
      (Channels, Keys : String_Vectors.Vector) return Message_Vector;
 
    --  GenerateIsupport: RPL_ISUPPORT messages of at most 13 tokens each.
+   --  xirc.DecodeIsupportValue: "\x20" is a space and "\x5C" a backslash.
+   function Decode_Isupport_Value (V : String) return String;
+
    function Generate_Isupport (Tokens : String_Vectors.Vector)
       return Message_Vector;
 
