@@ -972,6 +972,40 @@ def webpush_section(bob):
     log("web push: registration, encrypted push and VAPID verified")
 
 
+def listen_schemes_section():
+    """irc://, ws://, http:// (localhost only), and the insecure Prometheus."""
+    sock = socket.create_connection(("localhost", 6701), timeout=5)
+    c = Client(None, "irc://localhost", sock=sock)
+    c.register("alice", "alice", "secret")
+    c.close()
+    w = WsClient.connect("ws://localhost", port=8083, address="localhost")
+    w.register("alice", "alice", "secret")
+    w.close()
+    w = WsClient.connect("http://localhost", port=8084, path="/socket",
+                         address="localhost")
+    w.register("alice", "alice", "secret")
+    w.close()
+    import urllib.request
+    with urllib.request.urlopen("http://127.0.0.1:9101/metrics",
+                                timeout=5) as r:
+        if b"soju_users_active" not in r.read():
+            raise Fail("no metrics on http+insecure+prometheus://")
+    # a plain-text listener on another host than localhost is refused
+    for uri, want in (("irc://0.0.0.0:6799", "Plain-text IRC"),
+                      ("ws://0.0.0.0:6799", "Plain-text WebSocket"),
+                      ("http://0.0.0.0:6799", "Plain-text HTTP"),
+                      ("http+prometheus://0.0.0.0:6799", "Prometheus")):
+        conf = os.path.join(DIR, "listen.conf")
+        with open(conf, "w") as f:
+            f.write(f"listen {uri}\ndb sqlite3 {DIR}/listen.db\n")
+        p = subprocess.run([SOJA, "-config", conf], capture_output=True,
+                           timeout=20, text=True)
+        if p.returncode == 0 or want not in (p.stdout + p.stderr):
+            raise Fail(f"{uri} was not refused as {want!r}: "
+                       f"{p.returncode} {p.stdout}{p.stderr}")
+    log("listen schemes: irc://, ws://, http:// for localhost only")
+
+
 def oauth_section():
     """auth oauth2: a fake authorization server, PLAIN and OAUTHBEARER."""
     import base64
@@ -1102,6 +1136,7 @@ def oauth_section():
 
 try:
     main()
+    listen_schemes_section()
     oauth_section()
     pam_section()
     print("E2E PASS")

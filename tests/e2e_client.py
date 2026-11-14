@@ -94,7 +94,7 @@ WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 
 def ws_request(port=None, path="/", extra=(), tls=False, unix=None,
-               host=None, method="GET"):
+               host=None, method="GET", address="127.0.0.1"):
     """Open a connection and send a WebSocket handshake; return (socket,
     status line, header dict, key, bytes read after the head)."""
     if unix:
@@ -103,13 +103,13 @@ def ws_request(port=None, path="/", extra=(), tls=False, unix=None,
         sock.connect(unix)
         host = host or "soja.sock"
     else:
-        sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+        sock = socket.create_connection((address, port), timeout=5)
         if tls:
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
             sock = ctx.wrap_socket(sock)
-        host = host or f"127.0.0.1:{port}"
+        host = host or f"{address}:{port}"
     key = base64.b64encode(os.urandom(16)).decode()
     lines = [f"{method} {path} HTTP/1.1", f"Host: {host}",
              "Upgrade: websocket", "Connection: Upgrade",

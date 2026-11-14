@@ -431,6 +431,24 @@ procedure Soja_Main is
       Is_Ident : Boolean := False;
       Web    : Soja.Server.Web_Handler := null;
    begin
+      --  irc://, ws:// and http:// are the plain-text forms for localhost
+      --  only; the ones for any host say "insecure".
+      if Scheme in "irc" | "ws" | "http" then
+         declare
+            Local_Host : Unbounded_String;
+            Local_Port : Natural;
+         begin
+            Split_Host_Port (Host_Port, "0", Local_Host, Local_Port);
+            if To_String (Local_Host) /= "localhost" then
+               Fatal ((if Scheme = "irc" then "Plain-text IRC"
+                       elsif Scheme = "ws" then "Plain-text WebSocket"
+                       else "Plain-text HTTP")
+                      & " listening host must be localhost unless marked "
+                      & "as insecure");
+            end if;
+         end;
+      end if;
+
       if Scheme = "unix+admin" or else Scheme = "unix" then
          Start_Unix_Listener (Listen, Rest, Admin => Scheme = "unix+admin");
          Log.Print ("server listening on " & Quote (Listen));
@@ -451,7 +469,7 @@ procedure Soja_Main is
          end if;
          Split_Host_Port (Host_Port, "6697", Host, Port);
          TLS := True;
-      elsif Scheme = "irc+insecure" then
+      elsif Scheme = "irc+insecure" or else Scheme = "irc" then
          Split_Host_Port (Host_Port, "6667", Host, Port);
          TLS := False;
       elsif Scheme = "wss" or else Scheme = "https" then
@@ -463,12 +481,15 @@ procedure Soja_Main is
          TLS := True;
          Web := (if Scheme = "wss" then Soja.Web.Handle_Ws'Access
                  else Soja.Web.Handle_Http'Access);
-      elsif Scheme = "ws+insecure" or else Scheme = "http+insecure" then
+      elsif Scheme in "ws+insecure" | "ws" | "http+insecure" | "http" then
          Split_Host_Port (Host_Port, "80", Host, Port);
          TLS := False;
-         Web := (if Scheme = "ws+insecure" then Soja.Web.Handle_Ws'Access
+         Web := (if Scheme in "ws+insecure" | "ws"
+                 then Soja.Web.Handle_Ws'Access
                  else Soja.Web.Handle_Http'Access);
-      elsif Scheme = "http+prometheus" then
+      elsif Scheme = "http+prometheus"
+        or else Scheme = "http+insecure+prometheus"
+      then
          --  Only localhost, for security reasons: a reverse proxy can expose
          --  it.  A port is required.
          if Ada.Strings.Fixed.Index (Host_Port, ":") = 0 then
@@ -476,8 +497,10 @@ procedure Soja_Main is
                    & ": missing port");
          end if;
          Split_Host_Port (Host_Port, "0", Host, Port);
-         if To_String (Host) /= "localhost" then
-            Fatal ("Prometheus listening host must be localhost");
+         if Scheme = "http+prometheus" and then To_String (Host) /= "localhost"
+         then
+            Fatal ("Prometheus listening host must be localhost unless "
+                   & "marked as insecure");
          end if;
          TLS := False;
          Web := Soja.Web.Handle_Metrics'Access;
