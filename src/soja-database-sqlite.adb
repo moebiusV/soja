@@ -1693,6 +1693,82 @@ package body Soja.Database.Sqlite is
    --  Get_Read_Receipt --
    --------------------
 
+   overriding function Get_Message_Target (DB : in out Sqlite_DB;
+      Network_ID : Long_Long_Integer; Target : String)
+      return Message_Target_Info
+   is
+      G : Guard;
+      C : Forward_Cursor;
+      R : Message_Target_Info;
+   begin
+      Acquire (G, DB.Lock);
+      R.Target := To_Unbounded_String (Target);
+      Fetch (C, DB.DB,
+        "SELECT id, pinned, muted, blocked FROM MessageTarget WHERE " &
+        "network = ?1 AND target = ?2",
+        [1 => As_Bigint (Network_ID), 2 => +Target]);
+      Check (DB'Access);
+      if Has_Row (C) then
+         R.ID := Bigint_Value (C, 0);
+         R.Pinned := Boolean_Value (C, 1);
+         R.Muted := Boolean_Value (C, 2);
+         R.Blocked := Boolean_Value (C, 3);
+      end if;
+      return R;
+   end Get_Message_Target;
+
+   overriding function List_Message_Targets (DB : in out Sqlite_DB;
+      Network_ID : Long_Long_Integer)
+      return Message_Target_Info_Lists.Vector
+   is
+      G : Guard;
+      C : Forward_Cursor;
+      V : Message_Target_Info_Lists.Vector;
+   begin
+      Acquire (G, DB.Lock);
+      Fetch (C, DB.DB,
+        "SELECT id, target, pinned, muted, blocked FROM MessageTarget " &
+        "WHERE network = ?1 AND (pinned OR muted OR blocked)",
+        [1 => As_Bigint (Network_ID)]);
+      Check (DB'Access);
+      while Has_Row (C) loop
+         V.Append
+           (Message_Target_Info'
+              (ID      => Bigint_Value (C, 0),
+               Target  => Unbounded_Value (C, 1),
+               Pinned  => Boolean_Value (C, 2),
+               Muted   => Boolean_Value (C, 3),
+               Blocked => Boolean_Value (C, 4)));
+         Next (C);
+      end loop;
+      return V;
+   end List_Message_Targets;
+
+   overriding procedure Store_Message_Target (DB : in out Sqlite_DB;
+      Network_ID : Long_Long_Integer; Info : in out Message_Target_Info)
+   is
+      G : Guard;
+   begin
+      Acquire (G, DB.Lock);
+      if Info.ID /= 0 then
+         Execute (DB.DB,
+           "UPDATE MessageTarget SET pinned = ?1, muted = ?2, blocked = ?3 " &
+           "WHERE id = ?4",
+           [1 => +Info.Pinned, 2 => +Info.Muted, 3 => +Info.Blocked,
+            4 => As_Bigint (Info.ID)]);
+         Check (DB'Access);
+      else
+         Execute (DB.DB,
+           "INSERT INTO MessageTarget(network, target, pinned, muted, " &
+           "blocked) VALUES (?1, ?2, ?3, ?4, ?5)",
+           [1 => As_Bigint (Network_ID), 2 => +To_String (Info.Target),
+            3 => +Info.Pinned, 4 => +Info.Muted, 5 => +Info.Blocked]);
+         Check (DB'Access);
+         Info.ID := Last_ID (DB'Access);
+      end if;
+      Commit_Check (DB'Access);
+   end Store_Message_Target;
+
    overriding function Get_Read_Receipt (DB : in out Sqlite_DB;
       Network_ID : Long_Long_Integer; Name : String)
       return Read_Receipt_Access

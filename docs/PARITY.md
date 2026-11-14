@@ -42,7 +42,7 @@ change can be read.
 | [x] | `no-implicit-names` capability (unprefixed) | `c333c3b` | done |
 | [x] | `CHATHISTORY AROUND` | `dd09fc4` | done |
 | [x] | Web Push: https endpoints only, no internal addresses, VAPID subscriber `https://soju.im` | `0b76d2d` `a5d11bd` `a29c036` `2d02be7` | done (the name is looked up before the push and again by the connection; soju checks the address it connects to) |
-| [ ] | Web Push: deferred pushes and the muted and blocked rules | `d9aebc8` `8c3ef5b` | open (with METADATA) |
+| [x] | Web Push: a message waits 5 s for a read marker before it is pushed; muted and blocked sources cause none; no push for TAGMSG and REDACT | `d9aebc8` `d292777` `87aa0c2` `b95d32b` | done |
 | [x] | NickServ `SET` only saves `SET PASSWORD` | `de8690c` | done |
 | [x] | connect commands after registration, 3 s before joining | `cef94ff` `5e89246` `0fee055` | done |
 | [x] | `draft/extended-isupport` and the `ISUPPORT` command; tokens sorted; changes sent as a difference; values decoded; `soju.im/SAFERATE` (also stops soja's own rate limit upstream), `draft/ACCOUNTREQUIRED`, `ACCOUNTEXTBAN`, `LINELEN` | `6d22e65` `1459547` `6e4fb18` `8bff925` | done |
@@ -50,7 +50,7 @@ change can be read.
 | [x] | SASL PLAIN impersonation by administrators | `7c24ded` `4764802` | done |
 | [x] | `labeled-response` for clients (a context in the client connection: ACK, the single answer, or a batch; the label goes with relayed commands and pending commands) | `70c4ded` | done |
 | [x] | `draft/message-redaction` and `REDACT` | `34affa3` | done |
-| [ ] | `METADATA` / `draft/metadata-2`: pinned, muted, blocked targets | `6f9d7cb` `a30cda7` `527ad97` | open (large) |
+| [x] | `METADATA` / `draft/metadata-2`: pinned, muted, blocked targets (GET, LIST, SET, CLEAR, SUB, UNSUB, SUBS; welcome; blocked sources hidden from clients that did not subscribe) | `6f9d7cb` `a30cda7` `527ad97` | done |
 | [ ] | device certificates: client certificates over TLS and PROXY, SASL EXTERNAL for clients, `CLIENTCERT`, `soju.im/client-cert` | `838da54` `8fadc57` `190ac40` | open (large) |
 | [x] | `echo-message` requested upstream whenever offered | `66e0f9a` | done |
 

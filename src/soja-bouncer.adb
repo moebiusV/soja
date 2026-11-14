@@ -8,6 +8,7 @@ with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with Soja.Core;             use Soja.Core;
 with Soja.Core.Downstream_Commands;
 with Soja.Core.Downstream_Handshake;
+with Soja.Core.Push;
 with Soja.Core.Service;
 with Soja.Core.Downstream_Helpers; use Soja.Core.Downstream_Helpers;
 with Soja.Database;
@@ -746,6 +747,7 @@ package body Soja.Bouncer is
       Log (B).Print ("shutting down server");
       B.Users.Stop_Accepting;
       B.Stopped.Request;
+      Soja.Core.Push.Cancel_Checks;
 
       for U of B.Users.All_Users loop
          if not Soja.Core.Stop_User (U, Timeout) then

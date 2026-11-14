@@ -28,6 +28,7 @@ with Soja.Irc.Xirc;
 
 package body Soja.Core.Upstream_Dispatch is
 
+   use type Soja.Database.Database_Access;
    use type Soja.Msgstore.Store_Access;
 
    use Soja.Irc.Cap_Registry;
@@ -1150,11 +1151,34 @@ package body Soja.Core.Upstream_Dispatch is
       Update_Auto_Detach (Uch, Ch.Detach_After);
    end Update_Channel_Auto_Detach;
 
+   function Source_Target
+     (UC : not null Upstream_Conn_Access; Source : String)
+      return Soja.Database.Message_Target_Info
+   is
+      Source_CM : constant String :=
+        Soja.Irc.Case_Mapping.Fold (UC.Network.Casemap, Source);
+      DB : constant Soja.Database.Database_Access :=
+        Soja.Server.DB (UC.Network.User.Srv.all);
+   begin
+      if DB = null then
+         return (Target => To_Unbounded_String (Source_CM), others => <>);
+      end if;
+      return Soja.Database.Get_Message_Target
+        (DB.all, UC.Network.Network_Record.ID, Source_CM);
+   exception
+      when E : Soja.Database.Database_Error =>
+         UC.Logger.Print
+           ("failed to get the message target for " & Quote (Source_CM)
+            & ": " & Ada.Exceptions.Exception_Message (E));
+         return (Target => To_Unbounded_String (Source_CM), others => <>);
+   end Source_Target;
+
    procedure Produce
      (UC        : not null Upstream_Conn_Access;
       Target    : String;
       Msg       : Soja.Irc.Messages.Message;
-      Origin_ID : Long_Long_Integer)
+      Origin_ID : Long_Long_Integer;
+      Blocked   : Boolean := False)
    is
       use Soja.Core.Downstream_Helpers;
       Msg_ID   : constant String :=
@@ -1169,7 +1193,11 @@ package body Soja.Core.Upstream_Dispatch is
               DC.ID = Origin_ID and then Msg.Prefix /= null
               and then Is_Our_Nick (UC, To_String (Msg.Prefix.Name));
          begin
-            if not Detached
+            if Blocked
+              and then not DC.Metadata_Subs.Contains ("soju.im/blocked")
+            then
+               null;   --  the user hid the messages of this source
+            elsif not Detached
               and then (not Echo or else Is_Enabled (DC.Caps, "echo-message"))
             then
                Send_Message_With_ID (DC, Msg, Msg_ID);
@@ -2185,6 +2213,9 @@ package body Soja.Core.Upstream_Dispatch is
             declare
                Buffer : constant String := To_String (Buffer_Name);
                Ch     : constant Channel_Access := Net.Channels.Get (Buffer);
+               Detached : Boolean := False;
+               Blocked  : Boolean := False;
+               Send_Push : Boolean;
             begin
                if Ch /= null and then Is_Text and then not Self then
                   if Ch.Detached then
@@ -2199,24 +2230,46 @@ package body Soja.Core.Upstream_Dispatch is
                   then
                      Update_Channel_Auto_Detach (UC, Buffer);
                   end if;
+
+                  if Ch.Detached and then Ch.Relay_Detached = Filter_None then
+                     Detached := True;
+                  end if;
                end if;
 
-               if not Self and then Is_Text
-                 and then (Highlight or else Direct)
-               then
-                  Soja.Core.Push.Broadcast (Net, Msg);
+               Send_Push := not Self and then not Detached and then Is_Text
+                 and then (Highlight or else Direct);
+
+               --  What the user says of the sender: a muted or blocked user
+               --  causes no notification, and the messages of a blocked one
+               --  are only shown to the clients that know about it.
+               declare
+                  Info : constant Soja.Database.Message_Target_Info :=
+                    Source_Target (UC, Sender);
+               begin
+                  if Info.Muted or else Info.Blocked then
+                     Send_Push := False;
+                  end if;
+                  Blocked := Info.Blocked;
+               end;
+
+               if Send_Push then
+                  --  Wait for a client to say it was read before notifying
+                  --  all of them (the timestamp is set then too).
                   declare
                      Valid : Boolean;
                      T     : constant Ada.Calendar.Time :=
                        Parse_Server_Time (Get_Tag (Msg.Tags, "time"), Valid);
                   begin
-                     if Valid then
-                        Net.Push_Targets.Set (Buffer, T);
+                     --  The time tag was set above, valid or not.
+                     if not Valid then
+                        raise Program_Error with
+                          "failed parsing event time";
                      end if;
+                     Soja.Core.Push.Defer_Check (Net, Buffer, T, Msg);
                   end;
                end if;
 
-               Produce (UC, Buffer, Msg, Downstream_ID);
+               Produce (UC, Buffer, Msg, Downstream_ID, Blocked);
             end;
          end;
       end;
@@ -2479,11 +2532,21 @@ package body Soja.Core.Upstream_Dispatch is
             end;
          end if;
 
-         for DC of Downstreams (UC.Network) loop
-            if Invited or else Is_Enabled (DC.Caps, "invite-notify") then
-               Send_Message (DC, Msg);
-            end if;
-         end loop;
+         declare
+            Blocked : constant Boolean :=
+              Invited and then Source_Target
+                (UC, To_String (Msg.Prefix.Name)).Blocked;
+         begin
+            for DC of Downstreams (UC.Network) loop
+               if (Invited or else Is_Enabled (DC.Caps, "invite-notify"))
+                 and then (not Blocked
+                           or else DC.Metadata_Subs.Contains
+                                     ("soju.im/blocked"))
+               then
+                  Send_Message (DC, Msg);
+               end if;
+            end loop;
+         end;
          if Invited then
             Soja.Core.Push.Broadcast (UC.Network, Msg);
          end if;

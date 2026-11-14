@@ -1000,3 +1000,12 @@ that carries the client's label) and cleared after the flush. Anything sent to
 that client during the handling is therefore labeled, including what Go sends
 with `context.TODO()`; there is no such case that matters in a handler that is
 also reached by a labeled message today.
+
+## Web Push deferral (d9aebc8, d292777)
+
+soju waits 5 seconds in `time.AfterFunc` and then reads the read receipt and
+sets `pushTargets` under a mutex. soja's wait is a short task
+(`Soja.Core.Push.Defer_Check`) that only posts a `Push_Check_Event` to the
+user's queue; the check, the update of `Push_Targets` and the broadcast then
+run in the user's task, so `Push_Targets` needs no lock. The waits are aborted
+at shutdown.

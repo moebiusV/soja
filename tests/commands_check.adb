@@ -734,6 +734,80 @@ begin
    end;
 
    -------------------------------------------------------------------
+   --  METADATA: pinned, muted and blocked targets
+   -------------------------------------------------------------------
+   declare
+      Info : SD.Message_Target_Info;
+   begin
+      Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "draft/metadata-2", True);
+      Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "batch", True);
+
+      Ok (DC, "METADATA #meta SET soju.im/pinned 1");
+      delay 0.15;
+      delay 0.2;
+      Check (DC_Log.Has ("761 * #meta soju.im/pinned * 1"),
+             "SET answers with the value: " & Last (DC_Log));
+      Info := SD.Get_Message_Target
+        (DB.all, Net.Network_Record.ID, "#meta");
+      Check (Info.ID /= 0 and then Info.Pinned and then not Info.Muted,
+             "SET is stored");
+
+      Ok (DC, "METADATA #meta SET soju.im/blocked 1");
+      delay 0.15;
+      Ok (DC, "METADATA #meta SET soju.im/muted");
+      delay 0.15;
+      Check (SD.Get_Message_Target
+               (DB.all, Net.Network_Record.ID, "#meta").Blocked,
+             "blocked is stored");
+
+      Ok (DC, "METADATA #meta SET soju.im/pinned maybe");
+      delay 0.15;
+      Check (DC_Log.Has ("FAIL METADATA VALUE_INVALID"),
+             "a bad value is refused");
+      Ok (DC, "METADATA #meta SET other/key 1");
+      delay 0.15;
+      Check (DC_Log.Has ("FAIL METADATA KEY_INVALID other/key"),
+             "an unknown key is refused");
+
+      Ok (DC, "METADATA #meta GET soju.im/pinned soju.im/nope");
+      delay 0.15;
+      Check (DC_Log.Has ("761 * #meta soju.im/pinned * 1")
+             and then DC_Log.Has ("FAIL METADATA KEY_INVALID soju.im/nope"),
+             "GET");
+      Ok (DC, "METADATA #meta LIST");
+      delay 0.15;
+      Check (DC_Log.Has ("761 * #meta soju.im/blocked * 1")
+             and then DC_Log.Has ("761 * #meta soju.im/muted * 0"),
+             "LIST");
+
+      Ok (DC, "METADATA * SUB soju.im/pinned soju.im/bogus");
+      delay 0.15;
+      Check (DC_Log.Has ("770 * soju.im/pinned")
+             and then DC_Log.Has ("FAIL METADATA KEY_INVALID soju.im/bogus")
+             and then DC_Log.Has ("METADATA #meta soju.im/pinned * 1"),
+             "SUB sends what is known");
+      Ok (DC, "METADATA * SUBS");
+      delay 0.15;
+      Check (DC_Log.Has ("772 * soju.im/pinned"), "SUBS");
+      Ok (DC, "METADATA * UNSUB soju.im/pinned");
+      delay 0.15;
+      Check (DC_Log.Has ("771 * soju.im/pinned"), "UNSUB");
+
+      Ok (DC, "METADATA #meta CLEAR");
+      delay 0.15;
+      Info := SD.Get_Message_Target
+        (DB.all, Net.Network_Record.ID, "#meta");
+      Check (not Info.Pinned and then not Info.Muted and then not Info.Blocked,
+             "CLEAR");
+      Check (Error_Of (DC, "METADATA #meta FROB")(1 .. 3) = "FAI"
+             or else DC_Log.Has ("INVALID_PARAMS FROB"),
+             "an unknown subcommand");
+      Check (SD.List_Message_Targets (DB.all, Net.Network_Record.ID).Is_Empty,
+             "nothing left to list");
+      Soja.Irc.Cap_Registry.Set_Enabled (DC.Caps, "draft/metadata-2", False);
+   end;
+
+   -------------------------------------------------------------------
    --  PRIVMSG, NOTICE, TAGMSG, INVITE, AWAY, INFO, MONITOR, ...
    -------------------------------------------------------------------
    delay 0.3;

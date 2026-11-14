@@ -5,6 +5,7 @@ with Ada.Exceptions;
 with Soja.Core.Downstream_Handshake;
 with Soja.Core.Downstream_Helpers;
 with Soja.Core.Network_Ops;
+with Soja.Core.Push;
 with Soja.Core.Service;
 with Soja.Core.Upstream_Dispatch;
 with Soja.Core.User_Ops;
@@ -402,6 +403,8 @@ package body Soja.Core.User_Events is
          Downstream_Message
            (Downstream_Message_Event (E.all).DC,
             Downstream_Message_Event (E.all).Msg);
+      elsif E.all in Push_Check_Event then
+         Soja.Core.Push.Handle_Check (Push_Check_Event (E.all));
       elsif E.all in Broadcast_Event then
          for DC of U.Downstream_Conns loop
             Send_Message (DC, Broadcast_Event (E.all).Msg);

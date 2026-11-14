@@ -256,6 +256,9 @@ package body Soja.Core is
          Soja.Irc.Cap_Registry.Set_Available (DC.Caps, Cap.all, "");
       end loop;
       Soja.Irc.Cap_Registry.Set_Available
+        (DC.Caps, "draft/metadata-2",
+         "before-connect,max-keys=0,max-value-bytes=1");
+      Soja.Irc.Cap_Registry.Set_Available
         (DC.Caps, "sasl", Server_SASL_Mechanisms (Srv));
       --  TODO (Go): this is racy, chathistory should only be enabled after
       --  authentication, once the user's store is known to support it.
@@ -945,6 +948,8 @@ package body Soja.Core is
                  and then not Is_Enabled (DC.Caps, "draft/read-marker"))
         or else (Cmd = "READ"
                  and then not Is_Enabled (DC.Caps, "soju.im/read"))
+        or else (Cmd = "METADATA"
+                 and then not Is_Enabled (DC.Caps, "draft/metadata-2"))
         or else (Cmd = "REDACT"
                  and then not Is_Enabled (DC.Caps, "draft/message-redaction"))
       then

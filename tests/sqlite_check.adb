@@ -568,6 +568,43 @@ begin
       Close (DB.all);
       Check_Current ("upgraded");
 
+      --  The targets the user pinned, muted or blocked.
+      DB := Soja.Database.Sqlite.Open_Sqlite_DB (Path);
+      declare
+         procedure Expect_True (Cond : Boolean; What : String) is
+         begin
+            if not Cond then
+               raise Program_Error with What;
+            end if;
+         end Expect_True;
+         U : User := New_User ("target-owner");
+         N : Network := New_Network ("irc.target.example");
+         Info : Message_Target_Info;
+      begin
+         Store_User (DB.all, U);
+         Store_Network (DB.all, U.ID, N);
+         Info := Get_Message_Target (DB.all, N.ID, "#chan");
+         Expect_True (Info.ID = 0 and then not Info.Pinned, "an unknown target");
+         Info.Pinned := True;
+         Info.Blocked := True;
+         Store_Message_Target (DB.all, N.ID, Info);
+         Expect_True (Info.ID /= 0, "a stored target has an ID");
+         Info := Get_Message_Target (DB.all, N.ID, "#chan");
+         Expect_True (Info.Pinned and then Info.Blocked and then not Info.Muted,
+                "the target is read back");
+         Info.Pinned := False;
+         Store_Message_Target (DB.all, N.ID, Info);
+         Expect_True (Natural (List_Message_Targets (DB.all, N.ID).Length) = 1
+                and then not List_Message_Targets (DB.all, N.ID)
+                               (1).Pinned,
+                "only targets with a flag are listed");
+         Info.Blocked := False;
+         Store_Message_Target (DB.all, N.ID, Info);
+         Expect_True (List_Message_Targets (DB.all, N.ID).Is_Empty,
+                "a target with no flag is not listed");
+         Close (DB.all);
+      end;
+
       --  Foreign keys are enforced, and deleting a user takes the device
       --  certificates with it.
       DB := Soja.Database.Sqlite.Open_Sqlite_DB (Path);

@@ -14,6 +14,7 @@ with Soja.Auth;
 with Soja.Oauthbearer;
 with Soja.Base64;
 with Soja.Core.Downstream_Helpers;
+with Soja.Core.Metadata;
 with Soja.Core.Upstream_Dispatch;
 with Soja.Core.User_Ops;
 with Soja.Database;
@@ -636,6 +637,9 @@ package body Soja.Core.Downstream_Handshake is
             end if;
          end;
 
+      elsif Cmd = "METADATA" then
+         return Soja.Core.Metadata.Handle_Unregistered (DC, M);
+
       elsif Cmd = "AWAY" then
          if not M.Params.Is_Empty then
             DC.Away := M.Params (1);
@@ -985,6 +989,8 @@ package body Soja.Core.Downstream_Handshake is
                Networks'Access);
          end;
       end if;
+
+      Soja.Core.Metadata.Send_Welcome (DC);
 
       --  Replay the channels we are in.
       declare

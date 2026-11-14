@@ -181,6 +181,20 @@ package Soja.Database is
       Latest_Message : Time := Null_Time;
    end record;
 
+   --  database.MessageTarget: what the user says of a target (the METADATA
+   --  keys soju.im/pinned, soju.im/muted and soju.im/blocked).  ID 0 is a
+   --  target that was never stored.
+   type Message_Target_Info is record
+      ID      : Long_Long_Integer := 0;
+      Target  : Unbounded_String;
+      Pinned  : Boolean := False;
+      Muted   : Boolean := False;
+      Blocked : Boolean := False;
+   end record;
+
+   package Message_Target_Info_Lists is
+     new Ada.Containers.Vectors (Positive, Message_Target_Info);
+
    --  What ListMessages and ListMessageLastPerTarget filter and order by.
    --  A zero field (Null_Time, "", 0) means no such filter.  Take_Last keeps
    --  the newest Limit rows (still returned oldest first).
@@ -321,6 +335,19 @@ package Soja.Database is
    function List_Messages (DB : in out Database_Interface;
       Network_ID : Long_Long_Integer; Name : String; Options : Message_Options)
       return Soja.Irc.Messages.Message_Vectors.Vector is abstract;
+
+   --  GetMessageTarget: always a target (never stored: ID 0, all False).
+   function Get_Message_Target (DB : in out Database_Interface;
+      Network_ID : Long_Long_Integer; Target : String)
+      return Message_Target_Info is abstract;
+   --  ListMessageTargets: the targets that are pinned, muted or blocked.
+   function List_Message_Targets (DB : in out Database_Interface;
+      Network_ID : Long_Long_Integer)
+      return Message_Target_Info_Lists.Vector is abstract;
+   --  StoreMessageTarget: inserts when ID is 0 (and sets it), else updates.
+   procedure Store_Message_Target (DB : in out Database_Interface;
+      Network_ID : Long_Long_Integer; Info : in out Message_Target_Info)
+     is abstract;
 
    function Get_Read_Receipt (DB : in out Database_Interface;
       Network_ID : Long_Long_Integer; Name : String)

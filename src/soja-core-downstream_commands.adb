@@ -8,6 +8,7 @@ with Ada.Strings.Unbounded;
 
 with Soja.Core.Downstream_Handshake;
 with Soja.Core.Downstream_Helpers;
+with Soja.Core.Metadata;
 with Soja.Core.Network_Ops;
 with Soja.Core.Push;
 with Soja.Core.Upstream_Dispatch;
@@ -2604,6 +2605,8 @@ package body Soja.Core.Downstream_Commands is
          return Cmd_Whois (DC, M);
       elsif Cmd in "PRIVMSG" | "NOTICE" | "TAGMSG" | "REDACT" then
          return Cmd_Chat (DC, M);
+      elsif Cmd = "METADATA" then
+         return Soja.Core.Metadata.Handle_Registered (DC, M);
       elsif Cmd = "INVITE" then
          return Cmd_Invite (DC, M);
       elsif Cmd = "AUTHENTICATE" then

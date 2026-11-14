@@ -6,12 +6,16 @@ with Ada.Exceptions;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with Ada.Unchecked_Deallocation;
 
+with Soja.Irc.Case_Mapping;
+with Soja.Irc.Helpers;
 with Soja.Logging;
 with Soja.Webpush;
 
 package body Soja.Core.Push is
 
    use type Ada.Calendar.Time;
+   use type Soja.Database.Read_Receipt_Access;
+   use type Soja.Database.Database_Access;
 
    Prune_Delay : constant Duration :=
      Soja.Server.Webpush_Prune_Subscription_Delay;
@@ -213,6 +217,126 @@ package body Soja.Core.Push is
          end loop;
       end Reap;
    end Registry;
+
+   ----------------------------------------------------------------------
+   --  The wait for a read marker
+   ----------------------------------------------------------------------
+
+   type Check_Access is access Push_Check_Event;
+   procedure Free_Check is new Ada.Unchecked_Deallocation
+     (Push_Check_Event, Check_Access);
+
+   task type Waiter (Item : Check_Access);
+   type Waiter_Access is access Waiter;
+
+   task body Waiter is
+      Mine : Check_Access := Item;
+      Ok   : Boolean := False;
+   begin
+      delay Check_Delay;
+      for Attempt in 1 .. 20 loop
+         Mine.Net.User.Events.Try_Enqueue
+           (new Push_Check_Event'(Mine.all), Ok);
+         exit when Ok;
+         delay 0.5;
+      end loop;
+      if not Ok then
+         Mine.Net.Logger.Print
+           ("skipping a Web Push check: the event queue is full");
+      end if;
+      Free_Check (Mine);
+   end Waiter;
+
+   package Waiter_Lists is new Ada.Containers.Doubly_Linked_Lists
+     (Waiter_Access);
+
+   protected Waiters is
+      procedure Add (T : Waiter_Access);
+      procedure Reap;
+      procedure Cancel;
+   private
+      Items : Waiter_Lists.List;
+   end Waiters;
+
+   procedure Free_Waiter is new Ada.Unchecked_Deallocation
+     (Waiter, Waiter_Access);
+
+   protected body Waiters is
+      procedure Add (T : Waiter_Access) is
+      begin
+         Items.Append (T);
+      end Add;
+
+      procedure Cancel is
+      begin
+         for T of Items loop
+            abort T.all;
+         end loop;
+      end Cancel;
+
+      procedure Reap is
+         use Waiter_Lists;
+         C : Cursor := Items.First;
+         N : Cursor;
+         T : Waiter_Access;
+      begin
+         while Has_Element (C) loop
+            N := Next (C);
+            T := Element (C);
+            if T'Terminated then
+               Items.Delete (C);
+               Free_Waiter (T);
+            end if;
+            C := N;
+         end loop;
+      end Reap;
+   end Waiters;
+
+   procedure Cancel_Checks is
+   begin
+      Waiters.Cancel;
+   end Cancel_Checks;
+
+   procedure Defer_Check
+     (Net    : not null Network_Access;
+      Buffer : String;
+      Stamp  : Ada.Calendar.Time;
+      Msg    : Soja.Irc.Messages.Message) is
+   begin
+      Waiters.Reap;
+      Waiters.Add
+        (new Waiter
+           (new Push_Check_Event'
+              (Net => Net, Buffer => To_Unbounded_String (Buffer),
+               Stamp => Stamp, Msg => Msg)));
+   end Defer_Check;
+
+   procedure Handle_Check (E : Push_Check_Event) is
+      Net : constant Network_Access := E.Net;
+      R   : Soja.Database.Read_Receipt_Access;
+   begin
+      begin
+         if Soja.Server.DB (Net.User.Srv.all) /= null then
+            R := Soja.Server.DB (Net.User.Srv.all).Get_Read_Receipt
+              (Net.Network_Record.ID,
+               Soja.Irc.Case_Mapping.Fold
+                 (Net.Casemap, To_String (E.Buffer)));
+         end if;
+      exception
+         when Err : Soja.Database.Database_Error =>
+            Net.Logger.Print
+              ("failed to get the read receipt for "
+               & Soja.Irc.Helpers.Quote (To_String (E.Buffer)) & ": "
+               & Ada.Exceptions.Exception_Message (Err));
+            return;
+      end;
+      if R /= null and then not (R.Timestamp < E.Stamp) then
+         return;
+      end if;
+
+      Net.Push_Targets.Set (To_String (E.Buffer), E.Stamp);
+      Broadcast (Net, E.Msg);
+   end Handle_Check;
 
    procedure Broadcast
      (Net : not null Network_Access; Msg : Soja.Irc.Messages.Message)

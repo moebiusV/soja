@@ -98,11 +98,19 @@ package Soja.Core.Upstream_Dispatch is
    --  the channel is detached, or the message is the echo of what a client
    --  sent without echo-message.  Origin_ID is the downstream that sent it
    --  (0 for none).
+   --  Blocked: the message comes from a source the user blocked; only the
+   --  clients that subscribed to soju.im/blocked get it.
    procedure Produce
      (UC        : not null Upstream_Conn_Access;
       Target    : String;
       Msg       : Soja.Irc.Messages.Message;
-      Origin_ID : Long_Long_Integer);
+      Origin_ID : Long_Long_Integer;
+      Blocked   : Boolean := False);
+
+   --  What the user says of a message source (never stored: all False).
+   function Source_Target
+     (UC : not null Upstream_Conn_Access; Source : String)
+      return Soja.Database.Message_Target_Info;
 
    --  uc.parseMembershipPrefix: split a NAMES entry ("@+nick") into its
    --  memberships and the nick.

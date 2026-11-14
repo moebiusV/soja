@@ -13,6 +13,7 @@ with Soja.Conn;
 with Soja.Core;
 with Soja.Core.Downstream_Helpers;
 with Soja.Core.Network_Ops;
+with Soja.Core.Push;
 with Soja.Core.Upstream_Dispatch;
 with Soja.Database;
 with Soja.Irc.Cap_Registry;
@@ -1009,13 +1010,37 @@ begin
       Check (UC.Channels.Get ("#b") /= null, "joined #b");
       Down (":carol!c@h PRIVMSG #b :no mention here", 1, "plain in #b");
       Check (not Net.Push_Targets.Has ("#b"), "no push target without mention");
+      Check (not Net.Push_Targets.Has ("#b"), "nothing yet");
+      Soja.Core.Push.Check_Delay := 0.05;
       Down (":carol!c@h PRIVMSG #b :hey alice, look", 1, "highlight in #b");
+      Check (not Net.Push_Targets.Has ("#b"),
+             "the push waits for a read marker");
+      declare
+         Event : Soja.Core.Event_Access;
+         Done  : Boolean;
+      begin
+         U.Events.Dequeue (Event, Done);
+         Check (Event.all in Soja.Core.Push_Check_Event,
+                "the wait ends with an event");
+         Soja.Core.Push.Handle_Check (Soja.Core.Push_Check_Event (Event.all));
+      end;
       Check (Net.Push_Targets.Has ("#b"), "highlight sets the push target");
       Down (":alice!u@h PRIVMSG #b :I mention alice myself", 1, "own message");
       Down (":carol!c@h NOTICE #b :alicea is not alice", 1, "NOTICE");
 
       --  Direct messages are filed under the sender.
       Down (":carol!c@h PRIVMSG alice :psst", 1, "direct message");
+      declare
+         Event : Soja.Core.Event_Access;
+         Done  : Boolean;
+      begin
+         --  (the NOTICE of "not alice" above is a highlight too)
+         for Expected in 1 .. 2 loop
+            U.Events.Dequeue (Event, Done);
+            Soja.Core.Push.Handle_Check
+              (Soja.Core.Push_Check_Event (Event.all));
+         end loop;
+      end;
       Check (Net.Push_Targets.Has ("carol") and then Soja.User.Has_Target
                (Net.Delivered, "carol"), "direct message buffer is the sender");
       Check (Net.Push_Targets.Get ("carol") /= Zero_Time, "push time recorded");
@@ -1030,6 +1055,26 @@ begin
          Check (DC_Log.Count = N, "messages from or to the service are skipped");
       end;
 
+      --  A blocked source: only the clients that know about it get the
+      --  message.
+      declare
+         N : constant Natural := DC_Log.Count;
+      begin
+         Soja.Core.Upstream_Dispatch.Produce
+           (UC, "#t", Parse_Message (":carol!c@h PRIVMSG #t :blocked text"),
+            0, Blocked => True);
+         delay 0.2;
+         Check (DC_Log.Count = N, "a blocked source is hidden");
+         DC.Metadata_Subs.Include ("soju.im/blocked");
+         Soja.Core.Upstream_Dispatch.Produce
+           (UC, "#t", Parse_Message (":carol!c@h PRIVMSG #t :blocked text"),
+            0, Blocked => True);
+         Check (Wait (DC_Log, N + 1)
+                and then DC_Log.Has ("blocked text"),
+                "a client that subscribed to blocked sees it");
+         DC.Metadata_Subs.Clear;
+      end;
+
       --  Server messages (server prefix, "*" and "$mask" targets).
       Down (":irc NOTICE alice :server notice", 1, "server notice");
       Down ("NOTICE * :*** Looking up your hostname", 1, "NOTICE *");
@@ -1041,6 +1086,13 @@ begin
       UC.Available_Status_Msg := To_Unbounded_String ("@+");
       Net.Push_Targets.Del ("#b");
       Down (":carol!c@h PRIVMSG @#b :ops, alice?", 1, "STATUSMSG");
+      declare
+         Event : Soja.Core.Event_Access;
+         Done  : Boolean;
+      begin
+         U.Events.Dequeue (Event, Done);
+         Soja.Core.Push.Handle_Check (Soja.Core.Push_Check_Event (Event.all));
+      end;
       Check (Net.Push_Targets.Has ("#b"), "buffer is the channel, not @#b");
       UC.Available_Status_Msg := Null_Unbounded_String;
 
@@ -1189,6 +1241,15 @@ begin
       ----------------------------------------------------------------
       --  Auto-detach after inactivity
       ----------------------------------------------------------------
+      --  (the pushes that waited for a read marker are not what is tested)
+      loop
+         select
+            U.Events.Dequeue (Event, Done);
+         or
+            delay 0.3;
+            exit;
+         end select;
+      end loop;
       Net.Channels.Set
         ("#c", new Soja.Database.Channel'
            (Name => To_Unbounded_String ("#c"), Detach_After => 0.1,

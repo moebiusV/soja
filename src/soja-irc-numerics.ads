@@ -103,6 +103,10 @@ package Soja.Irc.Numerics is
    RPL_ENDOFINFO       : constant String := "374";
    RPL_MOTDSTART       : constant String := "375";
    RPL_ENDOFMOTD       : constant String := "376";
+   RPL_KEYVALUE        : constant String := "761";
+   RPL_METADATASUBOK   : constant String := "770";
+   RPL_METADATAUNSUBOK : constant String := "771";
+   RPL_METADATASUBS    : constant String := "772";
    RPL_MONONLINE       : constant String := "730";
    RPL_MONOFFLINE      : constant String := "731";
    RPL_MONLIST         : constant String := "732";

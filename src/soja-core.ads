@@ -2,6 +2,7 @@ pragma Ada_2022;
 
 with Ada.Calendar;
 with Ada.Containers.Indefinite_Ordered_Maps;
+with Ada.Containers.Indefinite_Ordered_Sets;
 with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded;
 
@@ -257,6 +258,15 @@ package Soja.Core is
       Name : Unbounded_String;
    end record;
 
+   --  The 5 seconds that a message's Web Push waits for a read marker are up
+   --  (Soja.Core.Push.Defer_Check).
+   type Push_Check_Event is new Event with record
+      Net    : Network_Access;
+      Buffer : Unbounded_String;
+      Stamp  : Ada.Calendar.Time;
+      Msg    : Soja.Irc.Messages.Message;
+   end record;
+
    type Broadcast_Event is new Event with record
       Msg : Soja.Irc.Messages.Message;
    end record;
@@ -397,6 +407,8 @@ package Soja.Core is
       Last_Error     : Unbounded_String;
    end record;
 
+   package String_Sets is new Ada.Containers.Indefinite_Ordered_Sets (String);
+
    type Downstream_Conn is tagged record
       Conn   : Soja.Conn.Conn_Access;
       Srv    : Soja.Server.Server_Access;
@@ -438,6 +450,9 @@ package Soja.Core is
       --  not for the bouncer to send.  Batch is the labeled-response batch
       --  that is open, Pending the first message, held back to be sent
       --  alone (with the label) when there is no second one.
+      --  dc.metadataSubs: the METADATA keys the client subscribed to.
+      Metadata_Subs : String_Sets.Set;
+
       Label_Active  : Boolean := False;
       Label         : Unbounded_String;
       Label_Batch   : Unbounded_String;

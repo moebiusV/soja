@@ -83,6 +83,15 @@ package Soja.Database.Sqlite is
       Network_ID : Long_Long_Integer; Name : String; Options : Message_Options)
       return Soja.Irc.Messages.Message_Vectors.Vector;
 
+   overriding function Get_Message_Target (DB : in out Sqlite_DB;
+      Network_ID : Long_Long_Integer; Target : String)
+      return Message_Target_Info;
+   overriding function List_Message_Targets (DB : in out Sqlite_DB;
+      Network_ID : Long_Long_Integer)
+      return Message_Target_Info_Lists.Vector;
+   overriding procedure Store_Message_Target (DB : in out Sqlite_DB;
+      Network_ID : Long_Long_Integer; Info : in out Message_Target_Info);
+
    overriding function Get_Read_Receipt (DB : in out Sqlite_DB;
       Network_ID : Long_Long_Integer; Name : String)
       return Read_Receipt_Access;
