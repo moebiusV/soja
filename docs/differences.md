@@ -7,6 +7,11 @@ difference that is not listed here, it is a bug in soja.
 
 ## Not yet implemented
 
+- **Device certificates**: TLS client certificates (also through the PROXY
+  protocol and the `Client-Cert` header), SASL EXTERNAL for clients, the
+  `CLIENTCERT` command and the `device-certificate` BouncerServ commands. The
+  `client-cert-auth` directive is read and has no effect yet.
+
 - **Source address per user** (`upstream-user-ip`): the directive is read but
   upstream connections leave from the default address.
 
@@ -30,6 +35,8 @@ difference that is not listed here, it is a bug in soja.
   is not read, so some extensions are recognised by their content instead.
 - **Prometheus** (`listen http+prometheus://localhost:<port>`): only the
   `soju_*` metrics are served, not the `go_*`, `process_*` and `promhttp_*` metrics of the Go runtime.
+- **File upload to an HTTP backend** (`file-upload http <url>`): the file is
+  held in memory (up to the 50 MiB limit) while it is posted.
 - **Web Push.** Each broadcast is sent by its own task, and a message is one
   encrypted record; the protocol on the wire is the same.
 

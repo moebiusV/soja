@@ -56,6 +56,7 @@ If unset, a default config file is used.
 .It Sy -debug
 .Pp
 Enable debug logging (this will leak sensitive information such as passwords).
+This can be overridden at run time with the service command \fIserver debug\fP.
 .It Sy -listen Ar uri
 .Pp
 Listening URI (default: ":6697").
@@ -82,17 +83,23 @@ The following URIs are supported:
 .It
 \fI[ircs://][host][:port]\fP listens with TLS over TCP (default port if omitted: 6697)
 .It
+\fIirc://localhost[:port]\fP listens with plain-text over TCP (default port if omitted: 6667, host must be "localhost")
+.It
 \fIirc+insecure://[host][:port]\fP listens with plain-text over TCP (default port if omitted: 6667)
 .It
 \fIunix://<path>\fP listens on a Unix domain socket
 .It
-\fIhttps://[host][:port]\fP listens for HTTPS connections (default port: 443) and handles WebSocket requests at endpoint \fI/socket\fP
+\fIhttps://[host][:port]\fP listens for HTTPS connections (default port: 443) and handles the following requests: \fI/socket\fP for WebSocket, \fI/uploads\fP (and subdirectories) for file uploads, and \fI/icon\fP for the server icon
 .It
-\fIhttp+insecure://[host][:port]\fP listens for plain-text HTTP connections (default port: 80) and handles WebSocket requests at endpoint \fI/socket\fP
+\fIhttp://localhost[:port]\fP listens for plain-text HTTP connections (default port: 80, host must be "localhost") and handles requests like \fIhttps://\fP does
 .It
-\fIhttp+unix://<path>\fP listens for plain-text HTTP connections on a Unix domain socket and handles WebSocket requests at endpoint \fI/socket\fP
+\fIhttp+insecure://[host][:port]\fP listens for plain-text HTTP connections (default port: 80) and handles requests like \fIhttps://\fP does
+.It
+\fIhttp+unix://<path>\fP listens for plain-text HTTP connections on a Unix domain socket and handles requests like \fIhttps://\fP does
 .It
 \fIwss://[host][:port]\fP listens for WebSocket connections over TLS (default port: 443)
+.It
+\fIws://localhost[:port]\fP listens for plain-text WebSocket connections (default port: 80, host must be "localhost")
 .It
 \fIws+insecure://[host][:port]\fP listens for plain-text WebSocket connections (default port: 80)
 .It
@@ -101,6 +108,8 @@ The following URIs are supported:
 \fIident://[host][:port]\fP listens for plain-text ident connections (default port: 113)
 .It
 \fIhttp+prometheus://localhost:<port>\fP listens for plain-text HTTP connections and serves Prometheus metrics (host must be "localhost")
+.It
+\fIhttp+insecure+prometheus://[host]:<port>\fP listens for plain-text HTTP connections and serves Prometheus metrics
 .It
 \fIunix+admin://[path]\fP listens on a Unix domain socket for administrative connections, such as sojactl (default path: /run/soju/admin)
 .El
@@ -116,6 +125,11 @@ This should be set to a fully qualified domain name.
 .Pp
 Server title.
 This will be sent as the \fIISUPPORT NETWORK\fP value when clients don't select a specific network.
+.It Sy icon Ar url
+.Pp
+Server icon.
+Can be set to either a local path (in which case an HTTP listener must be set up) or a full \fIhttps://\fP URL.
+This will be sent as the \fIISUPPORT draft/ICON\fP value when clients don't select a specific network.
 .It Sy tls Ar cert Ar key
 .Pp
 Enable TLS support.
@@ -158,6 +172,12 @@ Supported drivers:
 .It
 \fIfs\fP stores uploaded files on disk.
 \fIsource\fP is required.
+.It
+\fIhttp\fP stores uploaded files through an external HTTP service.
+\fIsource\fP is required and must be an HTTP URL.
+When receiving a file, soja sends an HTTP POST request to that URL, with the file as is in the request body, and the uploader's soja username in the \fISoju-Username\fP header.
+The HTTP server must respond with an HTTP 201 on success, with the \fILocation\fP header set to the URL of the uploaded file.
+The file is held in memory (up to 50 MiB) while it is posted, and the files cannot be fetched through soja.
 .El
 .It Sy http-origin Ar patterns...
 .Pp
@@ -178,9 +198,16 @@ Proxys have the ability to overwrite the remote and local connection addresses (
 The special name "localhost" accepts the loopback addresses 127.0.0.0/8 and ::1/128.
 .Pp
 By default, all IPs are rejected.
+.It Sy accept-proxy-unix true|false
+.Pp
+Allow proxy connections over Unix domain sockets.
+This is useful when running soja behind a reverse proxy such as Nginx and using Unix domain sockets for the upstream connections.
+Note that any local user with write permissions on the soja socket will be able to forge their connection origin when this option is enabled.
+.Pp
+By default, proxy headers received over Unix domain sockets are untrusted.
 .It Sy max-user-networks Ar limit
 .Pp
-Maximum number of networks per user.
+Maximum number of enabled networks per user.
 By default, there is no limit.
 .It Sy motd Ar path
 .Pp
@@ -204,23 +231,42 @@ A user is inactive when the last downstream connection is closed.
 .Pp
 The duration is a positive decimal number followed by the unit "d" (days).
 For instance, "30d" disables users 30 days after they last disconnect from the bouncer.
+.It Sy message-expiry Ar duration
+.Pp
+Automatically delete messages older than the specified duration.
+.Pp
+The duration is a positive decimal number followed by the unit "d" (days).
+For instance, "30d" deletes messages with timestamps older than 30 days.
+Messages are deleted once per day.
+.Pp
+Note: when using \fIdb sqlite3\fP and \fImessage-store db\fP, SQLite does not automatically reclaim disk space after deletion.
+Run \fIVACUUM\fP manually to reclaim space.
+.Pp
+By default, messages are kept indefinitely.
 .It Sy enable-user-on-auth true|false
 .Pp
 Enable users when they successfully authenticate.
 .Pp
 This can be used together with \fIdisable-inactive-user\fP to seamlessly disable and re-enable users during lengthy inactivity.
 .Pp
-When external authentication is used (e.g. \fIauth oauth2\fP), bouncer users are automatically created after successfull authentication.
+When external authentication is used (e.g. \fIauth oauth2\fP), bouncer users are automatically created after successful authentication.
 .It Sy auth Ar driver No ...
 .Pp
 Set the authentication method.
 By default, internal authentication is used.
+The directive can be given more than once, with at most one method for passwords (internal, pam or http) and one for OAuth 2.0 tokens (oauth2).
+When only \fIauth oauth2\fP is given, a token can also be used as the password.
 .Pp
 Supported drivers:
 .Bl -tag -width Ds
 .It Sy "auth internal"
 .Pp
 Use internal authentication.
+.It Sy "auth http" Ar url
+.Pp
+Use external HTTP basic authentication.
+An HTTP POST request is made against the URL, passing the user credentials in an Authorization Basic header, and the client's address in the Forwarded and X-Forwarded-For header fields.
+The credentials are considered valid on HTTP 200; invalid on HTTP 403; and any other status means an error occurred.
 .It Sy "auth oauth2" Ar url
 .Pp
 Use external OAuth 2.0 authentication.
@@ -231,6 +277,15 @@ The authorization server must support OAuth 2.0 Authorization Server Metadata (R
 .Pp
 Use PAM authentication, through the PAM service "soju" (install a file of that name in /etc/pam.d, for instance one that includes the "login" service). libpam is loaded when soja starts; if it is not installed, soja refuses to start with this driver.
 .El
+.It Sy client-cert-auth true|false
+.Pp
+Enable/disable client certificate authentication.
+By default, client certificate authentication is disabled because it bypasses external authentication methods and because it needs additional HTTP server configuration.
+.Pp
+When used behind a TCP reverse proxy, client certification authentication needs the PROXY protocol to be used with \fIPP2_SUBTYPE_SSL_CLIENT_CERT\fP support.
+When used behind an HTTP reverse proxy, client certificate authentication needs the \fIClient-Cert\fP header field to be populated (RFC 9440).
+.Pp
+Warning, enabling this option without proper HTTP reverse proxy support can result in broken setups where users can login but cannot upload files.
 .El
 .Sh IRC SERVICE
 soja exposes an IRC service called \fBBouncerServ\fP to manage the bouncer.
@@ -306,6 +361,10 @@ By default, auto-away is enabled.
 Enable or disable the network.
 If the network is disabled, the bouncer won't connect to it.
 By default, the network is enabled.
+.It Sy -ignore-limit true|false
+.Pp
+Ignore the max networks limit for this command.
+Only admin users can ignore the limit.
 .It Sy -connect-command Ar command
 .Pp
 Send the specified quoted string as a raw IRC command right after connecting to the server.
@@ -351,9 +410,11 @@ Options:
 Only show channels for the specified network.
 By default, only the channels in the current network are displayed.
 .El
-.It Sy "channel update" Ar name Op Ar options...
+.It Sy "channel create" Ar name Op Ar options...
 .Pp
-Update the options of an existing channel.
+Join a new channel.
+.Pp
+Joining a channel should usually be done with a simple join from the client, but this command can be used to join another user to a channel when used with \fIuser run\fP.
 .Pp
 Options are:
 .Bl -tag -width Ds
@@ -434,15 +495,41 @@ Currently same as \fBmessage\fP.
 This is the default behaviour.
 .El
 .El
+.It Sy "channel update" Ar name Op Ar options...
+.Pp
+Update the options of an existing channel.
+The options are the same as the \fIchannel create\fP command.
 .It Sy "channel delete" Ar name
 .Pp
 Leave and forget a channel.
+.It Sy "device-certificate status"
+.Pp
+Show a list of saved device certificates.
+.It Sy "device-certificate create" Op Ar options...
+.Pp
+Create a new device certificate.
+.Pp
+Options are:
+.Bl -tag -width Ds
+.It Sy -fingerprint Ar fingerprint
+.Pp
+The device certificate fingerprint, as a hex-encoded SHA-512 hash of the certificate.
+Optional, defaults to the current TLS client certificate, if any.
+.It Sy -label Ar label
+.Pp
+A short name for the device certificate, used for display.
+.El
+.It Sy "device-certificate delete" Ar fingerprint
+.Pp
+Delete a device certificate.
 .It Sy "certfp generate" Op Ar options...
 .Pp
 Generate a certificate and use it for authentication (via SASL EXTERNAL).
 .Pp
 Generates a 3072-bit RSA private key by default.
 The certificate is valid for 20 years.
+.Pp
+Note, reconnection to the upstream network is required to use the newly generated certificate.
 .Pp
 Options are:
 .Bl -tag -width Ds
@@ -488,6 +575,8 @@ By default, the current network is selected, if any.
 .Pp
 Set SASL PLAIN credentials.
 .Pp
+Note, reconnection to the upstream network is required to apply the new settings.
+.Pp
 Options are:
 .Bl -tag -width Ds
 .It Sy -network Ar name
@@ -498,6 +587,8 @@ By default, the current network is selected, if any.
 .It Sy "sasl reset" Op Ar options...
 .Pp
 Disable SASL authentication and remove stored credentials.
+.Pp
+Note, reconnection to the upstream network is required to apply the new settings.
 .Pp
 Options are:
 .Bl -tag -width Ds
@@ -547,6 +638,10 @@ This is used as a fallback if there is no realname set for a network.
 Enable or disable the user.
 If the user is disabled, the bouncer will not connect to any of their networks, and downstream connections will be immediately closed.
 By default, users are enabled.
+.It Sy -max-networks Ar max-networks
+.Pp
+Set a limit on the number of enabled networks this user can use.
+A limit of 0 means no network, and -1 means to default to the global \fImax-user-networks\fP configuration value.
 .El
 .It Sy "user update" Op Ar username Op Ar options...
 .Pp
@@ -563,7 +658,7 @@ The \fI-username\fP flag is never valid, usernames are immutable.
 .It
 The \fI-nick\fP and \fI-realname\fP flag are only valid when updating the current user.
 .It
-The \fI-admin\fP and \fI-enabled\fP flags are only valid when updating another user.
+The \fI-admin\fP, \fI-enabled\fP and \fI-max-networks\fP flags are only valid when updating another user.
 .El
 .It Sy "user delete" Ar username Op Ar "confirmation token"
 .Pp
@@ -579,6 +674,10 @@ Only admins can use this command.
 .Pp
 Show some bouncer statistics.
 Only admins can query this information.
+.It Sy "server debug" Ar true|false
+.Pp
+Enable/disable debug logging (this will leak sensitive information).
+This overrides any value passed to soja in \fI-debug\fP.
 .It Sy "server notice" Ar message
 .Pp
 Broadcast a notice.
