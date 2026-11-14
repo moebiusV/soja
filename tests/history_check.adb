@@ -367,6 +367,19 @@ begin
       Begin_Query;
       Ok (DC, "CHATHISTORY BEFORE #chat timestamp=" & Stamp (30.0) & " 1");
       Check (Texts_Of (Got) = "second thing", "BEFORE, the newest of them");
+      --  AROUND: half after the bound, the rest before it (soju's tests).
+      Begin_Query;
+      Ok (DC, "CHATHISTORY AROUND #chat timestamp=" & Stamp (20.0) & " 100");
+      Check (Texts_Of (Got) = "first|second thing|third|fourth, the last",
+             "AROUND, everything: " & Texts_Of (Got));
+      Begin_Query;
+      Ok (DC, "CHATHISTORY AROUND #chat timestamp=" & Stamp (25.0) & " 2");
+      Check (Texts_Of (Got) = "second thing|third",
+             "AROUND with a limit: " & Texts_Of (Got));
+      Begin_Query;
+      Ok (DC, "CHATHISTORY AROUND #chat timestamp=" & Stamp (5.0) & " 2");
+      Check (Texts_Of (Got) = "first",
+             "AROUND with nothing before: " & Texts_Of (Got));
       Begin_Query;
       Ok (DC, "CHATHISTORY AFTER #chat timestamp=" & Stamp (10.0) & " 10");
       Check (Texts_Of (Got) = "second thing|third|fourth, the last", "AFTER");

@@ -1846,7 +1846,9 @@ package body Soja.Core.Downstream_Commands is
             Send_Batch (DC, Typ, Params, None'Access);
          end Empty_Batch;
       begin
-         if Sub = "AFTER" or else Sub = "BEFORE" or else Sub = "LATEST" then
+         if Sub = "AFTER" or else Sub = "BEFORE" or else Sub = "AROUND"
+           or else Sub = "LATEST"
+         then
             PR := Parse_Message_Params (M, 4);
             if not PR.Ok then
                return Need_More (PR);
@@ -1877,7 +1879,6 @@ package body Soja.Core.Downstream_Commands is
             Bound1 := To_Unbounded_String (Param (M, 2));
             Limit_Str := To_Unbounded_String (Param (M, 3));
          else
-            --  TODO (Go): support AROUND.
             return FAIL (["CHATHISTORY", "INVALID_PARAMS", Sub,
                           "Unknown command"]);
          end if;
@@ -1947,7 +1948,7 @@ package body Soja.Core.Downstream_Commands is
                   Events  : constant Boolean :=
                     Soja.Irc.Cap_Registry.Is_Enabled
                       (DC.Caps, "draft/event-playback");
-                  Options : constant Soja.Msgstore.Load_Message_Options :=
+                  Options : Soja.Msgstore.Load_Message_Options :=
                     (Network => Net.Network_Record,
                      Entity  => To_Unbounded_String (Entity),
                      Limit   => Limit, Events => Events);
@@ -2010,6 +2011,47 @@ package body Soja.Core.Downstream_Commands is
                      elsif Sub = "AFTER" then
                         History := Store.Load_After_Time
                           (Bounds (0), Ada.Calendar.Clock, Options);
+                     elsif Sub = "AROUND" then
+                        --  Half of the messages after the bound (the extra
+                        --  one, for an odd limit, before it).
+                        declare
+                           After_Limit  : constant Integer := Limit / 2;
+                           Before_Limit : constant Integer :=
+                             Limit - After_Limit;
+                           Before_Msgs  : Soja.Msgstore.Message_Vector;
+                           After_Msgs   : Soja.Msgstore.Message_Vector;
+                           After_Bound  : Ada.Calendar.Time;
+                        begin
+                           Options.Limit := Before_Limit;
+                           Before_Msgs := Store.Load_Before_Time
+                             (Bounds (0), Soja.Database.Null_Time, Options);
+                           if not Before_Msgs.Is_Empty then
+                              declare
+                                 Valid_Time : Boolean;
+                              begin
+                                 After_Bound :=
+                                   Soja.Irc.Helpers.Parse_Server_Time
+                                     (Get_Tag (Before_Msgs.Last_Element.Tags,
+                                               "time"), Valid_Time);
+                                 if not Valid_Time then
+                                    raise Soja.Msgstore.Store_Error with
+                                      "invalid message time";
+                                 end if;
+                              end;
+                           else
+                              --  There are no messages before: take an
+                              --  arbitrary amount of time off, to make the
+                              --  bound inclusive.
+                              After_Bound := Bounds (0) - 1.0;
+                           end if;
+                           Options.Limit := After_Limit;
+                           After_Msgs := Store.Load_After_Time
+                             (After_Bound, Ada.Calendar.Clock, Options);
+                           History := Before_Msgs;
+                           for Stored of After_Msgs loop
+                              History.Append (Stored);
+                           end loop;
+                        end;
                      else   --  BETWEEN
                         if Bounds (0) < Bounds (1) then
                            History := Store.Load_After_Time
