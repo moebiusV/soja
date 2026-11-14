@@ -266,6 +266,10 @@ package Soja.Database is
       User_ID : Long_Long_Integer; Net : in out Network) is abstract;
    procedure Delete_Network (DB : in out Database_Interface;
       ID : Long_Long_Integer) is abstract;
+   --  DeleteMessagesBefore: the messages older than Before are deleted
+   --  (the db message store; `message-expiry`).
+   procedure Delete_Messages_Before (DB : in out Database_Interface;
+      Before : Time) is abstract;
    function List_Channels (DB : in out Database_Interface;
       Network_ID : Long_Long_Integer) return Channel_Lists.Vector is abstract;
    procedure Store_Channel (DB : in out Database_Interface;

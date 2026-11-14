@@ -192,6 +192,7 @@ procedure Soja_Main is
          Cfg.Max_User_Networks := Raw.Max_User_Networks;
          Cfg.Upstream_User_IPs := Raw.Upstream_User_IPs;
          Cfg.Disable_Inactive_Users_Delay := Raw.Disable_Inactive_Users_Delay;
+         Cfg.Message_Expiry := Raw.Message_Expiry;
          Cfg.Enable_Users_On_Auth := Raw.Enable_Users_On_Auth;
          Cfg.Has_File_Uploader := Raw.File_Upload /= null;
          if Raw.File_Upload /= null then

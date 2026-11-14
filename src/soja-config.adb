@@ -376,6 +376,7 @@ package body Soja.Config is
          Max_User_Networks => -1,
          Upstream_User_IPs => IPNet_Vectors.Empty_Vector,
          Disable_Inactive_Users_Delay => 0.0,
+         Message_Expiry => 0.0,
          Enable_Users_On_Auth => False);
    end Defaults;
 
@@ -566,6 +567,20 @@ package body Soja.Config is
                         & "duration must be positive");
                   end if;
                   Srv.Disable_Inactive_Users_Delay := Dur;
+               end;
+
+            elsif Name = "message-expiry" then
+               Want (1);
+               declare
+                  Dur : constant Duration := Parse_Duration (To_String (P
+                    (1)));
+               begin
+                  if Dur < 0.0 then
+                     Error
+                       ("directive message-expiry: "
+                        & "duration must be positive");
+                  end if;
+                  Srv.Message_Expiry := Dur;
                end;
 
             elsif Name = "enable-user-on-auth" then

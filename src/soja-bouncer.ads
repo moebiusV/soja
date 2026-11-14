@@ -54,6 +54,12 @@ package Soja.Bouncer is
 
    --  disableInactiveUsersLoop's period (4 hours); tests shorten it.
    Inactive_Check_Interval : Duration := 4.0 * 3600.0;
+   Expiry_Interval         : Duration := 24.0 * 3600.0;
+
+   --  deleteExpiredMessages: with `message-expiry` set, the messages older
+   --  than that are deleted from the database or the log files.  Raises
+   --  Bouncer_Error with the reason when they cannot be.
+   procedure Delete_Expired_Messages (B : in out Bouncer);
 
    --  Server.disableInactiveUsers: disable the users that have not had a
    --  client for the configured delay (`disable-inactive-user`), unless they

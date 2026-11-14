@@ -46,6 +46,8 @@ package Soja.Database.Sqlite is
       User_ID : Long_Long_Integer) return Network_Lists.Vector;
    overriding procedure Store_Network (DB : in out Sqlite_DB;
       User_ID : Long_Long_Integer; Net : in out Network);
+   overriding procedure Delete_Messages_Before (DB : in out Sqlite_DB;
+      Before : Time);
    overriding procedure Delete_Network (DB : in out Sqlite_DB;
       ID : Long_Long_Integer);
    overriding function List_Channels (DB : in out Sqlite_DB;

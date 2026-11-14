@@ -13,6 +13,9 @@ private with Ada.Containers.Indefinite_Ordered_Maps;
 private with System;
 private with Ada.Strings.Unbounded;
 
+with Ada.Calendar;
+with Ada.Strings.Unbounded;
+
 with Soja.Database;
 
 package Soja.Msgstore.Fs is
@@ -33,6 +36,17 @@ package Soja.Msgstore.Fs is
       return Store_Access;
 
    function Is_Fs_Store (S : Store'Class) return Boolean;
+
+   --  DeleteMessagesBefore: removes the log files under Root whose day (the
+   --  first ten characters of the name, YYYY-MM-DD) is before the day of
+   --  Before, then the directories that are left empty (not Root itself).
+   --  Store_Error when a file cannot be removed.  A failure only of the
+   --  second part is not an error: it is told in Cleanup_Error (empty when
+   --  all went well).
+   procedure Delete_Messages_Before
+     (Root          : String;
+      Before        : Ada.Calendar.Time;
+      Cleanup_Error : out Ada.Strings.Unbounded.Unbounded_String);
 
    overriding procedure Close (S : in out Fs_Store);
 

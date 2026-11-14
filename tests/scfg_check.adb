@@ -181,6 +181,14 @@ begin
       Check (Fails ("auth internal x"), "internal takes no source");
       Check (Fails ("auth pam x"), "pam takes no source");
       Check (Fails ("auth oauth2"), "oauth2 needs a source");
+
+      --  message-expiry: days, positive; absent means keep for ever.
+      Check (Soja.Config.Parse ("message-expiry 30d").Message_Expiry
+             = 30.0 * 86_400.0, "message-expiry 30d");
+      Check (Soja.Config.Parse ("title x").Message_Expiry = 0.0,
+             "no expiry by default");
+      Check (Fails ("message-expiry -1d"), "a negative expiry");
+      Check (Fails ("message-expiry 30"), "a duration needs its unit");
    end;
    Ada.Text_IO.Put_Line ("ALL PASS");
 exception

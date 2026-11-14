@@ -16,6 +16,7 @@ with Soja.Irc.Helpers;
 with Soja.Irc.Messages;     use Soja.Irc.Messages;
 with Soja.Irc.Numerics;     use Soja.Irc.Numerics;
 with Soja.Logging;
+with Soja.Msgstore.Fs;
 
 package body Soja.Bouncer is
 
@@ -325,6 +326,70 @@ package body Soja.Bouncer is
       return Disabled;
    end Disable_Inactive_Users;
 
+   procedure Delete_Expired_Messages (B : in out Bouncer) is
+      Cfg    : constant Soja.Server.Server_Config_Access :=
+        Soja.Server.Config (B.Srv.all);
+      Driver : constant String := To_String (Cfg.Msg_Store_Driver);
+      Before : constant Ada.Calendar.Time :=
+        Ada.Calendar."-" (Ada.Calendar.Clock, Cfg.Message_Expiry);
+   begin
+      if Cfg.Message_Expiry = 0.0 then
+         return;
+      end if;
+
+      if Driver = "db" then
+         begin
+            Soja.Database.Delete_Messages_Before
+              (Soja.Server.DB (B.Srv.all).all, Before);
+         exception
+            when E : others =>
+               raise Bouncer_Error with
+                 "failed to delete expired messages from db: "
+                 & Ada.Exceptions.Exception_Message (E);
+         end;
+      elsif Driver = "fs" then
+         declare
+            Cleanup : Unbounded_String;
+         begin
+            Soja.Msgstore.Fs.Delete_Messages_Before
+              (To_String (Cfg.Msg_Store_Path), Before, Cleanup);
+            if Length (Cleanup) > 0 then
+               Log (B).Print ("failed to cleanup empty log directories: "
+                              & To_String (Cleanup));
+            end if;
+         exception
+            when E : Soja.Msgstore.Store_Error =>
+               raise Bouncer_Error with
+                 "failed to delete expired messages from disk: "
+                 & Ada.Exceptions.Exception_Message (E);
+         end;
+      end if;
+   end Delete_Expired_Messages;
+
+   --  messageExpiryLoop: now, and then every 24 hours.
+   task type Expiry_Runner (B : Bouncer_Access);
+   type Expiry_Runner_Access is access Expiry_Runner;
+
+   task body Expiry_Runner is
+   begin
+      loop
+         begin
+            Delete_Expired_Messages (B.all);
+         exception
+            when E : others =>
+               Log (B.all).Print ("failed to delete expired messages: "
+                                  & Ada.Exceptions.Exception_Message (E));
+         end;
+         select
+            B.Stopped.Wait;
+            exit;
+         or
+            delay Expiry_Interval;
+         end select;
+      end loop;
+      B.Tasks.Done;
+   end Expiry_Runner;
+
    --  disableInactiveUsersLoop.
    task type Inactive_Runner (B : Bouncer_Access);
    type Inactive_Runner_Access is access Inactive_Runner;
@@ -376,6 +441,14 @@ package body Soja.Bouncer is
       begin
          B.Tasks.Add;
          Runner := new Inactive_Runner (B'Unchecked_Access);
+      end;
+
+      declare
+         Runner : Expiry_Runner_Access;
+         pragma Unreferenced (Runner);
+      begin
+         B.Tasks.Add;
+         Runner := new Expiry_Runner (B'Unchecked_Access);
       end;
    end Start;
 

@@ -238,6 +238,28 @@ begin
           "a failed batch stores none of its messages");
 
    ------------------------------------------------------------------
+   --  Expiry (message-expiry): older messages are deleted, newer stay.
+   ------------------------------------------------------------------
+   declare
+      V : Soja.Irc.Messages.Message_Vectors.Vector;
+      Ignored : Id_Lists.Vector;
+      pragma Unreferenced (Ignored);
+   begin
+      V.Append (Line ("PRIVMSG", "bob", "#expiry", "very old", 0.1));
+      V.Append (Line ("PRIVMSG", "bob", "#expiry", "old", 0.2));
+      V.Append (Line ("PRIVMSG", "bob", "#expiry", "recent", 0.9));
+      Ignored := Store_Messages (DB.all, Net.ID, "#expiry", V);
+      Opts := (Limit => 100, others => <>);
+      Check (List (Opts, "#expiry")'Length > 0, "stored");
+      Delete_Messages_Before (DB.all, At_Time (0.5));
+      Check (List (Opts, "#expiry") = "recent",
+             "the messages before the cutoff are deleted: "
+             & List (Opts, "#expiry"));
+      Check (Get_Message_Last_ID (DB.all, Net.ID, "#chan") /= 0,
+             "later messages of other targets are kept");
+   end;
+
+   ------------------------------------------------------------------
    --  Deleting messages keeps the index in step (the FTS triggers).
    ------------------------------------------------------------------
    Delete_Network (DB.all, Net.ID);
@@ -309,7 +331,6 @@ begin
       Close (DB2.all);
       GNAT.OS_Lib.Delete_File (Path, Ok);
    end;
-
    Ada.Text_IO.Put_Line ("ALL PASS");
 exception
    when E : others =>

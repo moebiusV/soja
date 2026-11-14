@@ -55,6 +55,7 @@ package Soja.Server is
       MOTD              : Ada.Strings.Unbounded.Unbounded_String;
       Upstream_User_IPs : Soja.Config.IPNet_Vectors.Vector;
       Disable_Inactive_Users_Delay : Duration := 0.0;
+      Message_Expiry               : Duration := 0.0;
       Enable_Users_On_Auth : Boolean := False;
       Auth_Driver       : Ada.Strings.Unbounded.Unbounded_String :=
         Ada.Strings.Unbounded.To_Unbounded_String ("internal");

@@ -906,4 +906,112 @@ package body Soja.Msgstore.Fs is
          raise Store_Error with Ada.Exceptions.Exception_Message (E);
    end Rename_Network;
 
+   ----------------------------------------------------------------------
+   --  Expiry
+   ----------------------------------------------------------------------
+
+   procedure Delete_Messages_Before
+     (Root          : String;
+      Before        : Ada.Calendar.Time;
+      Cleanup_Error : out Ada.Strings.Unbounded.Unbounded_String)
+   is
+      use Ada.Directories;
+      use Ada.Strings.Unbounded;
+
+      --  ISO 8601 dates compare as text.
+      Cutoff : constant String :=
+        Ada.Calendar.Formatting.Image (Before) (1 .. 10);
+
+      type Name_Array is array (Positive range <>) of Unbounded_String;
+
+      --  The names of the entries of Dir that are files (or directories).
+      function Entries (Dir : String; Dirs : Boolean)
+         return Name_Array
+      is
+         Search : Search_Type;
+         Item   : Directory_Entry_Type;
+         Found  : Name_Array (1 .. 4096);
+         N      : Natural := 0;
+      begin
+         Start_Search (Search, Dir, "",
+                       [Directory => Dirs, Ordinary_File => not Dirs,
+                        others => False]);
+         while More_Entries (Search) loop
+            Get_Next_Entry (Search, Item);
+            declare
+               Name : constant String := Simple_Name (Item);
+            begin
+               if Name /= "." and then Name /= ".." and then N < Found'Last
+               then
+                  N := N + 1;
+                  Found (N) := To_Unbounded_String (Name);
+               end if;
+            end;
+         end loop;
+         End_Search (Search);
+         return Found (1 .. N);
+      end Entries;
+
+      procedure Walk (Dir : String) is
+      begin
+         for Name of Entries (Dir, Dirs => False) loop
+            declare
+               File : constant String := To_String (Name);
+            begin
+               if File'Length >= 10
+                 and then File (File'Last - 3 .. File'Last) = ".log"
+                 and then Cutoff > File (File'First .. File'First + 9)
+               then
+                  Delete_File (Compose (Dir, File));
+               end if;
+            end;
+         end loop;
+         for Name of Entries (Dir, Dirs => True) loop
+            Walk (Compose (Dir, To_String (Name)));
+         end loop;
+      end Walk;
+
+      --  Deletes the empty directories under Dir; whether Dir is empty then.
+      function Cleanup (Dir : String; Keep : Boolean) return Boolean is
+         Empty : Boolean := Entries (Dir, Dirs => False)'Length = 0;
+      begin
+         for Name of Entries (Dir, Dirs => True) loop
+            if Cleanup (Compose (Dir, To_String (Name)), False) then
+               begin
+                  Delete_Directory (Compose (Dir, To_String (Name)));
+               exception
+                  when E : others =>
+                     Append (Cleanup_Error,
+                             "failed to remove "
+                             & Compose (Dir, To_String (Name)) & ": "
+                             & Ada.Exceptions.Exception_Message (E) & " ");
+                     Empty := False;
+               end;
+            else
+               Empty := False;
+            end if;
+         end loop;
+         return Empty and then not Keep;
+      end Cleanup;
+   begin
+      Cleanup_Error := Null_Unbounded_String;
+      begin
+         Walk (Root);
+      exception
+         when E : others =>
+            raise Store_Error with Ada.Exceptions.Exception_Message (E);
+      end;
+      begin
+         declare
+            Ignored : constant Boolean := Cleanup (Root, True);
+            pragma Unreferenced (Ignored);
+         begin
+            null;
+         end;
+      exception
+         when E : others =>
+            Append (Cleanup_Error, Ada.Exceptions.Exception_Message (E));
+      end;
+   end Delete_Messages_Before;
+
 end Soja.Msgstore.Fs;

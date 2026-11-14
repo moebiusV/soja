@@ -621,7 +621,8 @@ package body Soja.Database.Sqlite is
       if not Missing then
          return;
       end if;
-      for I in Schema_Stmts'Last - 3 .. Schema_Stmts'Last loop
+      --  (Statements 11 to 14 of the schema: the table and its triggers.)
+      for I in 11 .. 14 loop
          Execute (DB.DB, To_String (Schema_Stmts (I)));
          Check (DB);
       end loop;
@@ -1172,6 +1173,18 @@ package body Soja.Database.Sqlite is
    ----------------
    --  Delete_Network --
    ----------------
+
+   overriding procedure Delete_Messages_Before (DB : in out Sqlite_DB;
+      Before : Time)
+   is
+      G : Guard;
+   begin
+      Acquire (G, DB.Lock);
+      Execute (DB.DB, "DELETE FROM Message WHERE time < ?1",
+               [1 => +Format_Time (Before)]);
+      Check (DB'Access);
+      Commit_Check (DB'Access);
+   end Delete_Messages_Before;
 
    overriding procedure Delete_Network (DB : in out Sqlite_DB;
       ID : Long_Long_Integer)

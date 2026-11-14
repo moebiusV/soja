@@ -83,6 +83,7 @@ package Soja.Config is
       Max_User_Networks : Integer;
       Upstream_User_IPs : IPNet_Vectors.Vector;
       Disable_Inactive_Users_Delay : Duration;
+      Message_Expiry               : Duration;
       Enable_Users_On_Auth : Boolean;
    end record;
 

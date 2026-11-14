@@ -496,6 +496,71 @@ begin
                 "the directory moved");
       end;
    end;
+   --  Message expiry: old log files go, empty directories go (not the root),
+   --  everything else stays.
+   declare
+      Base : constant String := "/tmp/soja_expiry_check";
+
+      procedure Touch (Path : String) is
+         F : Ada.Text_IO.File_Type;
+      begin
+         Ada.Directories.Create_Path (Ada.Directories.Containing_Directory (Path));
+         Ada.Text_IO.Create (F, Ada.Text_IO.Out_File, Path);
+         Ada.Text_IO.Put_Line (F, "x");
+         Ada.Text_IO.Close (F);
+      end Touch;
+
+      Cutoff  : constant Ada.Calendar.Time :=
+        Ada.Calendar.Formatting.Time_Of (2021, 6, 1);
+      Cleanup : Unbounded_String;
+   begin
+      if Ada.Directories.Exists (Base) then
+         Ada.Directories.Delete_Tree (Base);
+      end if;
+      Touch (Base & "/net/chan/2020-01-01.log");
+      Touch (Base & "/net/chan/2021-05-31.log");
+      Touch (Base & "/net/chan/2021-06-01.log");
+      Touch (Base & "/net/chan/2099-01-01.log");
+      Touch (Base & "/net/chan/notes.txt");
+      Touch (Base & "/net/chan/2020-01-02.txt");
+      Touch (Base & "/net/short.log");
+      Touch (Base & "/net/old/deep/2020-03-03.log");
+      Touch (Base & "/net/pm/2020-03-03.log");
+      Ada.Directories.Create_Path (Base & "/net/never-had-logs");
+
+      Soja.Msgstore.Fs.Delete_Messages_Before (Base, Cutoff, Cleanup);
+      Check (Length (Cleanup) = 0, "cleanup went well: " & To_String (Cleanup));
+
+      Check (not Ada.Directories.Exists (Base & "/net/chan/2020-01-01.log")
+             and then not Ada.Directories.Exists
+                            (Base & "/net/chan/2021-05-31.log"),
+             "the old log files are removed");
+      Check (Ada.Directories.Exists (Base & "/net/chan/2021-06-01.log")
+             and then Ada.Directories.Exists (Base & "/net/chan/2099-01-01.log"),
+             "the cutoff day and later are kept");
+      Check (Ada.Directories.Exists (Base & "/net/chan/notes.txt")
+             and then Ada.Directories.Exists (Base & "/net/chan/2020-01-02.txt")
+             and then Ada.Directories.Exists (Base & "/net/short.log"),
+             "files that are not dated logs are kept");
+      Check (not Ada.Directories.Exists (Base & "/net/old")
+             and then not Ada.Directories.Exists (Base & "/net/pm"),
+             "directories left empty are removed, nested ones too");
+      Check (not Ada.Directories.Exists (Base & "/net/never-had-logs"),
+             "an empty directory is removed");
+      Check (Ada.Directories.Exists (Base) and then Ada.Directories.Exists
+                                                      (Base & "/net/chan"),
+             "the root and directories with files stay");
+
+      --  A root that is left empty stays.
+      Ada.Directories.Delete_Tree (Base);
+      Touch (Base & "/net/c/2020-01-01.log");
+      Soja.Msgstore.Fs.Delete_Messages_Before (Base, Cutoff, Cleanup);
+      Check (Ada.Directories.Exists (Base) and then not Ada.Directories.Exists
+                                                          (Base & "/net"),
+             "the root is kept when everything is gone");
+      Ada.Directories.Delete_Tree (Base);
+   end;
+
    Ada.Text_IO.Put_Line ("ALL PASS");
 exception
    when E : others =>
