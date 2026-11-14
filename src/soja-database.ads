@@ -51,6 +51,13 @@ package Soja.Database is
 
    function New_User (Username : String) return User;
 
+   --  stripANSI (database/utils.go): the text a message is searched by has
+   --  the IRC formatting taken off: bold, italics, underline, strikethrough,
+   --  monospace, reverse and reset, colours (\x03 with up to two digits, a
+   --  comma and up to two more) and hex colours (\x04 with six digits, a
+   --  comma and six more).
+   function Strip_ANSI (S : String) return String;
+
    --  Hash Password into U.Password (bcrypt, default cost).  Raises
    --  Database_Error on failure (e.g. an over-long password).
    procedure Set_Password (U : in out User; Password : String);

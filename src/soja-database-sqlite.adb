@@ -1524,7 +1524,7 @@ package body Soja.Database.Sqlite is
                if (Cmd = "PRIVMSG" or else Cmd = "NOTICE")
                  and then Natural (Msg.Params.Length) > 1
                then
-                  Text := +To_String (Msg.Params (2));
+                  Text := +Strip_ANSI (To_String (Msg.Params (2)));
                end if;
 
                Execute (DB.DB,

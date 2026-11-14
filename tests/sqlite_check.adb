@@ -457,6 +457,35 @@ begin
       Ada.Directories.Delete_File (Path);
    end;
 
+   --  stripANSI: formatting codes are not part of the searchable text.
+   declare
+      STX : constant Character := ASCII.STX;
+      ETX : constant Character := ASCII.ETX;
+      EOT : constant Character := ASCII.EOT;
+      procedure Is_Stripped (S, Want : String) is
+      begin
+         if Strip_ANSI (S) /= Want then
+            raise Program_Error with "Strip_ANSI: got """ & Strip_ANSI (S)
+              & """, wanted """ & Want & """";
+         end if;
+      end Is_Stripped;
+   begin
+      Is_Stripped ("plain text", "plain text");
+      Is_Stripped (STX & "bold" & STX & " and " & Character'Val (16#1D#)
+                   & "italic" & Character'Val (16#0F#), "bold and italic");
+      Is_Stripped (ETX & "04,12hi" & ETX, "hi");
+      Is_Stripped (ETX & "4,5x", "x");
+      Is_Stripped (ETX & "4" & "5th", "th");
+      Is_Stripped (ETX & "x", "x");
+      Is_Stripped ("a" & ETX, "a");
+      Is_Stripped (ETX & "1,xx", ",xx");
+      Is_Stripped (EOT & "FF0000,00ff00ok", "ok");
+      Is_Stripped (EOT & "FF0000x", "x");
+      Is_Stripped (EOT & "zz", "zz");
+      Is_Stripped (EOT & "FF0000,00FF0", ",00FF0");
+      Is_Stripped ("", "");
+   end;
+
    --  The schema is soju's current one (version 31): a fresh database has it,
    --  and a database left at soja's old version 25 is brought to it.
    declare

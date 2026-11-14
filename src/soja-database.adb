@@ -42,6 +42,70 @@ package body Soja.Database is
    -- New_User --
    ---------
 
+   function Strip_ANSI (S : String) return String is
+      R : Unbounded_String;
+      I : Natural := S'First;
+
+      function Digit (At_I : Natural) return Boolean is
+        (At_I <= S'Last and then S (At_I) in '0' .. '9');
+
+      --  startsHexColor: six hex digits from From.
+      function Starts_Hex_Color (From : Natural) return Boolean is
+      begin
+         if From + 5 > S'Last then
+            return False;
+         end if;
+         return (for all K in From .. From + 5 =>
+                   S (K) in '0' .. '9' | 'a' .. 'f' | 'A' .. 'F');
+      end Starts_Hex_Color;
+   begin
+      if (for all C of S => C not in
+            ASCII.STX | Character'Val (16#1D#) | Character'Val (16#1F#)
+            | Character'Val (16#1E#) | Character'Val (16#11#)
+            | Character'Val (16#16#) | Character'Val (16#0F#)
+            | ASCII.ETX | ASCII.EOT)
+      then
+         return S;
+      end if;
+
+      while I <= S'Last loop
+         case S (I) is
+            when ASCII.STX | Character'Val (16#1D#) | Character'Val (16#1F#)
+               | Character'Val (16#1E#) | Character'Val (16#11#)
+               | Character'Val (16#16#) | Character'Val (16#0F#) =>
+               null;
+            when ASCII.ETX =>
+               if Digit (I + 1) then
+                  I := I + 1;
+                  if Digit (I + 1) then
+                     I := I + 1;
+                  end if;
+                  if I + 2 <= S'Last and then S (I + 1) = ','
+                    and then Digit (I + 2)
+                  then
+                     I := I + 2;
+                     if Digit (I + 1) then
+                        I := I + 1;
+                     end if;
+                  end if;
+               end if;
+            when ASCII.EOT =>
+               if Starts_Hex_Color (I + 1) then
+                  I := I + 6;
+                  if I + 1 <= S'Last and then S (I + 1) = ','
+                    and then Starts_Hex_Color (I + 2)
+                  then
+                     I := I + 7;
+                  end if;
+               end if;
+            when others =>
+               Append (R, S (I));
+         end case;
+         I := I + 1;
+      end loop;
+      return To_String (R);
+   end Strip_ANSI;
+
    function New_User (Username : String) return User is
    begin
       return User'
